@@ -170,6 +170,124 @@ export const productionAuditQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(100).default(20),
 })
 
+export const createUnitEquivalenceSchema = z.object({
+  fromUnitId: z.string().min(1),
+  toUnitId: z.string().min(1),
+  factor: z.number().positive(),
+  description: z.string().max(500).optional(),
+  active: z.boolean().optional(),
+})
+
+export const updateUnitEquivalenceSchema = z.object({
+  fromUnitId: z.string().min(1).optional(),
+  toUnitId: z.string().min(1).optional(),
+  factor: z.number().positive().optional(),
+  description: z.string().max(500).optional().nullable(),
+  active: z.boolean().optional(),
+})
+
+export const indirectCostAllocationSchema = z.enum([
+  'per_unit', 'per_batch', 'per_hour', 'percentage', 'per_direct_cost',
+])
+
+export const createGlobalIndirectCostSchema = z.object({
+  name: z.string().min(1).max(200),
+  allocationType: indirectCostAllocationSchema,
+  value: z.number().min(0),
+  active: z.boolean().optional(),
+  notes: z.string().max(500).optional(),
+})
+
+export const updateGlobalIndirectCostSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  allocationType: indirectCostAllocationSchema.optional(),
+  value: z.number().min(0).optional(),
+  active: z.boolean().optional(),
+  notes: z.string().max(500).optional().nullable(),
+})
+
+export const approvalIdsSchema = z.object({
+  approvalIds: z.array(z.string().min(1)).min(1),
+})
+
+export const rejectApprovalSchema = z.object({
+  approvalIds: z.array(z.string().min(1)).min(1),
+  reason: z.string().min(1).max(500),
+})
+
+export const suggestPriceSchema = z.object({
+  totalCost: z.number().min(0),
+  marginPercentage: z.number().min(0).max(1000),
+  rounding: z.number().min(1).optional(),
+  currency: z.string().min(1).max(10).optional(),
+})
+
+export const unitConvertSchema = z.object({
+  value: z.number(),
+  fromUnit: z.string().min(1),
+  toUnit: z.string().min(1),
+})
+
+export const unitCostCalculateSchema = z.object({
+  price: z.number().min(0),
+  purchaseUnit: z.string().min(1),
+  recipeQuantity: z.number().min(0),
+  recipeUnit: z.string().min(1),
+})
+
+export const validateFamilySchema = z.object({
+  unitA: z.string().min(1),
+  unitB: z.string().min(1),
+})
+
+export const laborConceptSchema = z.object({
+  name: z.string().min(1),
+  type: z.enum(['fixed', 'per_unit', 'per_batch']),
+  timeRequired: z.number().min(0),
+  timeUnit: z.enum(['minutes', 'hours', 'seconds']),
+  valuePerHour: z.number().min(0),
+  operatorName: z.string().max(200).optional(),
+  active: z.boolean().optional(),
+})
+
+export const upsertLaborCostSchema = z.object({
+  concepts: z.array(laborConceptSchema),
+})
+
+export const packagingItemSchema = z.object({
+  name: z.string().min(1),
+  type: z.enum(['optional', 'mandatory', 'by_variant']),
+  unit: z.string().min(1),
+  quantity: z.number().min(0),
+  unitCost: z.number().min(0),
+})
+
+export const upsertPackagingCostSchema = z.object({
+  items: z.array(packagingItemSchema),
+})
+
+export const productionCostItemSchema = z.object({
+  name: z.string().min(1),
+  type: z.enum(['fixed', 'per_minute', 'per_hour', 'per_batch', 'per_unit']),
+  value: z.number().min(0),
+  active: z.boolean().optional(),
+})
+
+export const upsertProductionCostSchema = z.object({
+  items: z.array(productionCostItemSchema),
+})
+
+export const serviceCostItemSchema = z.object({
+  name: z.string().min(1),
+  type: z.enum(['fixed', 'per_unit', 'per_batch']),
+  value: z.number().min(0),
+  notes: z.string().max(500).optional(),
+})
+
+export const upsertServiceCostSchema = z.object({
+  items: z.array(serviceCostItemSchema),
+})
+
 /** Limpia null → undefined para Zod .optional() */
 export function stripNulls<T extends Record<string, unknown>>(raw: T): Partial<T> {
   return Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== null)) as Partial<T>

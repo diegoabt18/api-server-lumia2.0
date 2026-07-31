@@ -1,5 +1,5 @@
 import type { Collection, Db, Document, Filter, OptionalUnlessRequiredId, WithId } from 'mongodb'
-import { ObjectId } from 'mongodb'
+import { MongoServerError, ObjectId } from 'mongodb'
 
 export abstract class BaseRepository<T extends Document> {
   constructor(protected readonly collection: Collection<T>) {}
@@ -47,7 +47,16 @@ export abstract class BaseRepository<T extends Document> {
 
   async ensureIndexes(indexes: Parameters<Collection<T>['createIndexes']>[0]): Promise<void> {
     if (indexes.length === 0) return
-    await this.collection.createIndexes(indexes)
+    try {
+      await this.collection.createIndexes(indexes)
+    } catch (err) {
+      // Compatibilidad con índices creados por el monolito lumia (misma DB)
+      if (err instanceof MongoServerError) {
+        const code = typeof err.code === 'number' ? err.code : Number(err.code)
+        if ([85, 86, 197].includes(code)) return
+      }
+      throw err
+    }
   }
 }
 

@@ -1,6 +1,6 @@
 # Módulo Payments — Fase 2
 
-**Estado:** 🏗 Scaffolding (`src/modules/payments/index.ts`)  
+**Estado:** ✅ Pago manual implementado  
 **Base de datos:** `sales_db`  
 **Roadmap:** [../roadmap.md](../roadmap.md#fase-2--checkout-y-pagos)
 
@@ -8,7 +8,9 @@
 
 ## Objetivo
 
-Integrar MercadoPago para checkout completo: preferencia → pago → webhook → actualización de orden e inventario.
+Gestionar pagos manuales (transferencia, depósito, etc.) en checkout: registro de intento, actualización de orden e inventario.
+
+> Pasarela de pago online (MercadoPago u otras) **no forma parte del alcance** de este backend.
 
 ---
 
@@ -17,73 +19,61 @@ Integrar MercadoPago para checkout completo: preferencia → pago → webhook �
 | Colección | Propósito |
 |-----------|-----------|
 | `payments` | Transacciones por orden |
-| `payment_attempts` | Reintentos / idempotencia |
-| `orders` | Estado `paymentStatus`, `mpPreferenceId`, `mpPaymentId` |
+| `orders` | Estado `paymentStatus`, TTL manual |
 
 ---
 
-## Interface planificada
-
-```typescript
-interface PaymentProvider {
-  createPreference(orderId: string, amount: number, currency: string): Promise<{
-    preferenceId: string
-    initPoint: string
-  }>
-  handleWebhook(payload: unknown, signature?: string): Promise<void>
-}
-```
-
-Implementación: `MercadoPagoPaymentProvider` portada desde `lumia/server/core/payments/`.
-
----
-
-## Endpoints a implementar
+## Endpoints implementados
 
 | Método | Ruta | Auth |
 |--------|------|------|
-| POST | `/api/payments/create-preference` | Sí |
-| POST | `/api/payments/retry` | Sí |
-| POST | `/api/payments/manual` | Sí |
-| POST | `/api/mercadopago/webhook` | No (firma MP) |
+| POST | `/api/payments/manual` | Opcional |
+
+Relacionados en checkout/órdenes:
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| POST | `/api/orders/create` | Checkout con carrito |
+| POST | `/api/orders/:id/cancel` | Cancelación |
+| POST | `/api/orders/:id/cancel-request` | Solicitud de cancelación |
+| GET | `/api/orders/list` | Mis pedidos |
 
 ---
 
-## Archivos fuente en lumia
+## Job de expiración
 
-```
-server/core/payments/domain/payment.entity.ts
-server/core/payments/infrastructure/mercadopago.*
-server/api/payments/create-preference.post.ts
-server/api/payments/retry.post.ts
-server/api/mercadopago/webhook.post.ts
+Script CLI para órdenes impagas vencidas:
+
+```powershell
+npm run expire:orders
 ```
 
----
-
-## Variables de entorno
+Variables:
 
 ```env
-MP_ACCESS_TOKEN=
-MP_WEBHOOK_SECRET=
 ORDER_PAYMENT_TTL_HOURS=24
 ORDER_MANUAL_PAYMENT_TTL_HOURS=72
+```
+
+Programar en el host (Fase 7 — Task Scheduler / cron).
+
+---
+
+## Archivos en el server
+
+```
+src/modules/payments/
+  services/manual-payment.service.ts
+  infrastructure/payment.repository.ts
+  domain/payment.types.ts
+src/routes/payments.routes.ts
+scripts/expire-orders.ts
 ```
 
 ---
 
 ## Consideraciones de diseño
 
-1. **Idempotencia webhook** — clave por `providerPaymentId`
-2. **Cross-DB** — al aprobar pago, actualizar `catalog_db.inventory_items` con compensación si falla
-3. **No portar Stripe** — código legacy en lumia; solo MP en producción
-4. **TTL órdenes** — job cron `expire-orders` (Fase 7)
-
----
-
-## Criterios de aceptación
-
-- [ ] Preferencia MP creada desde orden pending
-- [ ] Webhook `approved` marca orden como paid
-- [ ] Webhook duplicado no duplica efectos
-- [ ] Tests con payload MP mockeado
+1. **Cross-DB** — al confirmar pago manual, actualizar inventario en `catalog_db`
+2. **TTL órdenes** — job `expire-orders` revierte stock si aplica
+3. **Guest checkout** — pago manual acepta cookie de carrito invitado

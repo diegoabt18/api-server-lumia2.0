@@ -21,6 +21,14 @@ import {
   adminStaffRoleSchema,
   adminVariantCreateSchema,
   adminVariantPatchSchema,
+  adminAssignRecipeSchema,
+  adminVariantRecipePatchSchema,
+  adminPricingCalculateSchema,
+  adminPricingSimulateSchema,
+  adminPricingSuggestMarginSchema,
+  adminVariantCostCalculateSchema,
+  adminCostSnapshotSchema,
+  adminRegistryModuleSchema,
   promotionUpsertSchema,
   storeBannerUpsertSchema,
 } from '../modules/admin/schemas/admin.schema.js'
@@ -389,5 +397,128 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
     const parsed = adminFeedbackQuestionPatchSchema.safeParse(request.body)
     if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
     return services.adminFeedback.patchQuestion(id, parsed.data)
+  })
+
+  // ─── Users general (4.7) ───
+  api.get('/admin/users', { preHandler: g(PERMISSION_REGISTRY.ADMIN_USERS_READ) }, async (request) =>
+    services.adminUsers.list(request.query as Record<string, unknown>),
+  )
+
+  api.get('/admin/users/:id', { preHandler: g(PERMISSION_REGISTRY.ADMIN_USERS_READ) }, async (request) => {
+    const { id } = request.params as { id: string }
+    return services.adminUsers.get(id)
+  })
+
+  // ─── Audit log ───
+  api.get('/admin/audit-log', { preHandler: g(PERMISSION_REGISTRY.ADMIN_AUDIT_READ) }, async (request) =>
+    services.adminAudit.list(request.query as Record<string, unknown>),
+  )
+
+  // ─── Pricing ───
+  api.post('/admin/pricing/calculate', { preHandler: g(PERMISSION_REGISTRY.COSTING_READ) }, async (request) => {
+    const parsed = adminPricingCalculateSchema.safeParse(request.body)
+    if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+    return services.adminPricing.calculate(parsed.data)
+  })
+
+  api.post('/admin/pricing/simulate', { preHandler: g(PERMISSION_REGISTRY.COSTING_READ) }, async (request) => {
+    const parsed = adminPricingSimulateSchema.safeParse(request.body)
+    if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+    return services.adminPricing.simulate(parsed.data)
+  })
+
+  api.post('/admin/pricing/suggest-margin', { preHandler: g(PERMISSION_REGISTRY.COSTING_READ) }, async (request) => {
+    const parsed = adminPricingSuggestMarginSchema.safeParse(request.body)
+    if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+    return services.adminPricing.suggestMargin(parsed.data)
+  })
+
+  // ─── Product recipe & cost summary ───
+  api.get('/admin/products/:id/recipe', { preHandler: g(PERMISSION_REGISTRY.RECIPES_READ) }, async (request) => {
+    const { id } = request.params as { id: string }
+    return services.adminCostSummary.getRecipe(id)
+  })
+
+  api.post('/admin/products/:id/recipe', { preHandler: g(PERMISSION_REGISTRY.RECIPES_UPDATE) }, async (request) => {
+    const { id } = request.params as { id: string }
+    const parsed = adminAssignRecipeSchema.safeParse(request.body)
+    if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+    return services.adminCostSummary.assignRecipe(id, parsed.data.recipeId)
+  })
+
+  api.delete('/admin/products/:id/recipe', { preHandler: g(PERMISSION_REGISTRY.RECIPES_UPDATE) }, async (request) => {
+    const { id } = request.params as { id: string }
+    return services.adminCostSummary.unassignRecipe(id)
+  })
+
+  api.post('/admin/products/:id/recipe/recalculate', { preHandler: g(PERMISSION_REGISTRY.RECIPES_UPDATE) }, async (request) => {
+    const { id } = request.params as { id: string }
+    const auth = (request as AuthenticatedRequest).auth
+    return services.adminCostSummary.recalculateProductRecipe(id, auth.userId)
+  })
+
+  api.patch('/admin/products/:id/variants/:sku/recipe', { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_UPDATE) }, async (request) => {
+    const { id, sku } = request.params as { id: string; sku: string }
+    const parsed = adminVariantRecipePatchSchema.safeParse(request.body)
+    if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+    return services.adminCostSummary.patchVariantRecipe(id, decodeURIComponent(sku), parsed.data.recipeId)
+  })
+
+  api.get('/admin/products/:id/cost-summary', { preHandler: g(PERMISSION_REGISTRY.COSTING_READ) }, async (request) => {
+    const { id } = request.params as { id: string }
+    return services.adminCostSummary.getCostSummary(id)
+  })
+
+  api.post('/admin/products/:id/cost-summary', { preHandler: g(PERMISSION_REGISTRY.COSTING_MANAGE) }, async (request) => {
+    const { id } = request.params as { id: string }
+    const auth = (request as AuthenticatedRequest).auth
+    return services.adminCostSummary.postCostSummary(id, auth.userId)
+  })
+
+  api.get('/admin/products/:id/cost-summary/status', { preHandler: g(PERMISSION_REGISTRY.COSTING_READ) }, async (request) => {
+    const { id } = request.params as { id: string }
+    return services.adminCostSummary.getCostStatus(id)
+  })
+
+  api.post('/admin/products/:id/cost-summary/:sku', { preHandler: g(PERMISSION_REGISTRY.COSTING_READ) }, async (request) => {
+    const { id, sku } = request.params as { id: string; sku: string }
+    const parsed = adminVariantCostCalculateSchema.safeParse(request.body ?? {})
+    if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+    const auth = (request as AuthenticatedRequest).auth
+    return services.adminCostSummary.calculateVariantCost(id, decodeURIComponent(sku), parsed.data, auth.userId)
+  })
+
+  api.post('/admin/products/:id/cost-summary/:sku/calculate-and-save', { preHandler: g(PERMISSION_REGISTRY.COSTING_MANAGE) }, async (request) => {
+    const { id, sku } = request.params as { id: string; sku: string }
+    const parsed = adminVariantCostCalculateSchema.safeParse(request.body ?? {})
+    if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+    const auth = (request as AuthenticatedRequest).auth
+    return services.adminCostSummary.calculateAndSave(id, decodeURIComponent(sku), parsed.data, auth.userId)
+  })
+
+  api.post('/admin/products/:id/cost-summary/:sku/snapshot', { preHandler: g(PERMISSION_REGISTRY.COSTING_READ) }, async (request) => {
+    const { id, sku } = request.params as { id: string; sku: string }
+    const parsed = adminCostSnapshotSchema.safeParse(request.body)
+    if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+    const auth = (request as AuthenticatedRequest).auth
+    return services.adminCostSummary.saveSnapshot(id, decodeURIComponent(sku), parsed.data, auth.userId)
+  })
+
+  api.get('/admin/products/:id/cost-summary/:sku/snapshots', { preHandler: g(PERMISSION_REGISTRY.COSTING_READ) }, async (request) => {
+    const { id, sku } = request.params as { id: string; sku: string }
+    return services.adminCostSummary.listSnapshots(id, decodeURIComponent(sku))
+  })
+
+  // ─── Product images (stub) ───
+  api.post('/admin/product-images/generate', { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_UPDATE) }, async () => ({
+    ok: false,
+    message: 'Not configured',
+  }))
+
+  // ─── Registry modules POST ───
+  api.post('/admin/registry/modules', { preHandler: g(PERMISSION_REGISTRY.ADMIN_PERMISSIONS_MANAGE) }, async (request) => {
+    const parsed = adminRegistryModuleSchema.safeParse(request.body)
+    if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+    return services.adminRegistry.upsertModule(parsed.data)
   })
 }

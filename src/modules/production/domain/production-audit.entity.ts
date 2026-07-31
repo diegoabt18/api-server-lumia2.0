@@ -6,6 +6,10 @@ export type ProductionAuditEventType =
   | 'recipe_deleted'
   | 'cost_calculated'
   | 'config_updated'
+  | 'price_approved'
+  | 'price_rejected'
+  | 'price_published'
+  | 'impact_resolved'
 
 export interface ProductionAuditEntryEntity {
   _id?: unknown

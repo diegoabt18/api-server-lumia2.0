@@ -160,4 +160,8 @@ export class MaterialService {
 
     return { success: true as const, data: entry }
   }
+
+  generateImage() {
+    return { ok: true, message: 'Image generation not configured' }
+  }
 }

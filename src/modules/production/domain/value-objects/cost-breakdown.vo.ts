@@ -88,6 +88,118 @@ export function calculateUnitCost(price: number, quantity: number): number {
   return round2(price / quantity)
 }
 
+export interface ProfitSummary {
+  salePrice: number
+  totalCost: number
+  profitPerUnit: number
+  profitMarginPercent: number
+}
+
+export function calculateProfit(salePrice: number, totalCost: number): ProfitSummary {
+  if (totalCost <= 0) throw new Error('El costo total debe ser mayor a 0')
+  const profitPerUnit = salePrice - totalCost
+  const profitMarginPercent = round2((profitPerUnit / totalCost) * 100)
+  return {
+    salePrice,
+    totalCost,
+    profitPerUnit: round2(profitPerUnit),
+    profitMarginPercent,
+  }
+}
+
+export interface PricingConfigInput {
+  currency: string
+  priceRounding: number
+  psychologicalRounding: number
+  taxPercentage?: number
+  minimumProfitPercentage: number
+  suggestedProfitPercentage: number
+  premiumProfitPercentage: number
+  wholesaleProfitPercentage: number
+  distributorProfitPercentage: number
+}
+
+export interface PricingResult {
+  costTotal: number
+  costPerUnit: number
+  marginPercentage: number
+  rawPrice: number
+  suggestedPrice: number
+  psychologicalPrice: number
+  profitAmount: number
+  profitMarginPercent: number
+  taxAmount?: number
+  priceWithTax?: number
+  currency: string
+  rounding: number
+}
+
+const DEFAULT_SIMULATION_MARGINS = [20, 30, 40, 50, 60, 80, 100]
+
+export function calculatePrice(
+  costTotal: number,
+  costPerUnit: number,
+  marginPercentage: number,
+  config: PricingConfigInput,
+): PricingResult {
+  if (marginPercentage < 0) throw new Error('El margen no puede ser negativo')
+  if (config.priceRounding <= 0) throw new Error('El redondeo debe ser mayor a 0')
+
+  const rawPrice = costPerUnit * (1 + marginPercentage / 100)
+  const suggestedPrice = Math.ceil(rawPrice / config.priceRounding) * config.priceRounding
+  const psychologicalPrice =
+    config.psychologicalRounding > 0 && suggestedPrice >= config.psychologicalRounding
+      ? Math.floor(suggestedPrice / config.psychologicalRounding) * config.psychologicalRounding
+      : suggestedPrice
+
+  const profitAmount = suggestedPrice - costTotal
+  const profitMarginPercent = costTotal > 0 ? round2((profitAmount / costTotal) * 100) : 0
+
+  let taxAmount: number | undefined
+  let priceWithTax: number | undefined
+  if (config.taxPercentage && config.taxPercentage > 0) {
+    taxAmount = round2(suggestedPrice * (config.taxPercentage / 100))
+    priceWithTax = suggestedPrice + taxAmount
+  }
+
+  return {
+    costTotal,
+    costPerUnit,
+    marginPercentage,
+    rawPrice: round2(rawPrice),
+    suggestedPrice,
+    psychologicalPrice,
+    profitAmount: round2(profitAmount),
+    profitMarginPercent,
+    taxAmount,
+    priceWithTax,
+    currency: config.currency,
+    rounding: config.priceRounding,
+  }
+}
+
+export function simulateMargins(
+  costPerUnit: number,
+  config: PricingConfigInput,
+  margins: number[] = DEFAULT_SIMULATION_MARGINS,
+): PricingResult[] {
+  return margins
+    .filter((m) => m >= 0)
+    .sort((a, b) => a - b)
+    .map((margin) => calculatePrice(costPerUnit, costPerUnit, margin, config))
+}
+
+export function suggestMarginByLevel(
+  costPerUnit: number,
+  config: PricingConfigInput,
+): { level: string; margin: number } {
+  if (costPerUnit <= 0) return { level: 'minimum', margin: config.minimumProfitPercentage }
+  if (costPerUnit < 10000) return { level: 'premium', margin: config.premiumProfitPercentage }
+  if (costPerUnit < 50000) return { level: 'suggested', margin: config.suggestedProfitPercentage }
+  if (costPerUnit < 200000) return { level: 'wholesale', margin: config.wholesaleProfitPercentage }
+  return { level: 'distributor', margin: config.distributorProfitPercentage }
+}
+
 function round2(n: number): number {
   return Math.round(n * 100) / 100
 }

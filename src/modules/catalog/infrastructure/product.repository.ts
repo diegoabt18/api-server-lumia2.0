@@ -334,6 +334,108 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     return false
   }
 
+  async getProductRawByIdOrSlug(idOrSlug: string): Promise<(ProductEntity & { productionRecipeId?: string; production?: Record<string, unknown> }) | null> {
+    const { ObjectId } = await import('mongodb')
+    let filter: Record<string, unknown> = { slug: idOrSlug }
+    if (ObjectId.isValid(idOrSlug)) filter = { _id: new ObjectId(idOrSlug) }
+    return this.collection.findOne(filter as never) as Promise<(ProductEntity & { productionRecipeId?: string; production?: Record<string, unknown> }) | null>
+  }
+
+  async assignProductionRecipe(idOrSlug: string, recipeId: string): Promise<boolean> {
+    const { ObjectId } = await import('mongodb')
+    let filter: Record<string, unknown> = { slug: idOrSlug }
+    if (ObjectId.isValid(idOrSlug)) filter = { _id: new ObjectId(idOrSlug) }
+    const res = await this.collection.updateOne(filter as never, {
+      $set: { productionRecipeId: recipeId, updated_at: new Date() },
+    })
+    return res.matchedCount > 0
+  }
+
+  async unassignProductionRecipe(idOrSlug: string): Promise<boolean> {
+    const { ObjectId } = await import('mongodb')
+    let filter: Record<string, unknown> = { slug: idOrSlug }
+    if (ObjectId.isValid(idOrSlug)) filter = { _id: new ObjectId(idOrSlug) }
+    const res = await this.collection.updateOne(filter as never, {
+      $unset: { productionRecipeId: '' },
+      $set: { updated_at: new Date() },
+    })
+    return res.matchedCount > 0
+  }
+
+  async updateVariantRecipe(productSlug: string, sku: string, recipeId: string | null): Promise<boolean> {
+    const { ObjectId } = await import('mongodb')
+    const update =
+      recipeId && ObjectId.isValid(recipeId)
+        ? { $set: { production_recipe_id: new ObjectId(recipeId) } }
+        : { $set: { production_recipe_id: null } }
+    const res = await this.variants.updateOne({ product_slug: productSlug, sku }, update as never)
+    return res.matchedCount > 0
+  }
+
+  async getVariantRaw(productSlug: string, sku: string): Promise<VariantEntity | null> {
+    return this.variants.findOne({ product_slug: productSlug, sku })
+  }
+
+  async updateProductProduction(idOrSlug: string, production: Record<string, unknown>): Promise<boolean> {
+    const { ObjectId } = await import('mongodb')
+    let filter: Record<string, unknown> = { slug: idOrSlug }
+    if (ObjectId.isValid(idOrSlug)) filter = { _id: new ObjectId(idOrSlug) }
+    const set: Record<string, unknown> = { updated_at: new Date() }
+    for (const [k, v] of Object.entries(production)) {
+      set[`production.${k}`] = v
+    }
+    const res = await this.collection.updateOne(filter as never, { $set: set })
+    return res.matchedCount > 0
+  }
+
+  async updateVariantProductionData(
+    productSlug: string,
+    sku: string,
+    data: Record<string, unknown>,
+  ): Promise<boolean> {
+    const set: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(data)) {
+      set[`production_data.${k}`] = v
+    }
+    const res = await this.variants.updateOne({ product_slug: productSlug, sku }, { $set: set })
+    return res.matchedCount > 0
+  }
+
+  async insertCostSnapshot(doc: Record<string, unknown>): Promise<string> {
+    const col = this.collection.db.collection('variant_cost_snapshots')
+    const result = await col.insertOne({ ...doc, calculated_at: new Date() })
+    return result.insertedId.toString()
+  }
+
+  async listCostSnapshots(productId: string, variantSku: string, limit = 50) {
+    const { ObjectId } = await import('mongodb')
+    const col = this.collection.db.collection('variant_cost_snapshots')
+    return col
+      .find({ product_id: new ObjectId(productId), variant_sku: variantSku })
+      .sort({ calculated_at: -1 })
+      .limit(limit)
+      .toArray()
+  }
+
+  async getLatestSnapshotsByProduct(productId: string) {
+    const { ObjectId } = await import('mongodb')
+    const col = this.collection.db.collection('variant_cost_snapshots')
+    return col
+      .aggregate([
+        { $match: { product_id: new ObjectId(productId) } },
+        { $sort: { calculated_at: -1 } },
+        {
+          $group: {
+            _id: '$variant_sku',
+            suggested_price: { $first: '$suggested_price' },
+            margin_percentage: { $first: '$margin_percentage' },
+            calculated_at: { $first: '$calculated_at' },
+          },
+        },
+      ])
+      .toArray()
+  }
+
   async listPromotionPicker(params: {
     skip: number
     limit: number
@@ -463,5 +565,115 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     })
 
     return { items, total }
+  }
+
+  async listForProduction(options: { search?: string; limit: number; skip: number }) {
+    const filter: Record<string, unknown> = {}
+    if (options.search?.trim()) {
+      const s = options.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      filter.$or = [{ name: { $regex: s, $options: 'i' } }, { slug: { $regex: s, $options: 'i' } }]
+    }
+
+    const [products, total] = await Promise.all([
+      this.collection
+        .find(filter, {
+          projection: { _id: 1, name: 1, slug: 1, status: 1, image_path: 1, productionRecipeId: 1 },
+        })
+        .sort({ name: 1 })
+        .skip(options.skip)
+        .limit(options.limit)
+        .toArray(),
+      this.collection.countDocuments(filter),
+    ])
+
+    const productSlugs = products.map((p) => p.slug).filter(Boolean) as string[]
+    const variantCounts: Record<string, number> = {}
+    const variantRecipeMap: Record<string, Set<string>> = {}
+
+    if (productSlugs.length > 0) {
+      const variants = await this.variants
+        .find(
+          { product_slug: { $in: productSlugs } },
+          { projection: { product_slug: 1, production_recipe_id: 1 } },
+        )
+        .toArray()
+
+      for (const v of variants) {
+        const slug = v.product_slug
+        variantCounts[slug] = (variantCounts[slug] ?? 0) + 1
+        if (v.production_recipe_id) {
+          if (!variantRecipeMap[slug]) variantRecipeMap[slug] = new Set()
+          variantRecipeMap[slug].add(String(v.production_recipe_id))
+        }
+      }
+    }
+
+    const data = products.map((p) => {
+      const pid = String(p._id)
+      const slug = String(p.slug ?? '')
+      const recipeId = (p as unknown as { productionRecipeId?: unknown }).productionRecipeId
+        ? String((p as unknown as { productionRecipeId: unknown }).productionRecipeId)
+        : null
+      const variantRecipeCount = variantRecipeMap[slug]?.size ?? 0
+
+      return {
+        id: pid,
+        name: String(p.name),
+        slug,
+        status: String((p as { status?: string }).status ?? 'active'),
+        imagePath: (p as { image_path?: string }).image_path ?? null,
+        variantCount: variantCounts[slug] ?? 0,
+        hasRecipe: !!(recipeId || variantRecipeCount > 0),
+        hasProductRecipe: !!recipeId,
+        variantRecipeCount,
+        productionRecipeId: recipeId,
+      }
+    })
+
+    return { data, total }
+  }
+
+  async findAssociatedWithRecipe(recipeId: string) {
+    const { ObjectId } = await import('mongodb')
+    const oid = ObjectId.isValid(recipeId) ? new ObjectId(recipeId) : recipeId
+
+    const [products, variants] = await Promise.all([
+      this.collection
+        .find({
+          $or: [{ productionRecipeId: recipeId }, { productionRecipeId: oid }],
+        } as never)
+        .project({ _id: 1, name: 1, slug: 1 })
+        .toArray(),
+      this.variants
+        .find({
+          $or: [{ production_recipe_id: recipeId }, { production_recipe_id: oid }],
+        } as never)
+        .project({ _id: 1, product_slug: 1, sku: 1 })
+        .toArray(),
+    ])
+
+    return {
+      products: products.map((p) => ({
+        id: String(p._id),
+        name: String(p.name),
+        slug: String(p.slug),
+        type: 'product' as const,
+      })),
+      variants: variants.map((v) => ({
+        id: String(v._id),
+        productSlug: String(v.product_slug),
+        sku: String(v.sku),
+        type: 'variant' as const,
+      })),
+      totalAssociated: products.length + variants.length,
+    }
+  }
+
+  async updateVariantPrice(sku: string, price: number): Promise<boolean> {
+    const result = await this.variants.updateOne(
+      { sku } as never,
+      { $set: { price, updated_at: new Date() } },
+    )
+    return result.matchedCount > 0
   }
 }

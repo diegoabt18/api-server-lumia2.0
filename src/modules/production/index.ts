@@ -15,6 +15,16 @@ export const PRODUCTION_COLLECTIONS = [
   'production_config',
   'production_audit_log',
   'unit_of_measures',
+  'unit_equivalences',
+  'indirect_costs',
+  'price_approvals',
+  'cost_impacts',
+  'labor_costs',
+  'packaging_costs',
+  'production_costs',
+  'service_costs',
+  'recipe_versions',
+  'cost_sheets_v2',
 ] as const
 
 export interface ProductionModuleStatus {

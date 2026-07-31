@@ -241,4 +241,28 @@ export class UserRepository extends BaseRepository<UserDocument> {
     ])
     return { items: docs.map((d) => toEntity(d)), total }
   }
+
+  async listAll(
+    skip: number,
+    limit: number,
+    opts: { type?: 'all' | 'staff' | 'customers'; search?: string },
+  ): Promise<{ items: UserEntity[]; total: number }> {
+    const filter: Record<string, unknown> = {}
+    if (opts.type === 'staff') filter.isStaff = true
+    else if (opts.type === 'customers') filter.isStaff = { $ne: true }
+    if (opts.search?.trim()) {
+      const rx = new RegExp(opts.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      filter.$or = [{ email: rx }, { name: rx }, { nickname: rx }]
+    }
+    const [docs, total] = await Promise.all([
+      this.collection
+        .find(filter as never, { projection: { passwordHash: 0 } })
+        .sort({ email: 1 })
+        .skip(skip)
+        .limit(limit)
+        .toArray(),
+      this.count(filter as never),
+    ])
+    return { items: docs.map((d) => toEntity(d)), total }
+  }
 }

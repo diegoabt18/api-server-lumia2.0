@@ -1,26 +1,26 @@
 # Roadmap — Lumia API
 
-Documento maestro de fases futuras. Describe qué **no está implementado aún**, qué **sí existe como scaffolding**, de dónde **portar desde lumia** y en qué orden conviene avanzar.
+Documento maestro de fases. Refleja qué está **implementado**, qué queda **pendiente** y de dónde se portó desde el monolito lumia.
 
-**Referencia monolito:** `D:\Proyectos programacion\lumia`  
-**API actual:** `D:\Proyectos programacion\server`
+**Referencia monolito:** `../lumia` (Nuxt)  
+**API actual:** este repositorio
 
 ---
 
 ## Resumen de fases
 
-| Fase | Nombre | Estado | Prioridad |
-|------|--------|--------|-----------|
-| **1** | Núcleo productivo | ✅ Completada | — |
-| **2** | Checkout y pagos | 📋 Documentada | Alta |
-| **3** | Tienda pública completa | 📋 Documentada | Alta |
-| **4** | Panel admin (API) | 📋 Documentada | Media |
-| **5** | Producción y costeo | 📋 Documentada | Media |
-| **6** | Auth avanzada y RBAC enterprise | 📋 Documentada | Media-baja |
-| **7** | Observabilidad y operaciones | 📋 Documentada | Baja |
-| **8** | Escalabilidad e infraestructura avanzada | 📋 Documentada | Futuro |
+| Fase | Nombre | Estado | Notas |
+|------|--------|--------|-------|
+| **1** | Núcleo productivo | ✅ Completada | Auth, catálogo, pedidos, Docker |
+| **2** | Checkout y pagos | ✅ Completada | Carrito, pago manual, expiración (sin pasarela online) |
+| **3** | Tienda pública | ✅ Completada | Store, favoritos, feedback, promociones, OAuth |
+| **4** | Panel admin (API) | ✅ MVP+ | ~100+ rutas admin (productos, pedidos, pricing, usuarios) |
+| **5** | Producción y costeo | ✅ MVP+ | Materiales, recetas, aprobaciones, impacto, equivalencias |
+| **6** | Auth avanzada y RBAC | ✅ MVP+ | 2FA, roles, temporales, delegaciones, overrides |
+| **7** | Observabilidad y operaciones | 📋 Pendiente | Cron, alertas, Prometheus/Sentry |
+| **8** | Escalabilidad avanzada | 📋 Futuro | Colas, K8s, microservicios |
 
-**Leyenda:** ✅ implementado · 📋 planificado · 🏗 scaffolding en código (sin lógica)
+**Leyenda:** ✅ implementado · 📋 pendiente · 🟡 parcial / stub (p. ej. generación de imágenes)
 
 ---
 
@@ -34,82 +34,130 @@ Documento maestro de fases futuras. Describe qué **no está implementado aún**
 - Ventas: crear pedido, consultar pedido
 - Health, métricas básicas, Swagger, CI/GHCR
 - Cloudflare Tunnel documentado
-- Scaffolding: `payments/`, `production/`
 
 ### Endpoints activos
 
-Ver [README.md](../README.md#endpoints-principales).
+Ver [README.md](../README.md#endpoints-principales) y Swagger `/docs`.
 
 ---
 
-## Fase 2 — Checkout y pagos
+## Fase 2 — Checkout y pagos (completada)
+
+**Alcance:** carrito persistente, checkout end-to-end, **pago manual**, cancelación de pedidos, script de expiración.
+
+**Fuera de alcance:** pasarela de pago online (MercadoPago, Stripe, etc.).
+
+### Entregado
+
+| Componente | Rutas |
+|------------|-------|
+| Carrito | `GET/PATCH/POST/DELETE /api/cart*` |
+| Checkout | `POST /api/orders/create` |
+| Pago manual | `POST /api/payments/manual` |
+| Órdenes | `GET /api/orders/list`, `by-number`, `cancel`, `cancel-request` |
+| Expiración | `npm run expire:orders` |
+
+### Variables
+
+```env
+ORDER_PAYMENT_TTL_HOURS=24
+ORDER_MANUAL_PAYMENT_TTL_HOURS=72
+```
+
+Documentación: [modules/payments.md](./modules/payments.md)
+
+---
+
+## Fase 3 — Tienda pública (completada)
+
+Store settings, banners, promociones, favoritos, notificaciones, registro/perfil, Google OAuth, feedback, newsletter.
+
+Rutas: `store-public.routes.ts`, `store.routes.ts`
+
+Documentación: [modules/store-public.md](./modules/store-public.md)
+
+---
+
+## Fase 4 — Panel admin (MVP+)
+
+**~100+ endpoints** en `admin.routes.ts`: dashboard, analytics, productos, categorías, pedidos, promociones, banners, inventario, staff, registry, feedback, **usuarios generales**, **audit-log**, **pricing**, **cost-summary por producto/SKU**.
+
+### Pendiente menor
+
+- Generación de imágenes (stub)
+- Paridad 1:1 con los ~200 endpoints del monolito (edge cases)
+
+Documentación: [modules/admin.md](./modules/admin.md)
+
+---
+
+## Fase 5 — Producción y costeo (MVP+)
+
+CRUD materiales, proveedores, recetas, unidades, config, dashboard, audit, **equivalencias**, **costos indirectos**, **aprobaciones de precio**, **impacto**, **costing extendido**, sub-recursos de receta, **conversión pública de unidades**.
+
+Rutas: `production-admin.routes.ts`, `production-public.routes.ts`
+
+Documentación: [modules/production.md](./modules/production.md)
+
+---
+
+## Fase 6 — Auth avanzada y RBAC (MVP+)
+
+Google OAuth, 2FA TOTP, roles/permisos CRUD, **RBAC enterprise** (temporales, overrides, delegaciones, templates, condicionales, approvals, webhooks, scheduled changes, transfer, cache, bulk), dashboards, audit, aliases legacy `/admin/roles`.
+
+Rutas: `security.routes.ts`, `security-extended.routes.ts`
+
+Documentación: [modules/auth-advanced.md](./modules/auth-advanced.md)
+
+---
+
+## Fase 2 — Checkout y pagos (referencia histórica — ver sección completada arriba)
+
+<details>
+<summary>Detalle original del plan (archivado)</summary>
 
 **Objetivo:** Completar el flujo de compra que el frontend Nuxt ya consume en lumia.
 
-### Alcance
+### Alcance original
 
 | Componente | Base MongoDB | Colecciones | Origen lumia |
 |------------|--------------|-------------|--------------|
 | Carrito | `sales_db` | `carts` | `server/core/sales/` |
-| Pagos MercadoPago | `sales_db` | `payments`, `payment_attempts` | `server/core/payments/` |
-| Webhook MP | — | — | `server/api/mercadopago/webhook.post.ts` |
-| Preferencia de pago | — | — | `server/api/payments/create-preference.post.ts` |
-| Reintento de pago | — | — | `server/api/payments/retry.post.ts` |
-| Pago manual | — | — | `server/api/payments/manual.post.ts` |
+| Pago manual | `sales_db` | `payments` | `server/api/payments/manual.post.ts` |
 | Expiración de órdenes | `sales_db` | `orders` | TTL + jobs |
 
-### Endpoints a portar (prioridad)
+### Endpoints portados
 
 ```
 GET    /api/cart
 POST   /api/cart/items
 PATCH  /api/cart/items
 DELETE /api/cart/items
-POST   /api/payments/create-preference
-POST   /api/payments/retry
 POST   /api/payments/manual
-POST   /api/mercadopago/webhook
 GET    /api/orders/list
 GET    /api/orders/by-number/:orderNumber
 POST   /api/orders/:id/cancel
 ```
 
-### Variables de entorno nuevas
-
-```env
-MP_ACCESS_TOKEN=
-MP_WEBHOOK_SECRET=
-NUXT_PUBLIC_MP_PUBLIC_KEY=   # solo frontend
-ORDER_PAYMENT_TTL_HOURS=24
-ORDER_MANUAL_PAYMENT_TTL_HOURS=72
-NUXT_ORDER_NUMBER_PREFIX=ORD
-```
-
-### Criterios de aceptación
-
-- [ ] Checkout end-to-end desde `lumiadalistore.com` vía `api.lumiadalistore.com`
-- [ ] Webhook MP actualiza `paymentStatus` y `orders.status`
-- [ ] Idempotencia en webhooks (no duplicar pagos)
-- [ ] Decremento/restauración de inventario en `catalog_db.inventory_items`
-- [ ] Tests de integración para webhook y create-preference
-
-### Riesgos conocidos (lumia)
-
-- Operaciones **cross-DB** sin transacciones (sales ↔ catalog)
-- Código legacy Stripe convive con MP — **solo portar MercadoPago**
-
-### Scaffolding existente
-
-- `src/modules/payments/index.ts` — interface `PaymentProvider`
-- Documentación: [docs/modules/payments.md](./modules/payments.md)
+</details>
 
 ---
 
-## Fase 3 — Tienda pública completa
+## Fase 2 legacy — texto archivado (MercadoPago eliminado del alcance)
 
-**Objetivo:** Paridad de API pública con lo que el frontend de tienda necesita fuera del checkout.
+<details>
+<summary>No implementado — fuera de scope</summary>
 
-### Alcance
+Pasarela online, webhooks MP y create-preference **no están en el roadmap activo**.
+
+</details>
+
+---
+
+## Fase 3 legacy — referencia
+
+<details>
+<summary>Detalle original Fase 3</summary>
 
 | Módulo | Base | Colecciones | Endpoints lumia |
 |--------|------|-------------|-----------------|
@@ -162,7 +210,14 @@ POST /api/auth/logout-all
 
 - [docs/modules/store-public.md](./modules/store-public.md)
 
+</details>
+
 ---
+
+## Referencia archivada (detalle original fases 4–8)
+
+<details>
+<summary>Texto histórico del plan — consultar solo si hace falta detalle fino</summary>
 
 ## Fase 4 — Panel admin (API)
 
@@ -450,13 +505,12 @@ Fase 8 (escala)                  ← solo bajo demanda
 ## Qué NO hacer (anti-patterns detectados en lumia)
 
 1. **Bootstrap destructivo al arrancar** — seeds solo vía `npm run seed`
-2. **Portar Stripe** si solo usan MercadoPago
-3. **Microservicios prematuros** — mantener monolito modular
-4. **cloudflared dentro de Docker API** — tunnel siempre en el host
-5. **CORS `*`** — solo dominios Lumia
-6. **Hardcodear secretos** — Twelve-Factor siempre
-7. **Duplicar colección `permissions`** híbrida sin plan de migración
-8. **Transacciones cross-DB** — diseñar compensaciones/sagas en Fase 2
+2. **Microservicios prematuros** — mantener monolito modular
+3. **cloudflared dentro de Docker API** — tunnel siempre en el host
+4. **CORS `*`** — solo dominios configurados
+5. **Hardcodear secretos** — Twelve-Factor siempre
+6. **Duplicar colección `permissions`** híbrida sin plan de migración
+7. **Transacciones cross-DB** — diseñar compensaciones/sagas
 
 ---
 
@@ -466,7 +520,7 @@ Fase 8 (escala)                  ← solo bajo demanda
 |-----------|-----------|
 | [README.md](../README.md) | Inicio rápido, arquitectura actual |
 | [cloudflare-tunnel.md](./cloudflare-tunnel.md) | Tunnel y migración ThinkCentre |
-| [modules/payments.md](./modules/payments.md) | MercadoPago — diseño Fase 2 |
+| [modules/payments.md](./modules/payments.md) | Pago manual — Fase 2 |
 | [modules/store-public.md](./modules/store-public.md) | Tienda pública — Fase 3 |
 | [modules/admin.md](./modules/admin.md) | Admin API — Fase 4 |
 | [modules/production.md](./modules/production.md) | Costeo — Fase 5 |
@@ -475,6 +529,8 @@ Fase 8 (escala)                  ← solo bajo demanda
 | [modules/scalability.md](./modules/scalability.md) | K8s, colas, microservicios — Fase 8 |
 | lumia `docs/modules/` | Documentación de negocio original |
 
+</details>
+
 ---
 
-*Última actualización: alineado con Fase 1 completada y monolito lumia.*
+*Última actualización: Fases 1–6 MVP+ implementadas; Fases 7–8 pendientes.*

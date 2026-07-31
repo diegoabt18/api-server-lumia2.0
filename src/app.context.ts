@@ -43,6 +43,10 @@ import { AdminRegistryService } from './modules/admin/services/admin-registry.se
 import { AdminSessionService } from './modules/admin/services/admin-session.service.js'
 import { AdminAnalyticsService } from './modules/admin/services/admin-analytics.service.js'
 import { AdminFeedbackService } from './modules/admin/services/admin-feedback.service.js'
+import { AdminUsersService } from './modules/admin/services/admin-users.service.js'
+import { AdminAuditService } from './modules/admin/services/admin-audit.service.js'
+import { AdminPricingService } from './modules/admin/services/admin-pricing.service.js'
+import { AdminCostSummaryService } from './modules/admin/services/admin-cost-summary.service.js'
 import { CatalogOptionRepository } from './modules/catalog/infrastructure/catalog-option.repository.js'
 import { RegistryRepository } from './modules/admin/infrastructure/registry.repository.js'
 import { FeedbackReportRepository } from './modules/sales/infrastructure/feedback-report.repository.js'
@@ -52,7 +56,21 @@ import { RecipeRepository } from './modules/production/infrastructure/recipe.rep
 import { ProductionConfigRepository } from './modules/production/infrastructure/production-config.repository.js'
 import { ProductionAuditRepository } from './modules/production/infrastructure/production-audit.repository.js'
 import { UnitRepository } from './modules/production/infrastructure/unit.repository.js'
+import { UnitEquivalenceRepository } from './modules/production/infrastructure/unit-equivalence.repository.js'
+import { IndirectCostRepository } from './modules/production/infrastructure/indirect-cost.repository.js'
+import { PriceApprovalRepository } from './modules/production/infrastructure/price-approval.repository.js'
+import { CostImpactRepository } from './modules/production/infrastructure/cost-impact.repository.js'
+import { LaborCostRepository } from './modules/production/infrastructure/labor-cost.repository.js'
+import { PackagingCostRepository } from './modules/production/infrastructure/packaging-cost.repository.js'
+import { RecipeProductionCostRepository } from './modules/production/infrastructure/recipe-production-cost.repository.js'
+import { ServiceCostRepository } from './modules/production/infrastructure/service-cost.repository.js'
+import { RecipeVersionRepository } from './modules/production/infrastructure/recipe-version.repository.js'
+import { CostSheetRepository } from './modules/production/infrastructure/cost-sheet.repository.js'
 import { UnitConversionService } from './modules/production/services/unit-conversion.service.js'
+import { EquivalenceService } from './modules/production/services/equivalence.service.js'
+import { IndirectCostService } from './modules/production/services/indirect-cost.service.js'
+import { PriceApprovalService } from './modules/production/services/price-approval.service.js'
+import { CostImpactService } from './modules/production/services/cost-impact.service.js'
 import { CostingService } from './modules/production/services/costing.service.js'
 import { MaterialService } from './modules/production/services/material.service.js'
 import { SupplierService } from './modules/production/services/supplier.service.js'
@@ -65,8 +83,19 @@ import { TwoFactorRepository } from './modules/identity/infrastructure/two-facto
 import { TwoFactorService } from './modules/identity/services/two-factor.service.js'
 import { RoleRepository } from './modules/security/infrastructure/role.repository.js'
 import { UserRoleRepository } from './modules/security/infrastructure/user-role.repository.js'
+import { TemporalPermissionRepository } from './modules/security/infrastructure/temporal-permission.repository.js'
+import { UserPermissionOverrideRepository } from './modules/security/infrastructure/user-permission-override.repository.js'
+import { RoleDelegationRepository } from './modules/security/infrastructure/role-delegation.repository.js'
+import { PermissionTemplateRepository } from './modules/security/infrastructure/permission-template.repository.js'
+import { ConditionalPermissionRepository } from './modules/security/infrastructure/conditional-permission.repository.js'
+import { ApprovalRequestRepository } from './modules/security/infrastructure/approval-request.repository.js'
+import { ScheduledChangeRepository } from './modules/security/infrastructure/scheduled-change.repository.js'
+import { PermissionAuditRepository } from './modules/security/infrastructure/permission-audit.repository.js'
+import { SecurityWebhookRepository } from './modules/security/infrastructure/security-webhook.repository.js'
 import { AuthorizationService } from './modules/security/services/authorization.service.js'
 import { SecurityAdminService } from './modules/security/services/security-admin.service.js'
+import { SecurityEnterpriseService } from './modules/security/services/security-enterprise.service.js'
+import { PermissionCacheService } from './modules/security/services/permission-cache.service.js'
 
 export interface AppContext {
   env: Env
@@ -93,18 +122,39 @@ export interface AppContext {
     authAudit: AuthAuditRepository
     roles: RoleRepository
     userRoles: UserRoleRepository
+    temporalPermissions: TemporalPermissionRepository
+    userPermissionOverrides: UserPermissionOverrideRepository
+    roleDelegations: RoleDelegationRepository
+    permissionTemplates: PermissionTemplateRepository
+    conditionalPermissions: ConditionalPermissionRepository
+    approvalRequests: ApprovalRequestRepository
+    scheduledChanges: ScheduledChangeRepository
+    permissionAudit: PermissionAuditRepository
+    securityWebhooks: SecurityWebhookRepository
     productionMaterials: MaterialRepository
     productionSuppliers: SupplierRepository
     productionRecipes: RecipeRepository
     productionConfig: ProductionConfigRepository
     productionAudit: ProductionAuditRepository
     productionUnits: UnitRepository
+    productionEquivalences: UnitEquivalenceRepository
+    productionIndirectCosts: IndirectCostRepository
+    productionApprovals: PriceApprovalRepository
+    productionImpacts: CostImpactRepository
+    productionLaborCosts: LaborCostRepository
+    productionPackagingCosts: PackagingCostRepository
+    productionRecipeCosts: RecipeProductionCostRepository
+    productionServiceCosts: ServiceCostRepository
+    productionRecipeVersions: RecipeVersionRepository
+    productionCostSheets: CostSheetRepository
   }
   services: {
     auth: AuthService
     authorization: AuthorizationService
     twoFactor: TwoFactorService
     securityAdmin: SecurityAdminService
+    securityEnterprise: SecurityEnterpriseService
+    permissionCache: PermissionCacheService
     products: ProductService
     categories: CategoryService
     orders: OrderService
@@ -129,6 +179,10 @@ export interface AppContext {
     adminSession: AdminSessionService
     adminAnalytics: AdminAnalyticsService
     adminFeedback: AdminFeedbackService
+    adminUsers: AdminUsersService
+    adminAudit: AdminAuditService
+    adminPricing: AdminPricingService
+    adminCostSummary: AdminCostSummaryService
     productionMaterials: MaterialService
     productionSuppliers: SupplierService
     productionRecipes: RecipeService
@@ -137,6 +191,11 @@ export interface AppContext {
     productionDashboard: ProductionDashboardService
     productionAudit: ProductionAuditService
     productionCosting: CostingService
+    productionUnitConversion: UnitConversionService
+    productionEquivalences: EquivalenceService
+    productionIndirectCosts: IndirectCostService
+    productionApprovals: PriceApprovalService
+    productionImpact: CostImpactService
   }
   jwt: JwtTokenService
 }
@@ -184,10 +243,29 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   const productionConfigRepo = new ProductionConfigRepository(productionDb)
   const productionAuditRepo = new ProductionAuditRepository(productionDb)
   const productionUnitsRepo = new UnitRepository(productionDb)
+  const productionEquivalencesRepo = new UnitEquivalenceRepository(productionDb)
+  const productionIndirectCostsRepo = new IndirectCostRepository(productionDb)
+  const productionApprovalsRepo = new PriceApprovalRepository(productionDb)
+  const productionImpactsRepo = new CostImpactRepository(productionDb)
+  const productionLaborCostsRepo = new LaborCostRepository(productionDb)
+  const productionPackagingCostsRepo = new PackagingCostRepository(productionDb)
+  const productionRecipeCostsRepo = new RecipeProductionCostRepository(productionDb)
+  const productionServiceCostsRepo = new ServiceCostRepository(productionDb)
+  const productionRecipeVersionsRepo = new RecipeVersionRepository(productionDb)
+  const productionCostSheetsRepo = new CostSheetRepository(productionDb)
   const authAudit = new AuthAuditRepository(identityDb)
   const twoFactorRepo = new TwoFactorRepository(identityDb)
   const roles = new RoleRepository(identityDb)
   const userRoles = new UserRoleRepository(identityDb)
+  const temporalPermissions = new TemporalPermissionRepository(identityDb)
+  const userPermissionOverrides = new UserPermissionOverrideRepository(identityDb)
+  const roleDelegations = new RoleDelegationRepository(identityDb)
+  const permissionTemplates = new PermissionTemplateRepository(identityDb)
+  const conditionalPermissions = new ConditionalPermissionRepository(identityDb)
+  const approvalRequests = new ApprovalRequestRepository(identityDb)
+  const scheduledChanges = new ScheduledChangeRepository(identityDb)
+  const permissionAudit = new PermissionAuditRepository(identityDb)
+  const securityWebhooks = new SecurityWebhookRepository(identityDb)
 
   await Promise.all([
     users.ensureIndexes().catch((err) => logger.warn({ err }, 'users indexes skipped')),
@@ -195,6 +273,15 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     authAudit.ensureIndexes().catch((err) => logger.warn({ err }, 'auth audit indexes skipped')),
     roles.ensureIndexes().catch((err) => logger.warn({ err }, 'roles indexes skipped')),
     userRoles.ensureIndexes().catch((err) => logger.warn({ err }, 'user_roles indexes skipped')),
+    temporalPermissions.ensureIndexes().catch((err) => logger.warn({ err }, 'temporal_permissions indexes skipped')),
+    userPermissionOverrides.ensureIndexes().catch((err) => logger.warn({ err }, 'user_permission_overrides indexes skipped')),
+    roleDelegations.ensureIndexes().catch((err) => logger.warn({ err }, 'role_delegations indexes skipped')),
+    permissionTemplates.ensureIndexes().catch((err) => logger.warn({ err }, 'permission_templates indexes skipped')),
+    conditionalPermissions.ensureIndexes().catch((err) => logger.warn({ err }, 'conditional_permissions indexes skipped')),
+    approvalRequests.ensureIndexes().catch((err) => logger.warn({ err }, 'approval_requests indexes skipped')),
+    scheduledChanges.ensureIndexes().catch((err) => logger.warn({ err }, 'scheduled_changes indexes skipped')),
+    permissionAudit.ensureIndexes().catch((err) => logger.warn({ err }, 'permission_audit indexes skipped')),
+    securityWebhooks.ensureIndexes().catch((err) => logger.warn({ err }, 'security_webhooks indexes skipped')),
     products.ensureIndexes().catch((err) => logger.warn({ err }, 'products indexes skipped')),
     categories.ensureIndexes().catch((err) => logger.warn({ err }, 'categories indexes skipped')),
     orders.ensureIndexes().catch((err) => logger.warn({ err }, 'orders indexes skipped')),
@@ -213,10 +300,29 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     productionConfigRepo.ensureIndexes().catch((err) => logger.warn({ err }, 'production config indexes skipped')),
     productionAuditRepo.ensureIndexes().catch((err) => logger.warn({ err }, 'production audit indexes skipped')),
     productionUnitsRepo.ensureIndexes().catch((err) => logger.warn({ err }, 'production units indexes skipped')),
+    productionEquivalencesRepo.ensureIndexes().catch((err) => logger.warn({ err }, 'production equivalences indexes skipped')),
+    productionIndirectCostsRepo.ensureIndexes().catch((err) => logger.warn({ err }, 'production indirect costs indexes skipped')),
+    productionApprovalsRepo.ensureIndexes().catch((err) => logger.warn({ err }, 'production approvals indexes skipped')),
+    productionImpactsRepo.ensureIndexes().catch((err) => logger.warn({ err }, 'production impacts indexes skipped')),
+    productionLaborCostsRepo.ensureIndexes().catch((err) => logger.warn({ err }, 'production labor costs indexes skipped')),
+    productionPackagingCostsRepo.ensureIndexes().catch((err) => logger.warn({ err }, 'production packaging costs indexes skipped')),
+    productionRecipeCostsRepo.ensureIndexes().catch((err) => logger.warn({ err }, 'production recipe costs indexes skipped')),
+    productionServiceCostsRepo.ensureIndexes().catch((err) => logger.warn({ err }, 'production service costs indexes skipped')),
+    productionRecipeVersionsRepo.ensureIndexes().catch((err) => logger.warn({ err }, 'production recipe versions indexes skipped')),
+    productionCostSheetsRepo.ensureIndexes().catch((err) => logger.warn({ err }, 'production cost sheets indexes skipped')),
   ])
 
   const jwt = new JwtTokenService()
-  const authorization = new AuthorizationService(roles, userRoles)
+  const permissionCache = new PermissionCacheService(cache)
+  const authorization = new AuthorizationService(
+    roles,
+    userRoles,
+    temporalPermissions,
+    userPermissionOverrides,
+    roleDelegations,
+    conditionalPermissions,
+    permissionCache,
+  )
   let auth: AuthService
   const twoFactor = new TwoFactorService(users, twoFactorRepo, authAudit, () => auth)
   auth = new AuthService(users, sessions, jwt, authAudit, twoFactor, authorization)
@@ -237,8 +343,11 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   const adminAnalytics = new AdminAnalyticsService(orders, users, products)
   const feedbackReports = new FeedbackReportRepository(salesDb)
   const adminFeedback = new AdminFeedbackService(reviews, feedbackReports)
+  const adminUsers = new AdminUsersService(users, orders, roles, userRoles)
+  const adminAudit = new AdminAuditService(authAudit)
+  const adminPricing = new AdminPricingService(productionConfigRepo)
 
-  const productionUnitConversion = new UnitConversionService(productionUnitsRepo)
+  const productionUnitConversion = new UnitConversionService(productionUnitsRepo, productionEquivalencesRepo)
   const productionCosting = new CostingService(
     productionRecipesRepo,
     productionMaterialsRepo,
@@ -246,6 +355,8 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     productionAuditRepo,
     productionUnitConversion,
   )
+  const adminCostSummary = new AdminCostSummaryService(products, productionRecipesRepo, productionConfigRepo, productionCosting)
+
   const productionMaterials = new MaterialService(productionMaterialsRepo, productionRecipesRepo, productionAuditRepo)
   const productionSuppliers = new SupplierService(productionSuppliersRepo)
   const productionRecipes = new RecipeService(
@@ -253,8 +364,23 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     productionMaterialsRepo,
     productionAuditRepo,
     productionCosting,
+    products,
+    productionRecipeVersionsRepo,
+    productionCostSheetsRepo,
+    productionLaborCostsRepo,
+    productionPackagingCostsRepo,
+    productionRecipeCostsRepo,
+    productionServiceCostsRepo,
   )
   const productionUnits = new UnitService(productionUnitsRepo)
+  const productionEquivalences = new EquivalenceService(
+    productionEquivalencesRepo,
+    productionUnitsRepo,
+    productionUnitConversion,
+  )
+  const productionIndirectCosts = new IndirectCostService(productionIndirectCostsRepo)
+  const productionApprovals = new PriceApprovalService(productionApprovalsRepo, productionAuditRepo, products)
+  const productionImpact = new CostImpactService(productionImpactsRepo, productionAuditRepo)
   const productionConfig = new ProductionConfigService(productionConfigRepo, productionAuditRepo)
   const productionDashboard = new ProductionDashboardService(
     productionDb,
@@ -264,6 +390,25 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   )
   const productionAudit = new ProductionAuditService(productionAuditRepo)
   const securityAdmin = new SecurityAdminService(roles, userRoles, users, registry, authorization)
+  const securityEnterprise = new SecurityEnterpriseService(
+    roles,
+    userRoles,
+    users,
+    registry,
+    authorization,
+    temporalPermissions,
+    userPermissionOverrides,
+    roleDelegations,
+    permissionTemplates,
+    conditionalPermissions,
+    approvalRequests,
+    scheduledChanges,
+    permissionAudit,
+    securityWebhooks,
+    authAudit,
+    sessions,
+    permissionCache,
+  )
 
   return {
     env,
@@ -290,18 +435,39 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       authAudit,
       roles,
       userRoles,
+      temporalPermissions,
+      userPermissionOverrides,
+      roleDelegations,
+      permissionTemplates,
+      conditionalPermissions,
+      approvalRequests,
+      scheduledChanges,
+      permissionAudit,
+      securityWebhooks,
       productionMaterials: productionMaterialsRepo,
       productionSuppliers: productionSuppliersRepo,
       productionRecipes: productionRecipesRepo,
       productionConfig: productionConfigRepo,
       productionAudit: productionAuditRepo,
       productionUnits: productionUnitsRepo,
+      productionEquivalences: productionEquivalencesRepo,
+      productionIndirectCosts: productionIndirectCostsRepo,
+      productionApprovals: productionApprovalsRepo,
+      productionImpacts: productionImpactsRepo,
+      productionLaborCosts: productionLaborCostsRepo,
+      productionPackagingCosts: productionPackagingCostsRepo,
+      productionRecipeCosts: productionRecipeCostsRepo,
+      productionServiceCosts: productionServiceCostsRepo,
+      productionRecipeVersions: productionRecipeVersionsRepo,
+      productionCostSheets: productionCostSheetsRepo,
     },
     services: {
       auth,
       authorization,
       twoFactor,
       securityAdmin,
+      securityEnterprise,
+      permissionCache,
       products: new ProductService(products, promotions),
       categories: new CategoryService(categories),
       orders: new OrderService(orders, carts, inventory, manualPayments),
@@ -326,6 +492,10 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       adminSession,
       adminAnalytics,
       adminFeedback,
+      adminUsers,
+      adminAudit,
+      adminPricing,
+      adminCostSummary,
       productionMaterials,
       productionSuppliers,
       productionRecipes,
@@ -334,6 +504,11 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       productionDashboard,
       productionAudit,
       productionCosting,
+      productionUnitConversion,
+      productionEquivalences,
+      productionIndirectCosts,
+      productionApprovals,
+      productionImpact,
     },
     jwt,
   }

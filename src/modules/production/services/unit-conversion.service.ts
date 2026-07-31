@@ -1,8 +1,55 @@
 import { convertUnit, isConvertible, type UnitOfMeasure } from '../domain/value-objects/unit-of-measure.vo.js'
 import type { UnitRepository } from '../infrastructure/unit.repository.js'
+import type { UnitConversionConfig, UnitEquivalenceRepository } from '../infrastructure/unit-equivalence.repository.js'
 
 export class UnitConversionService {
-  constructor(private readonly units: UnitRepository) {}
+  private config: UnitConversionConfig | null = null
+
+  constructor(
+    private readonly units: UnitRepository,
+    private readonly equivalences?: UnitEquivalenceRepository,
+  ) {}
+
+  invalidateCache(): void {
+    this.config = null
+  }
+
+  async getConfig(): Promise<UnitConversionConfig> {
+    if (this.config) return this.config
+    if (this.equivalences) {
+      this.config = await this.equivalences.getConversionConfig()
+      return this.config
+    }
+    const unitList = await this.units.list()
+    this.config = {
+      definitions: unitList.map((u) => ({
+        id: u.id,
+        name: u.name,
+        abbreviation: u.abbreviation,
+        family: u.family,
+        baseFactor: u.baseFactor,
+        active: u.active,
+        sortOrder: u.sortOrder,
+      })),
+      equivalences: [],
+    }
+    return this.config
+  }
+
+  async validateFamily(unitA: string, unitB: string): Promise<{ valid: boolean; family?: string; error?: string }> {
+    const config = await this.getConfig()
+    const findDef = (id: string) =>
+      config.definitions.find((d) => d.id === id || d.abbreviation === id)
+    const defA = findDef(unitA)
+    const defB = findDef(unitB)
+    if (!defA || !defB) {
+      return { valid: false, error: 'Una o ambas unidades no encontradas' }
+    }
+    if (defA.family !== defB.family) {
+      return { valid: false, error: `Familias incompatibles: ${defA.family} vs ${defB.family}` }
+    }
+    return { valid: true, family: defA.family }
+  }
 
   async calculateCost(input: {
     price: number

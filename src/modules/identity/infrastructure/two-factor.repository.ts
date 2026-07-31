@@ -72,4 +72,39 @@ export class TwoFactorRepository {
     if (!tf?.enabled || !tf.secretEnc) return null
     return tf.secretEnc
   }
+
+  async getStatus(userId: string): Promise<{
+    enabled: boolean
+    confirmedAt?: string | null
+    remainingBackupCodes?: number
+  } | null> {
+    const tf = await this.getTwoFactor(userId)
+    if (!tf) return { enabled: false, confirmedAt: null, remainingBackupCodes: 0 }
+    return {
+      enabled: !!tf.enabled,
+      confirmedAt: tf.confirmedAt?.toISOString?.() ?? null,
+      remainingBackupCodes: tf.remainingBackupCodes ?? tf.backupCodesHashed?.length ?? 0,
+    }
+  }
+
+  async updateBackupCodes(userId: string, hashedCodes: string[], remaining: number): Promise<void> {
+    if (!ObjectId.isValid(userId)) return
+    await this.collection().updateOne(
+      { _id: new ObjectId(userId) },
+      {
+        $set: {
+          'twoFactor.backupCodesHashed': hashedCodes,
+          'twoFactor.remainingBackupCodes': remaining,
+          updatedAt: new Date(),
+        },
+      },
+    )
+  }
+
+  async findUserIdsWith2faEnabled(limit = 100): Promise<string[]> {
+    const docs = await this.collection()
+      .find({ 'twoFactor.enabled': true }, { projection: { _id: 1 }, limit })
+      .toArray()
+    return docs.map((d) => d._id.toString())
+  }
 }

@@ -6,6 +6,7 @@ import { registerPaymentRoutes } from './payments.routes.js'
 import { registerStorePublicRoutes, registerAuthExtendedRoutes } from './store-public.routes.js'
 import { registerAdminRoutes } from './admin.routes.js'
 import { registerProductionAdminRoutes } from './production-admin.routes.js'
+import { registerProductionPublicRoutes } from './production-public.routes.js'
 import { registerSecurityRoutes } from './security.routes.js'
 
 export function registerErrorHandler(app: FastifyInstance) {
@@ -218,6 +219,7 @@ export async function registerApiRoutes(app: FastifyInstance) {
     await registerSecurityRoutes(api, app.ctx)
     await registerAdminRoutes(api, app.ctx)
     await registerProductionAdminRoutes(api, app.ctx)
+    await registerProductionPublicRoutes(api, app.ctx)
 
     // Products
     api.get('/products', {

@@ -131,4 +131,50 @@ export class CostingService {
   calculateUnitCost(price: number, quantity: number): number {
     return calculateUnitCost(price, quantity)
   }
+
+  async getOutdatedProducts() {
+    const slugs = await this.recipes.getOutdatedProductSlugs()
+    return { data: slugs, meta: { total: slugs.length } }
+  }
+
+  async recalculateAll(userId: string) {
+    const outdated = await this.recipes.list(500, 0, undefined, undefined, true)
+    const results: { recipeId: string; success: boolean; error?: string }[] = []
+    for (const recipe of outdated) {
+      try {
+        await this.calculateRecipeCost(recipe.id, userId)
+        results.push({ recipeId: recipe.id, success: true })
+      } catch (e) {
+        results.push({
+          recipeId: recipe.id,
+          success: false,
+          error: e instanceof Error ? e.message : 'Error desconocido',
+        })
+      }
+    }
+    return {
+      data: {
+        total: outdated.length,
+        succeeded: results.filter((r) => r.success).length,
+        failed: results.filter((r) => !r.success).length,
+        results,
+      },
+    }
+  }
+
+  async suggestPrice(input: {
+    totalCost: number
+    marginPercentage: number
+    rounding?: number
+    currency?: string
+  }) {
+    const config = await this.config.get()
+    const suggestion = calculateSuggestedPrice(
+      input.totalCost,
+      input.marginPercentage,
+      input.rounding ?? config.priceRounding,
+      input.currency ?? config.currency,
+    )
+    return { success: true as const, data: suggestion }
+  }
 }

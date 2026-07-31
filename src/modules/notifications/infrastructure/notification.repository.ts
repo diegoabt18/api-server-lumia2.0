@@ -40,8 +40,8 @@ export class NotificationRepository extends BaseRepository<NotificationDocument>
 
   async ensureIndexes(): Promise<void> {
     await super.ensureIndexes([
-      { key: { userId: 1, createdAt: -1 } },
-      { key: { userId: 1, read: 1 } },
+      { key: { userId: 1, createdAt: -1 }, name: 'notifications_user_createdAt' },
+      { key: { userId: 1, read: 1 }, name: 'notifications_user_read' },
     ])
   }
 

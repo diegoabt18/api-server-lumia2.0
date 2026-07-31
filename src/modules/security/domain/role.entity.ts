@@ -6,7 +6,12 @@ export interface RoleEntity {
   name: string
   description?: string
   permissionKeys: PermissionId[]
+  denyKeys?: PermissionId[]
+  inheritRoleIds?: string[]
   isSystem?: boolean
+  isArchived?: boolean
+  archivedAt?: Date | null
+  version?: number
   createdAt?: Date
   updatedAt?: Date
 }
@@ -25,7 +30,12 @@ export interface RoleDomain {
   name: string
   description?: string
   permissionKeys: PermissionId[]
+  denyKeys: PermissionId[]
+  inheritRoleIds: string[]
   isSystem: boolean
+  isArchived: boolean
+  archivedAt?: string | null
+  version: number
   createdAt?: string
   updatedAt?: string
 }
@@ -37,7 +47,12 @@ export function toRoleDomain(entity: RoleEntity): RoleDomain {
     name: entity.name,
     description: entity.description,
     permissionKeys: entity.permissionKeys,
+    denyKeys: entity.denyKeys ?? [],
+    inheritRoleIds: entity.inheritRoleIds ?? [],
     isSystem: !!entity.isSystem,
+    isArchived: !!entity.isArchived,
+    archivedAt: entity.archivedAt?.toISOString?.() ?? null,
+    version: entity.version ?? 1,
     createdAt: entity.createdAt?.toISOString(),
     updatedAt: entity.updatedAt?.toISOString(),
   }

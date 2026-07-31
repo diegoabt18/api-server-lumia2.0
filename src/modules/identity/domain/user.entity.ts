@@ -22,6 +22,8 @@ export interface UserTwoFactor {
   secretEnc?: string
   pendingSecretEnc?: string
   confirmedAt?: Date
+  backupCodesHashed?: string[]
+  remainingBackupCodes?: number
 }
 
 export interface UserEntity {

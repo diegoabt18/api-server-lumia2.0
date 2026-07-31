@@ -390,4 +390,18 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
     const docs = await this.findMany({ createdAt: { $gte: from, $lt: to } } as never, { sort: { createdAt: -1 } })
     return docs.map((d) => toEntity(d))
   }
+
+  async countByUser(userId: string): Promise<number> {
+    return this.count({ userId } as never)
+  }
+
+  async sumPaidTotalByUser(userId: string): Promise<number> {
+    const rows = await this.collection
+      .aggregate([
+        { $match: { userId, status: 'paid' } },
+        { $group: { _id: null, total: { $sum: '$total' } } },
+      ])
+      .toArray()
+    return rows.length > 0 ? Number((rows[0] as { total: number }).total) : 0
+  }
 }

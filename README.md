@@ -72,8 +72,11 @@ src/
 │   ├── identity/     # auth, users, sessions, JWT
 │   ├── catalog/      # products, categories
 │   ├── sales/        # orders
-│   ├── production/   # scaffolding
-│   └── payments/     # scaffolding
+│   ├── production/   # materiales, recetas, costeo
+│   ├── security/     # RBAC enterprise
+│   ├── store/        # configuración tienda
+│   ├── notifications/
+│   └── payments/     # pago manual
 ├── common/           # permisos, errores, utils
 ├── plugins/          # Fastify plugins
 └── routes/           # registro de endpoints
@@ -253,22 +256,23 @@ Browser → Cloudflare → Tunnel → Fastify
 | Documento | Contenido |
 |-----------|-----------|
 | [docs/README.md](docs/README.md) | Índice de documentación |
-| [docs/roadmap.md](docs/roadmap.md) | **Fases futuras (2–8) — plan completo** |
+| [docs/roadmap.md](docs/roadmap.md) | Estado de fases y pendientes |
 | [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md) | Cloudflare Tunnel paso a paso |
 
-### Fases futuras (resumen)
+### Estado de fases (resumen)
 
-Las fases 2–8 están **documentadas pero no implementadas**. Detalle completo en [docs/roadmap.md](docs/roadmap.md):
+Detalle en [docs/roadmap.md](docs/roadmap.md):
 
-| Fase | Contenido |
-|------|-----------|
-| 2 | Carrito, MercadoPago, webhooks |
-| 3 | Tienda pública (store, favoritos, feedback, promociones) |
-| 4 | Panel admin (~200 endpoints, incremental) |
-| 5 | Producción y costeo (`production_db`) |
-| 6 | Google OAuth, 2FA, RBAC enterprise |
-| 7 | Observabilidad, cron jobs, backups automáticos |
-| 8 | Escalabilidad (Swarm, K8s, colas, microservicios) |
+| Fase | Contenido | Estado |
+|------|-----------|--------|
+| 1 | Núcleo (auth, catálogo, pedidos, Docker) | ✅ |
+| 2 | Carrito, checkout, pago manual, expiración órdenes | ✅ |
+| 3 | Tienda pública (store, favoritos, feedback, promociones) | ✅ |
+| 4 | Panel admin (productos, pedidos, pricing, cost-summary, usuarios) | ✅ MVP+ |
+| 5 | Producción y costeo (materiales, recetas, aprobaciones, impacto) | ✅ MVP+ |
+| 6 | Google OAuth, 2FA, RBAC enterprise | ✅ MVP+ |
+| 7 | Observabilidad, cron jobs, backups automáticos | 📋 Pendiente |
+| 8 | Escalabilidad (Swarm, K8s, colas) | 📋 Futuro |
 
 ---
 

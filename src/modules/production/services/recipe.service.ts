@@ -1,9 +1,20 @@
 import { ObjectId } from 'mongodb'
 import { AppError } from '../../../common/errors/app.error.js'
 import { resolvePagingQuery } from '../../../common/utils/pagination.js'
+import { buildLaborCostEntity } from '../domain/labor-cost.entity.js'
+import { buildPackagingCostEntity } from '../domain/packaging-cost.entity.js'
+import { buildRecipeProductionCostEntity } from '../domain/recipe-production-cost.entity.js'
+import { buildServiceCostEntity } from '../domain/service-cost.entity.js'
+import type { CostSheetRepository } from '../infrastructure/cost-sheet.repository.js'
+import type { LaborCostRepository } from '../infrastructure/labor-cost.repository.js'
 import type { MaterialRepository } from '../infrastructure/material.repository.js'
+import type { PackagingCostRepository } from '../infrastructure/packaging-cost.repository.js'
 import type { ProductionAuditRepository } from '../infrastructure/production-audit.repository.js'
+import type { RecipeProductionCostRepository } from '../infrastructure/recipe-production-cost.repository.js'
 import type { RecipeRepository } from '../infrastructure/recipe.repository.js'
+import type { RecipeVersionRepository } from '../infrastructure/recipe-version.repository.js'
+import type { ServiceCostRepository } from '../infrastructure/service-cost.repository.js'
+import type { ProductRepository } from '../../catalog/infrastructure/product.repository.js'
 import type { CostingService } from './costing.service.js'
 
 export class RecipeService {
@@ -12,6 +23,13 @@ export class RecipeService {
     private readonly materials: MaterialRepository,
     private readonly audit: ProductionAuditRepository,
     private readonly costing: CostingService,
+    private readonly products?: ProductRepository,
+    private readonly recipeVersions?: RecipeVersionRepository,
+    private readonly costSheets?: CostSheetRepository,
+    private readonly laborCosts?: LaborCostRepository,
+    private readonly packagingCosts?: PackagingCostRepository,
+    private readonly productionCosts?: RecipeProductionCostRepository,
+    private readonly serviceCosts?: ServiceCostRepository,
   ) {}
 
   async list(query: Record<string, unknown>) {
@@ -152,6 +170,154 @@ export class RecipeService {
     } catch (e) {
       throw AppError.badRequest(e instanceof Error ? e.message : 'Error al calcular costo')
     }
+  }
+
+  async listProducts(query: Record<string, unknown>) {
+    if (!this.products) throw AppError.internal('Catálogo no disponible')
+    const { page, limit, skip, search } = resolvePagingQuery(query, { defaultLimit: 20, maxLimit: 100 })
+    const { data, total } = await this.products.listForProduction({ search: search || undefined, limit, skip })
+    return {
+      data,
+      meta: { total, page, pageSize: limit, totalPages: Math.ceil(total / limit) || 1 },
+    }
+  }
+
+  async recalculateAll(userId: string) {
+    return this.costing.recalculateAll(userId)
+  }
+
+  async getVersions(id: string) {
+    if (!this.recipeVersions) return { data: [] }
+    await this.ensureRecipeExists(id)
+    const data = await this.recipeVersions.getByRecipeId(id)
+    return { data }
+  }
+
+  async getAssociatedProducts(id: string) {
+    if (!this.products) throw AppError.internal('Catálogo no disponible')
+    const recipe = await this.recipes.getById(id)
+    if (!recipe) throw AppError.notFound('Receta no encontrada')
+    const associated = await this.products.findAssociatedWithRecipe(id)
+    return {
+      data: {
+        recipeId: id,
+        recipeName: recipe.name,
+        ...associated,
+      },
+    }
+  }
+
+  async getCostSheets(id: string) {
+    if (!this.costSheets) return { data: [] }
+    await this.ensureRecipeExists(id)
+    const data = await this.costSheets.getByRecipeId(id)
+    return { data }
+  }
+
+  async getLaborCost(id: string) {
+    if (!this.laborCosts) return { data: null }
+    await this.ensureRecipeExists(id)
+    const data = await this.laborCosts.getByRecipeId(id)
+    return { data }
+  }
+
+  async upsertLaborCost(id: string, input: Record<string, unknown>) {
+    if (!this.laborCosts) throw AppError.internal('Repositorio de mano de obra no disponible')
+    await this.ensureRecipeExists(id)
+    const concepts = (input.concepts as Array<Record<string, unknown>>) ?? []
+    const entity = buildLaborCostEntity(
+      id,
+      concepts.map((c) => ({
+        name: String(c.name),
+        type: c.type as 'fixed' | 'per_unit' | 'per_batch',
+        timeRequired: Number(c.timeRequired),
+        timeUnit: c.timeUnit as 'minutes' | 'hours' | 'seconds',
+        valuePerHour: Number(c.valuePerHour),
+        operatorName: c.operatorName ? String(c.operatorName) : undefined,
+        active: c.active !== false,
+      })),
+    )
+    const data = await this.laborCosts.upsert(id, entity)
+    return { data }
+  }
+
+  async getPackagingCost(id: string) {
+    if (!this.packagingCosts) return { data: null }
+    await this.ensureRecipeExists(id)
+    const data = await this.packagingCosts.getByRecipeId(id)
+    return { data }
+  }
+
+  async upsertPackagingCost(id: string, input: Record<string, unknown>) {
+    if (!this.packagingCosts) throw AppError.internal('Repositorio de empaque no disponible')
+    await this.ensureRecipeExists(id)
+    const items = (input.items as Array<Record<string, unknown>>) ?? []
+    const entity = buildPackagingCostEntity(
+      id,
+      items.map((i) => ({
+        name: String(i.name),
+        type: i.type as 'optional' | 'mandatory' | 'by_variant',
+        unit: String(i.unit),
+        quantity: Number(i.quantity),
+        unitCost: Number(i.unitCost),
+      })),
+    )
+    const data = await this.packagingCosts.upsert(id, entity)
+    return { data }
+  }
+
+  async getProductionCost(id: string) {
+    if (!this.productionCosts) return { data: null }
+    await this.ensureRecipeExists(id)
+    const data = await this.productionCosts.getByRecipeId(id)
+    return { data }
+  }
+
+  async upsertProductionCost(id: string, input: Record<string, unknown>) {
+    if (!this.productionCosts) throw AppError.internal('Repositorio de costos de producción no disponible')
+    await this.ensureRecipeExists(id)
+    const items = (input.items as Array<Record<string, unknown>>) ?? []
+    const entity = buildRecipeProductionCostEntity(
+      id,
+      items.map((i) => ({
+        name: String(i.name),
+        type: i.type as 'fixed' | 'per_minute' | 'per_hour' | 'per_batch' | 'per_unit',
+        value: Number(i.value),
+        active: i.active !== false,
+      })),
+    )
+    const data = await this.productionCosts.upsert(id, entity)
+    return { data }
+  }
+
+  async getServiceCost(id: string) {
+    if (!this.serviceCosts) return { data: null }
+    await this.ensureRecipeExists(id)
+    const data = await this.serviceCosts.getByRecipeId(id)
+    return { data }
+  }
+
+  async upsertServiceCost(id: string, input: Record<string, unknown>) {
+    if (!this.serviceCosts) throw AppError.internal('Repositorio de servicios no disponible')
+    await this.ensureRecipeExists(id)
+    const items = (input.items as Array<Record<string, unknown>>) ?? []
+    const entity = buildServiceCostEntity(
+      id,
+      items.map((i) => ({
+        name: String(i.name),
+        type: i.type as 'fixed' | 'per_unit' | 'per_batch',
+        value: Number(i.value),
+        notes: i.notes ? String(i.notes) : undefined,
+      })),
+    )
+    const data = await this.serviceCosts.upsert(id, entity)
+    return { data }
+  }
+
+  private async ensureRecipeExists(id: string) {
+    const recipe = await this.recipes.getById(id)
+    if (!recipe) throw AppError.notFound('Receta no encontrada')
+    return recipe
   }
 
   private async enrichLines(lines: Array<Record<string, unknown>>) {

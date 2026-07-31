@@ -11,6 +11,7 @@ import {
   twoFactorCodeSchema,
   twoFactorVerifyLoginSchema,
 } from '../modules/security/schemas/security.schema.js'
+import { registerSecurityExtendedRoutes } from './security-extended.routes.js'
 import {
   setAuthCookies,
 } from '../modules/identity/utils/cookie.utils.js'
@@ -135,4 +136,33 @@ export async function registerSecurityRoutes(api: FastifyInstance, ctx: AppConte
     const { id, roleId } = request.params as { id: string; roleId: string }
     return services.securityAdmin.removeRole(id, roleId)
   })
+
+  // ─── Legacy aliases ───
+  api.get('/admin/roles', { preHandler: g(PERMISSION_REGISTRY.ADMIN_ROLES_READ) }, async () =>
+    services.securityAdmin.listRoles(),
+  )
+  api.post('/admin/roles', { preHandler: g(PERMISSION_REGISTRY.ADMIN_ROLES_MANAGE) }, async (request) => {
+    const parsed = roleCreateSchema.safeParse(request.body)
+    if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+    return services.securityAdmin.createRole(parsed.data)
+  })
+  api.get('/admin/roles/:id', { preHandler: g(PERMISSION_REGISTRY.ADMIN_ROLES_READ) }, async (request) => {
+    const { id } = request.params as { id: string }
+    return services.securityAdmin.getRole(id)
+  })
+  api.patch('/admin/roles/:id', { preHandler: g(PERMISSION_REGISTRY.ADMIN_ROLES_MANAGE) }, async (request) => {
+    const { id } = request.params as { id: string }
+    const parsed = rolePatchSchema.safeParse(request.body)
+    if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+    return services.securityAdmin.updateRole(id, parsed.data)
+  })
+  api.delete('/admin/roles/:id', { preHandler: g(PERMISSION_REGISTRY.ADMIN_ROLES_MANAGE) }, async (request) => {
+    const { id } = request.params as { id: string }
+    return services.securityAdmin.deleteRole(id)
+  })
+  api.get('/admin/permissions', { preHandler: g(PERMISSION_REGISTRY.ADMIN_PERMISSIONS_READ) }, async () =>
+    services.securityAdmin.listPermissions(),
+  )
+
+  await registerSecurityExtendedRoutes(api, ctx)
 }

@@ -49,6 +49,31 @@ export class AdminRegistryService {
     return this.registry.listServices().then(async (rows) => ({ services: rows.length ? rows : SERVICE_SEEDS }))
   }
 
+  async upsertModule(input: {
+    key: string
+    name: string
+    description?: string
+    icon?: string | null
+    route?: string | null
+    section?: string | null
+    parentKey?: string | null
+    order?: number
+    isActive?: boolean
+  }) {
+    const module = await this.registry.upsertModuleFromInput({
+      key: input.key,
+      name: input.name,
+      description: input.description ?? '',
+      icon: input.icon ?? null,
+      route: input.route ?? null,
+      section: input.section ?? null,
+      parentKey: input.parentKey ?? null,
+      order: input.order ?? 0,
+      isActive: input.isActive ?? true,
+    })
+    return { module }
+  }
+
   async syncFromSeeds() {
     const results = {
       permissionsInserted: 0,

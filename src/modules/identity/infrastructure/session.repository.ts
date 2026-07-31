@@ -221,4 +221,28 @@ export class SessionRepository extends BaseRepository<SessionDocument> {
     )
     return res.matchedCount > 0
   }
+
+  async listForAdmin(opts: {
+    userId?: string
+    limit: number
+    skip: number
+  }): Promise<{ items: SessionEntity[]; total: number }> {
+    const filter: Record<string, unknown> = {
+      ...activeFilter(),
+      expiresAt: { $gt: new Date() },
+    }
+    if (opts.userId && ObjectId.isValid(opts.userId)) {
+      filter.userId = new ObjectId(opts.userId)
+    }
+    const [docs, total] = await Promise.all([
+      this.collection
+        .find(filter as never)
+        .sort({ lastUsedAt: -1 })
+        .skip(opts.skip)
+        .limit(opts.limit)
+        .toArray(),
+      this.collection.countDocuments(filter as never),
+    ])
+    return { items: docs.map((d) => toEntity(d)), total }
+  }
 }

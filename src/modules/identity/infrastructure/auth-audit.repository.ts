@@ -69,4 +69,39 @@ export class AuthAuditRepository extends BaseRepository<AuthAuditDocument> {
       .toArray()
     return docs.map((d) => toEntity(d as never))
   }
+
+  async query(opts: {
+    userId?: string
+    event?: AuthAuditEvent
+    from?: Date
+    to?: Date
+    limit: number
+    skip: number
+    search?: string
+  }): Promise<{ items: AuthAuditEntry[]; total: number }> {
+    const filter: Record<string, unknown> = {}
+    if (opts.userId) filter.userId = opts.userId
+    if (opts.event) filter.event = opts.event
+    if (opts.from || opts.to) {
+      const createdAt: Record<string, Date> = {}
+      if (opts.from) createdAt.$gte = opts.from
+      if (opts.to) createdAt.$lte = opts.to
+      filter.createdAt = createdAt
+    }
+    if (opts.search?.trim()) {
+      const rx = new RegExp(opts.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      filter.$or = [{ email: rx }, { event: rx }, { ip: rx }]
+    }
+
+    const [docs, total] = await Promise.all([
+      this.collection
+        .find(filter as never)
+        .sort({ createdAt: -1 })
+        .skip(opts.skip)
+        .limit(opts.limit)
+        .toArray(),
+      this.count(filter as never),
+    ])
+    return { items: docs.map((d) => toEntity(d as never)), total }
+  }
 }

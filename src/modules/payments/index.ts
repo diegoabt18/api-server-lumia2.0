@@ -1,5 +1,5 @@
 /**
- * Payments module — Fase 2 (pago manual; MercadoPago pendiente).
+ * Payments module — Fase 2 (pago manual).
  *
  * @see docs/modules/payments.md
  * @see docs/roadmap.md#fase-2--checkout-y-pagos

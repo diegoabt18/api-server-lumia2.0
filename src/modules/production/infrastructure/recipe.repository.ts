@@ -119,6 +119,14 @@ export class RecipeRepository extends BaseRepository<RecipeEntity> {
     return [...new Set(docs.map((d) => d.product_slug))]
   }
 
+  async getByProductSlug(productSlug: string): Promise<RecipeDomain | null> {
+    const docs = await this.findMany({ product_slug: productSlug, is_active: true } as Filter<RecipeEntity>, {
+      limit: 1,
+      sort: { updated_at: -1 },
+    })
+    return docs.length ? toRecipeDomain(docs[0]!) : null
+  }
+
   buildLineEntities(
     lines: {
       materialId?: string

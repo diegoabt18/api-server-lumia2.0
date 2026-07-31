@@ -13,7 +13,11 @@ import {
   verifyTwoFactorTempToken,
 } from '../../identity/infrastructure/jwt-2fa.js'
 import type { AuthService } from '../../identity/services/auth.service.js'
-import type { AuthAuditRepository } from '../../identity/infrastructure/auth-audit.repository.js'
+import type { AuthAuditRepository } from '../infrastructure/auth-audit.repository.js'
+import {
+  generateBackupCodes,
+  hashBackupCode,
+} from '../utils/backup-codes.utils.js'
 
 export class TwoFactorService {
   constructor(
@@ -58,7 +62,13 @@ export class TwoFactorService {
     if (!result.valid) throw AppError.badRequest('Código 2FA inválido')
 
     await this.twoFactor.confirmSetup(userId, pendingEnc)
-    return { ok: true, enabled: true }
+    const backupCodes = generateBackupCodes()
+    await this.twoFactor.updateBackupCodes(
+      userId,
+      backupCodes.map(hashBackupCode),
+      backupCodes.length,
+    )
+    return { ok: true, enabled: true, backupCodes }
   }
 
   async disable(userId: string, code: string) {
@@ -136,5 +146,42 @@ export class TwoFactorService {
     },
   ) {
     return signTwoFactorTempToken({ userId, ...meta })
+  }
+
+  async getStatus(userId: string) {
+    const status = await this.twoFactor.getStatus(userId)
+    return status ?? { enabled: false, confirmedAt: null, remainingBackupCodes: 0 }
+  }
+
+  async listEnabledUsers(limit = 100) {
+    const userIds = await this.twoFactor.findUserIdsWith2faEnabled(limit)
+    const users = await Promise.all(
+      userIds.map(async (id) => {
+        const user = await this.users.findByIdSafe(id)
+        const status = await this.twoFactor.getStatus(id)
+        return user
+          ? {
+              userId: id,
+              email: user.email,
+              name: user.name ?? null,
+              enabled: status?.enabled ?? false,
+              remainingBackupCodes: status?.remainingBackupCodes ?? 0,
+            }
+          : null
+      }),
+    )
+    return { items: users.filter(Boolean), total: users.filter(Boolean).length }
+  }
+
+  async regenerateBackupCodes(userId: string) {
+    const secretEnc = await this.twoFactor.getSecretEnc(userId)
+    if (!secretEnc) throw AppError.badRequest('2FA no está activo')
+    const backupCodes = generateBackupCodes()
+    await this.twoFactor.updateBackupCodes(
+      userId,
+      backupCodes.map(hashBackupCode),
+      backupCodes.length,
+    )
+    return { backupCodes }
   }
 }

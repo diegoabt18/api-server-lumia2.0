@@ -240,3 +240,68 @@ export const adminFeedbackQuestionPatchSchema = z.object({
   hidden: z.boolean().optional(),
   answered: z.boolean().optional(),
 })
+
+export const adminAssignRecipeSchema = z.object({
+  recipeId: z.string().min(1),
+})
+
+export const adminVariantRecipePatchSchema = z.object({
+  recipeId: z.string().nullable(),
+})
+
+export const adminPricingCalculateSchema = z.object({
+  costTotal: z.number().min(0),
+  costPerUnit: z.number().min(0),
+  marginPercentage: z.number().min(0).max(1000),
+})
+
+export const adminPricingSimulateSchema = z.object({
+  costPerUnit: z.number().min(0),
+  margins: z.array(z.number().min(0).max(1000)).optional(),
+})
+
+export const adminPricingSuggestMarginSchema = z.object({
+  costPerUnit: z.number().min(0),
+})
+
+export const adminVariantCostCalculateSchema = z.object({
+  margin: z.number().min(0).max(1000).optional(),
+  autoApprove: z.boolean().optional(),
+})
+
+const costBreakdownCategorySchema = z.object({
+  label: z.string(),
+  amount: z.number(),
+  details: z.array(z.object({ name: z.string(), amount: z.number() })).optional(),
+})
+
+export const adminCostSnapshotSchema = z.object({
+  marginPercentage: z.number().min(0).max(1000),
+  suggestedPrice: z.number().min(0),
+  totalCost: z.number().min(0),
+  costPerUnit: z.number().min(0),
+  priceApplied: z.number().optional(),
+  currency: z.string().default('COP'),
+  recipeId: z.string(),
+  recipeVersion: z.number(),
+  breakdown: z.object({
+    materials: costBreakdownCategorySchema,
+    packaging: costBreakdownCategorySchema,
+    labor: costBreakdownCategorySchema,
+    services: costBreakdownCategorySchema,
+    indirectCosts: costBreakdownCategorySchema,
+    waste: costBreakdownCategorySchema,
+  }),
+})
+
+export const adminRegistryModuleSchema = z.object({
+  key: z.string().min(1).max(100),
+  name: z.string().min(1).max(100),
+  description: z.string().max(500).optional(),
+  icon: z.string().nullable().optional(),
+  route: z.string().nullable().optional(),
+  section: z.string().nullable().optional(),
+  parentKey: z.string().nullable().optional(),
+  order: z.number().int().min(0).optional(),
+  isActive: z.boolean().optional(),
+})

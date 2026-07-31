@@ -2,6 +2,8 @@ import { AppError } from '../../../common/errors/app.error.js'
 import {
   ALL_PERMISSION_IDS,
   expandPermissions,
+  PERMISSION_REGISTRY,
+  type PermissionId,
   type UserRole,
 } from '../../../common/permissions/registry.js'
 import { buildPaginationMeta, resolvePagingQuery } from '../../../common/utils/pagination.js'
@@ -212,5 +214,232 @@ export class SecurityAdminService {
       user.role as UserRole,
     )
     return { ok: true, effectivePermissionKeys }
+  }
+
+  async exportRoles() {
+    const items = await this.roles.list(true)
+    return {
+      exportedAt: new Date().toISOString(),
+      items: items.map((r) => this.roles.toDomain(r)),
+    }
+  }
+
+  async importRoles(
+    data: { roles: Array<{ key: string; name: string; description?: string; permissionKeys?: string[] }> },
+  ) {
+    let created = 0
+    let updated = 0
+    for (const r of data.roles ?? []) {
+      const existing = await this.roles.findByKey(r.key)
+      const permissionKeys = expandPermissions(r.permissionKeys ?? [])
+      if (existing) {
+        await this.roles.update(existing._id!, {
+          name: r.name,
+          description: r.description,
+          permissionKeys,
+        })
+        updated++
+      } else {
+        await this.roles.create({
+          key: r.key,
+          name: r.name,
+          description: r.description,
+          permissionKeys,
+        })
+        created++
+      }
+    }
+    return { created, updated }
+  }
+
+  async archiveRole(id: string) {
+    if (!(await this.roles.archive(id))) throw AppError.notFound('Rol no encontrado o es de sistema')
+    return { ok: true }
+  }
+
+  async restoreRole(id: string) {
+    if (!(await this.roles.restore(id))) throw AppError.notFound('Rol archivado no encontrado')
+    return { ok: true }
+  }
+
+  async duplicateRole(id: string, body: { key: string; name: string }) {
+    const role = await this.roles.duplicate(id, body.key, body.name)
+    if (!role) throw AppError.notFound('Rol origen no encontrado')
+    return { role: this.roles.toDomain(role) }
+  }
+
+  async getEffectiveRole(id: string) {
+    const role = await this.roles.findByIdSafe(id)
+    if (!role) throw AppError.notFound('Rol no encontrado')
+    const inherited = await this.resolveRoleEffectiveKeys(role)
+    const deny = expandPermissions(role.denyKeys ?? [])
+    const allow = new Set([...expandPermissions(role.permissionKeys), ...inherited])
+    for (const d of deny) allow.delete(d)
+    return {
+      roleId: id,
+      allow: [...allow],
+      deny,
+      inheritedFrom: role.inheritRoleIds ?? [],
+    }
+  }
+
+  private async resolveRoleEffectiveKeys(
+    role: RoleEntity,
+    visited = new Set<string>(),
+  ): Promise<PermissionId[]> {
+    if (!role._id || visited.has(role._id)) return []
+    visited.add(role._id)
+    const keys: PermissionId[] = []
+    for (const parentId of role.inheritRoleIds ?? []) {
+      const parent = await this.roles.findByIdSafe(parentId)
+      if (!parent || parent.isArchived) continue
+      keys.push(...expandPermissions(parent.permissionKeys))
+      keys.push(...(await this.resolveRoleEffectiveKeys(parent, visited)))
+    }
+    return keys
+  }
+
+  async getInheritanceGraph() {
+    const roles = await this.roles.list(true)
+    const nodes = roles.map((r) => ({ id: r._id, key: r.key, name: r.name }))
+    const edges = roles.flatMap((r) =>
+      (r.inheritRoleIds ?? []).map((parentId) => ({
+        from: parentId,
+        to: r._id,
+      })),
+    )
+    return { nodes, edges }
+  }
+
+  async validateInheritance(body: { inheritRoleIds: string[]; roleId?: string }) {
+    const visited = new Set<string>()
+    const errors: string[] = []
+    const walk = async (id: string, chain: string[]): Promise<void> => {
+      if (chain.includes(id)) {
+        errors.push(`Ciclo detectado: ${[...chain, id].join(' -> ')}`)
+        return
+      }
+      if (visited.has(id)) return
+      visited.add(id)
+      const role = await this.roles.findByIdSafe(id)
+      if (!role) {
+        errors.push(`Rol heredado no encontrado: ${id}`)
+        return
+      }
+      for (const parentId of role.inheritRoleIds ?? []) {
+        await walk(parentId, [...chain, id])
+      }
+    }
+    for (const id of body.inheritRoleIds) {
+      await walk(id, body.roleId ? [body.roleId] : [])
+    }
+    return { valid: errors.length === 0, errors }
+  }
+
+  async getPermission(key: string) {
+    const fromDb = await this.registry.findPermissionByKey(key)
+    const inRegistry = ALL_PERMISSION_IDS.includes(key as PermissionId)
+    if (!fromDb && !inRegistry) throw AppError.notFound('Permiso no encontrado')
+    return {
+      permission: {
+        key,
+        name: fromDb?.name ?? key,
+        description: fromDb?.description ?? `Permiso ${key}`,
+        moduleKey: fromDb?.moduleKey ?? null,
+        type: fromDb?.type ?? 'admin',
+        isActive: fromDb?.isActive ?? true,
+        inRegistry,
+      },
+    }
+  }
+
+  async createPermission(body: {
+    key: string
+    name: string
+    description?: string
+    moduleKey?: string
+    type?: string
+  }) {
+    if (await this.registry.findPermissionByKey(body.key)) {
+      throw AppError.conflict('El permiso ya existe')
+    }
+    const seed = {
+      key: body.key,
+      name: body.name,
+      description: body.description ?? '',
+      moduleKey: body.moduleKey ?? 'custom',
+      type: body.type ?? 'admin',
+      isActive: true,
+    }
+    await this.registry.createPermission(seed as never)
+    return { permission: seed }
+  }
+
+  async patchPermission(
+    key: string,
+    patch: { name?: string; description?: string; isActive?: boolean; moduleKey?: string },
+  ) {
+    const updated = await this.registry.updatePermission(key, patch as never)
+    if (!updated) throw AppError.notFound('Permiso no encontrado')
+    return { permission: updated }
+  }
+
+  async syncPermissions() {
+    const seeds = ALL_PERMISSION_IDS.map((key) => ({
+      key,
+      name: key,
+      description: `Permiso ${key}`,
+      moduleKey: key.split('.')[0] ?? 'core',
+      type: 'admin' as const,
+      isActive: true,
+    }))
+    return this.registry.syncPermissions(seeds as never)
+  }
+
+  async permissionsHealth() {
+    const dbPermissions = await this.registry.listPermissions()
+    const dbKeys = new Set(dbPermissions.map((p) => p.key))
+    const missingInDb = ALL_PERMISSION_IDS.filter((k) => !dbKeys.has(k))
+    const inactive = dbPermissions.filter((p) => p.isActive === false)
+    const critical = [
+      PERMISSION_REGISTRY.ADMIN_ACCESS,
+      PERMISSION_REGISTRY.ADMIN_SECURITY_MANAGE,
+      PERMISSION_REGISTRY.ADMIN_ROLES_MANAGE,
+    ].filter((k) => !dbKeys.has(k) || inactive.some((p) => p.key === k))
+    return {
+      totalRegistry: ALL_PERMISSION_IDS.length,
+      totalInDb: dbPermissions.length,
+      missingInDb: missingInDb.length,
+      inactiveCount: inactive.length,
+      criticalIssues: critical,
+      healthy: critical.length === 0 && missingInDb.length === 0,
+    }
+  }
+
+  async bulkAssignRoles(body: {
+    userIds: string[]
+    roleId: string
+    assignedBy: string
+  }) {
+    const role = await this.roles.findByIdSafe(body.roleId)
+    if (!role) throw AppError.notFound('Rol no encontrado')
+    const results = []
+    for (const userId of body.userIds) {
+      try {
+        await this.assignRole(userId, body.roleId, body.assignedBy)
+        results.push({ userId, ok: true })
+      } catch (err) {
+        results.push({
+          userId,
+          ok: false,
+          error: err instanceof Error ? err.message : 'Error',
+        })
+      }
+    }
+    return {
+      total: body.userIds.length,
+      succeeded: results.filter((r) => r.ok).length,
+      results,
+    }
   }
 }

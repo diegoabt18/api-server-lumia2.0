@@ -17,7 +17,7 @@ export class ProductionConfigRepository {
   }
 
   async ensureIndexes(): Promise<void> {
-    await this.collection.createIndexes([{ key: { _id: 1 }, unique: true }])
+    // Singleton por _id fijo — MongoDB ya indexa _id automáticamente
   }
 
   async get(): Promise<ProductionConfigDomain> {
