@@ -173,6 +173,10 @@ export class TwoFactorService {
     return { items: users.filter(Boolean), total: users.filter(Boolean).length }
   }
 
+  async listEnabledUserIds(limit = 100): Promise<string[]> {
+    return this.twoFactor.findUserIdsWith2faEnabled(limit)
+  }
+
   async regenerateBackupCodes(userId: string) {
     const secretEnc = await this.twoFactor.getSecretEnc(userId)
     if (!secretEnc) throw AppError.badRequest('2FA no está activo')
@@ -183,5 +187,47 @@ export class TwoFactorService {
       backupCodes.length,
     )
     return { backupCodes }
+  }
+
+  /** Formato compatible con el panel admin de lumia (setup → verify-setup). */
+  async setupForLumiaAdmin(userId: string) {
+    const result = await this.setup(userId)
+    const secretEncrypted = await this.twoFactor.getPendingSecretEnc(userId)
+    if (!secretEncrypted) throw AppError.internal('No se pudo iniciar configuración 2FA')
+    const backupCodes = generateBackupCodes()
+    return {
+      secret: result.secret,
+      secretEncrypted,
+      uri: result.otpauthUrl,
+      qrDataUrl: result.qrCodeDataUrl,
+      backupCodes,
+    }
+  }
+
+  async verifySetupForLumiaAdmin(
+    userId: string,
+    params: { code: string; secretEncrypted: string; backupCodes: string[] },
+  ) {
+    const pendingEnc = await this.twoFactor.getPendingSecretEnc(userId)
+    const secretEnc = pendingEnc ?? params.secretEncrypted
+    if (!secretEnc) throw AppError.badRequest('No hay configuración 2FA pendiente')
+
+    const secret = decryptTwoFactorSecret(secretEnc)
+    const result = await verify({ secret, token: params.code })
+    if (!result.valid) throw AppError.badRequest('Código inválido. Intenta de nuevo.')
+
+    await this.twoFactor.confirmSetup(userId, secretEnc)
+    await this.twoFactor.updateBackupCodes(
+      userId,
+      params.backupCodes.map(hashBackupCode),
+      params.backupCodes.length,
+    )
+    return { success: true }
+  }
+
+  /** Desactiva 2FA sin código (panel admin lumia). */
+  async disableForLumiaAdmin(userId: string) {
+    await this.twoFactor.disable(userId)
+    return { success: true }
   }
 }

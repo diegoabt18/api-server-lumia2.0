@@ -63,12 +63,39 @@ export async function registerSecurityExtendedRoutes(api: FastifyInstance, ctx: 
   // ─── 2FA admin ───
   api.get('/admin/auth/2fa/status', { preHandler: read }, async (request) => {
     const userId = authUser(request as AuthenticatedRequest)
-    return services.twoFactor.getStatus(userId)
+    const status = await services.twoFactor.getStatus(userId)
+    return { data: status ?? { enabled: false, confirmedAt: null, remainingBackupCodes: 0 } }
   })
 
   api.get('/admin/auth/2fa/enabled-users', { preHandler: read }, async (request) => {
     const limit = Number((request.query as { limit?: string }).limit) || 100
-    return services.twoFactor.listEnabledUsers(limit)
+    const userIds = await services.twoFactor.listEnabledUserIds(limit)
+    return { userIds }
+  })
+
+  api.post('/admin/auth/2fa/setup', { preHandler: manage }, async (request) => {
+    const userId = authUser(request as AuthenticatedRequest)
+    return services.twoFactor.setupForLumiaAdmin(userId)
+  })
+
+  api.post('/admin/auth/2fa/verify-setup', { preHandler: manage }, async (request) => {
+    const userId = authUser(request as AuthenticatedRequest)
+    const body = request.body as { code?: string; secret?: string; backupCodes?: string[] }
+    if (!body.code || !body.secret || !Array.isArray(body.backupCodes)) {
+      throw AppError.badRequest('code, secret y backupCodes son requeridos')
+    }
+    return services.twoFactor.verifySetupForLumiaAdmin(userId, {
+      code: body.code,
+      secretEncrypted: body.secret,
+      backupCodes: body.backupCodes,
+    })
+  })
+
+  api.post('/admin/auth/2fa/disable', { preHandler: manage }, async (request) => {
+    const body = (request.body ?? {}) as { userId?: string }
+    const req = request as AuthenticatedRequest
+    const userId = typeof body.userId === 'string' ? body.userId : req.auth.userId
+    return services.twoFactor.disableForLumiaAdmin(userId)
   })
 
   api.post('/admin/auth/2fa/regenerate-backup-codes', { preHandler: manage }, async (request) => {
@@ -140,7 +167,7 @@ export async function registerSecurityExtendedRoutes(api: FastifyInstance, ctx: 
 
   // ─── Sessions ───
   api.get('/admin/security-sessions', { preHandler: sessionsRead }, async (request) =>
-    enterprise.listSecuritySessions(request.query as Record<string, unknown>),
+    enterprise.listSecuritySessionsDashboard(request.query as Record<string, unknown>),
   )
   api.get('/admin/security/sessions', { preHandler: sessionsRead }, async (request) =>
     enterprise.listSecuritySessions(request.query as Record<string, unknown>),

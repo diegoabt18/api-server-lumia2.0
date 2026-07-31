@@ -23,9 +23,33 @@ export class SecurityAdminService {
     private readonly authorization: AuthorizationService,
   ) {}
 
-  async listRoles() {
-    const items = await this.roles.list()
-    return { items: items.map((r) => this.roles.toDomain(r)) }
+  async listRoles(query: Record<string, unknown> = {}) {
+    const { page, limit, skip, search } = resolvePagingQuery(query, { defaultLimit: 20, maxLimit: 100 })
+    const list = await this.roles.list()
+    const withCounts = await Promise.all(
+      list.map(async (r) => {
+        const domain = this.roles.toDomain(r)
+        return {
+          ...domain,
+          assignedUserCount: await this.userRoles.countAssignmentsForRole(domain.id),
+        }
+      }),
+    )
+
+    const s = search?.trim().toLowerCase()
+    const filtered = s
+      ? withCounts.filter(
+          (r) =>
+            r.name.toLowerCase().includes(s) ||
+            r.key.toLowerCase().includes(s) ||
+            r.id.toLowerCase().includes(s),
+        )
+      : withCounts
+
+    const total = filtered.length
+    const slice = filtered.slice(skip, skip + limit)
+    const pagination = buildPaginationMeta(total, page, limit)
+    return { roles: slice, items: slice, pagination }
   }
 
   async getRole(id: string) {
@@ -84,16 +108,19 @@ export class SecurityAdminService {
     return { ok: true }
   }
 
-  async listPermissions() {
+  async listPermissions(query: Record<string, unknown> = {}) {
+    const { page, limit, skip, search } = resolvePagingQuery(query, { defaultLimit: 30, maxLimit: 200 })
     const dbPermissions = await this.registry.listPermissions()
     const byKey = new Map(dbPermissions.map((p) => [p.key, p]))
 
-    const items = ALL_PERMISSION_IDS.map((key) => {
+    const all = ALL_PERMISSION_IDS.map((key) => {
       const fromDb = byKey.get(key)
+      const prefix = key.split('.')[0] ?? key
       return {
+        id: key,
         key,
-        name: fromDb?.name ?? key,
-        description: fromDb?.description ?? `Permiso ${key}`,
+        description: fromDb?.description ?? fromDb?.name ?? `Permiso ${key}`,
+        group: fromDb?.moduleKey ?? prefix,
         moduleKey: fromDb?.moduleKey ?? null,
         type: fromDb?.type ?? 'admin',
         isActive: fromDb?.isActive ?? true,
@@ -101,7 +128,20 @@ export class SecurityAdminService {
       }
     })
 
-    return { items, total: items.length }
+    const s = search?.trim().toLowerCase()
+    const filtered = s
+      ? all.filter(
+          (p) =>
+            p.id.toLowerCase().includes(s) ||
+            p.group.toLowerCase().includes(s) ||
+            p.description.toLowerCase().includes(s),
+        )
+      : all
+
+    const total = filtered.length
+    const slice = filtered.slice(skip, skip + limit)
+    const pagination = buildPaginationMeta(total, page, limit)
+    return { permissions: slice, items: slice, pagination, total }
   }
 
   async listUsers(query: Record<string, unknown>) {

@@ -104,4 +104,19 @@ export class AuthAuditRepository extends BaseRepository<AuthAuditDocument> {
     ])
     return { items: docs.map((d) => toEntity(d as never)), total }
   }
+
+  async countSince(since: Date): Promise<{ failedLogins: number; reuseDetected: number }> {
+    const [failedLogins, reuseDetected] = await Promise.all([
+      this.collection.countDocuments({
+        createdAt: { $gte: since },
+        event: 'LOGIN_FAILED',
+      } as never),
+      this.collection.countDocuments({
+        createdAt: { $gte: since },
+        event: 'LOGIN_SUCCESS',
+        'metadata.reuseDetected': true,
+      } as never),
+    ])
+    return { failedLogins, reuseDetected }
+  }
 }

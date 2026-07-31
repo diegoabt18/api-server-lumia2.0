@@ -508,6 +508,90 @@ export class SecurityEnterpriseService {
   }
 
   // ─── Sessions ───
+  async listSecuritySessionsDashboard(query: Record<string, unknown>) {
+    const WINDOW_MS = 24 * 60 * 60 * 1000
+    const SESSIONS_SCAN_CAP = 500
+    const { page, limit, skip, search } = resolvePagingQuery(query, { defaultLimit: 20, maxLimit: 80 })
+
+    const since = new Date(Date.now() - WINDOW_MS)
+    const s = search?.trim().toLowerCase()
+
+    const [auditStats, totalSessions] = await Promise.all([
+      this.authAudit.countSince(since),
+      this.sessions.countActiveGlobally(),
+    ])
+
+    type SessionRow = {
+      sessionId: string
+      userId: string
+      deviceName: string
+      ip: string | null
+      lastUsedAt: string
+      suspicious: boolean
+      riskScore: number
+      reuseDetected: boolean
+      tokenFamilyId: string
+    }
+
+    let items: SessionRow[]
+    let total: number
+
+    const mapSession = (sess: {
+      _id?: string
+      userId: string
+      deviceName?: string
+      userAgent?: string
+      ipAddress?: string
+      lastUsedAt: Date
+      suspicious?: boolean
+      riskScore?: number
+      reuseDetected?: boolean
+      tokenFamilyId?: string
+    }): SessionRow => ({
+      sessionId: sess._id!,
+      userId: sess.userId,
+      deviceName: sess.deviceName ?? sess.userAgent ?? 'Unknown',
+      ip: sess.ipAddress ?? null,
+      lastUsedAt: sess.lastUsedAt.toISOString(),
+      suspicious: !!sess.suspicious,
+      riskScore: sess.riskScore ?? 0,
+      reuseDetected: !!sess.reuseDetected,
+      tokenFamilyId: sess.tokenFamilyId ?? sess._id!,
+    })
+
+    if (!s) {
+      const activeSessions = await this.sessions.listActiveGlobally(limit, skip)
+      total = totalSessions
+      items = activeSessions.map(mapSession)
+    } else {
+      const activeSessions = await this.sessions.listActiveGlobally(SESSIONS_SCAN_CAP, 0)
+      const mapped = activeSessions.map(mapSession)
+      const filtered = mapped.filter(
+        (row) =>
+          row.sessionId.toLowerCase().includes(s) ||
+          row.userId.toLowerCase().includes(s) ||
+          (row.ip ?? '').toLowerCase().includes(s) ||
+          row.deviceName.toLowerCase().includes(s),
+      )
+      total = filtered.length
+      items = filtered.slice(skip, skip + limit)
+    }
+
+    const pagination = buildPaginationMeta(total, page, limit)
+
+    return {
+      windowHours: 24,
+      stats: {
+        activeSessionsListed: totalSessions,
+        failedLogins24h: auditStats.failedLogins,
+        reuseAttempts24h: auditStats.reuseDetected,
+      },
+      sessions: items,
+      items,
+      pagination,
+    }
+  }
+
   async listSecuritySessions(query: Record<string, unknown>) {
     const { page, limit, skip } = resolvePagingQuery(query, { defaultLimit: 50, maxLimit: 200 })
     const { items, total } = await this.sessions.listForAdmin({

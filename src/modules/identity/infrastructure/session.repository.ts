@@ -213,6 +213,24 @@ export class SessionRepository extends BaseRepository<SessionDocument> {
     } as never)
   }
 
+  async countActiveGlobally(): Promise<number> {
+    return this.countActive()
+  }
+
+  async listActiveGlobally(limit: number, skip: number): Promise<SessionEntity[]> {
+    const filter = {
+      ...activeFilter(),
+      expiresAt: { $gt: new Date() },
+    }
+    const docs = await this.collection
+      .find(filter as never)
+      .sort({ lastUsedAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray()
+    return docs.map((d) => toEntity(d))
+  }
+
   async revokeSessionAsAdmin(sessionId: string): Promise<boolean> {
     if (!ObjectId.isValid(sessionId)) return false
     const res = await this.collection.updateOne(

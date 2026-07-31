@@ -1,6 +1,12 @@
 # =============================================================================
-# Docker Compose — Desarrollo
-# Uso: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# Docker Compose — Desarrollo local (lumia admin → API en Docker)
+# =============================================================================
+#
+# Uso:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# Usa .env.development. Cookies/CORS para lumia en http://localhost:3002
+# (sobrescritos abajo). Mongo local opcional: MONGO_* → mongo:27017 en .env.development
 # =============================================================================
 services:
   mongo:
@@ -15,21 +21,32 @@ services:
     build:
       context: .
       target: builder
+    restart: unless-stopped
     command: sh -c "npm install && npm run dev"
     env_file:
       - .env.development
     environment:
-      MONGO_AUTH_URI: mongodb://${MONGO_ROOT_USER:-lumia}:${MONGO_ROOT_PASSWORD:-lumia_secret}@mongo:27017/?authSource=admin
-      MONGO_CATALOG_URI: mongodb://${MONGO_ROOT_USER:-lumia}:${MONGO_ROOT_PASSWORD:-lumia_secret}@mongo:27017/?authSource=admin
-      MONGO_SALES_URI: mongodb://${MONGO_ROOT_USER:-lumia}:${MONGO_ROOT_PASSWORD:-lumia_secret}@mongo:27017/?authSource=admin
-      MONGO_PRODUCTION_URI: mongodb://${MONGO_ROOT_USER:-lumia}:${MONGO_ROOT_PASSWORD:-lumia_secret}@mongo:27017/?authSource=admin
+      NODE_ENV: development
+      APP_URL: http://localhost:3001
+      HOST: 0.0.0.0
+      PORT: 3001
+      FRONTEND_URL: ${LUMIA_ADMIN_URL:-http://localhost:3002}
+      CORS_ORIGINS: ${LUMIA_ADMIN_URL:-http://localhost:3002},http://localhost:3000,http://127.0.0.1:3002
+      COOKIE_DOMAIN: ''
+      COOKIE_SECURE: 'false'
       REDIS_URL: redis://redis:6379
+      REDIS_ENABLED: 'true'
     volumes:
       - ./src:/app/src
       - ./scripts:/app/scripts
       - ./package.json:/app/package.json
+      - ./package-lock.json:/app/package-lock.json
+      - ./tsconfig.json:/app/tsconfig.json
+      - ./tsconfig.build.json:/app/tsconfig.build.json
     ports:
-      - '3001:3001'
+      - '${PORT:-3001}:3001'
+    healthcheck:
+      disable: true
 
   mongo-express:
     image: mongo-express:latest

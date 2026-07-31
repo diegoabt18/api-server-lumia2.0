@@ -45,6 +45,7 @@ import { AdminAnalyticsService } from './modules/admin/services/admin-analytics.
 import { AdminFeedbackService } from './modules/admin/services/admin-feedback.service.js'
 import { AdminUsersService } from './modules/admin/services/admin-users.service.js'
 import { AdminAuditService } from './modules/admin/services/admin-audit.service.js'
+import { AdminMetaService } from './modules/admin/services/admin-meta.service.js'
 import { AdminPricingService } from './modules/admin/services/admin-pricing.service.js'
 import { AdminCostSummaryService } from './modules/admin/services/admin-cost-summary.service.js'
 import { CatalogOptionRepository } from './modules/catalog/infrastructure/catalog-option.repository.js'
@@ -181,6 +182,7 @@ export interface AppContext {
     adminFeedback: AdminFeedbackService
     adminUsers: AdminUsersService
     adminAudit: AdminAuditService
+    adminMeta: AdminMetaService
     adminPricing: AdminPricingService
     adminCostSummary: AdminCostSummaryService
     productionMaterials: MaterialService
@@ -345,6 +347,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   const adminFeedback = new AdminFeedbackService(reviews, feedbackReports)
   const adminUsers = new AdminUsersService(users, orders, roles, userRoles)
   const adminAudit = new AdminAuditService(authAudit)
+  const adminMeta = new AdminMetaService(env)
   const adminPricing = new AdminPricingService(productionConfigRepo)
 
   const productionUnitConversion = new UnitConversionService(productionUnitsRepo, productionEquivalencesRepo)
@@ -494,6 +497,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       adminFeedback,
       adminUsers,
       adminAudit,
+      adminMeta,
       adminPricing,
       adminCostSummary,
       productionMaterials,

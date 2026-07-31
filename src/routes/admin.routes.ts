@@ -40,6 +40,10 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
     adminGuard(repos.sessions, permission, services.authorization)
 
   // ─── Dashboard (4.1) ───
+  api.get('/admin/meta', { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) }, async () =>
+    services.adminMeta.getMeta(),
+  )
+
   api.get('/admin/dashboard/stats', { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) }, async () =>
     services.adminDashboard.getStats(),
   )

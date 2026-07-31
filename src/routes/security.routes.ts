@@ -138,8 +138,8 @@ export async function registerSecurityRoutes(api: FastifyInstance, ctx: AppConte
   })
 
   // ─── Legacy aliases ───
-  api.get('/admin/roles', { preHandler: g(PERMISSION_REGISTRY.ADMIN_ROLES_READ) }, async () =>
-    services.securityAdmin.listRoles(),
+  api.get('/admin/roles', { preHandler: g(PERMISSION_REGISTRY.ADMIN_ROLES_READ) }, async (request) =>
+    services.securityAdmin.listRoles(request.query as Record<string, unknown>),
   )
   api.post('/admin/roles', { preHandler: g(PERMISSION_REGISTRY.ADMIN_ROLES_MANAGE) }, async (request) => {
     const parsed = roleCreateSchema.safeParse(request.body)
@@ -160,8 +160,8 @@ export async function registerSecurityRoutes(api: FastifyInstance, ctx: AppConte
     const { id } = request.params as { id: string }
     return services.securityAdmin.deleteRole(id)
   })
-  api.get('/admin/permissions', { preHandler: g(PERMISSION_REGISTRY.ADMIN_PERMISSIONS_READ) }, async () =>
-    services.securityAdmin.listPermissions(),
+  api.get('/admin/permissions', { preHandler: g(PERMISSION_REGISTRY.ADMIN_PERMISSIONS_READ) }, async (request) =>
+    services.securityAdmin.listPermissions(request.query as Record<string, unknown>),
   )
 
   await registerSecurityExtendedRoutes(api, ctx)

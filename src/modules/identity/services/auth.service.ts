@@ -30,7 +30,7 @@ import type { TwoFactorService } from './two-factor.service.js'
 import type { AuthorizationService } from '../../security/services/authorization.service.js'
 
 export type LoginResult =
-  | { requires2fa: true; tempToken: string }
+  | { requires2fa: true; tempToken: string; userId: string }
   | {
       accessToken: string
       refreshToken: string
@@ -97,7 +97,7 @@ export class AuthService {
         country: params.country,
         acceptLanguage: params.acceptLanguage,
       })
-      return { requires2fa: true as const, tempToken }
+      return { requires2fa: true as const, tempToken, userId: user._id! }
     }
 
     const tokens = await this.issueTokensForUser(user, {

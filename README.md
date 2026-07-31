@@ -104,7 +104,10 @@ copy .env.example .env.development
 # Editar APP_URL, FRONTEND_URL, JWT_SECRET, URIs Mongo, etc.
 ```
 
-Ver plantilla completa en [`.env.example`](.env.example). Los archivos `.env.development` y `.env.production` **no se commitean** (están en `.gitignore`).
+Ver plantilla en [`.env.example`](.env.example). Solo existen **3 archivos**:
+- `.env.example` — plantilla (en git)
+- `.env.development` — desarrollo (gitignored)
+- `.env.production` — producción (gitignored)
 
 ### 3. Levantar infraestructura
 
@@ -178,7 +181,7 @@ Documentación interactiva: `/docs`
 | CORS | `CORS_ORIGINS` |
 | Auth | `AUTH_LOCAL_ENABLED`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` |
 
-Plantilla versionada: `.env.example` (copiar a `.env.development` / `.env.production` en local).
+Plantilla: `.env.example`. Copiar a `.env.development` o `.env.production` según entorno.
 
 ---
 

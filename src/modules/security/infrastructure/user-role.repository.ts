@@ -62,4 +62,8 @@ export class UserRoleRepository extends BaseRepository<UserRoleDocument> {
     const result = await this.collection.deleteMany({ userId } as never)
     return result.deletedCount
   }
+
+  async countAssignmentsForRole(roleId: string): Promise<number> {
+    return this.collection.countDocuments({ roleId } as never)
+  }
 }

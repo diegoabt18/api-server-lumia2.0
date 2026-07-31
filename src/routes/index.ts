@@ -142,7 +142,7 @@ export async function registerApiRoutes(app: FastifyInstance) {
       })
 
       if ('requires2fa' in result && result.requires2fa) {
-        return { requires2fa: true, tempToken: result.tempToken }
+        return { requires2fa: true, tempToken: result.tempToken, userId: result.userId }
       }
 
       if (!('accessToken' in result)) {
@@ -209,7 +209,16 @@ export async function registerApiRoutes(app: FastifyInstance) {
     }, async (request) => {
       const auth = (request as import('../modules/identity/middleware/auth.middleware.js').AuthenticatedRequest).auth
       const user = await services.auth.getMe(auth.userId)
-      return { user }
+      const env = app.ctx.env
+      const accessToken = request.cookies[env.COOKIE_ACCESS_NAME]
+      const jwt = new (await import('../modules/identity/infrastructure/jwt.service.js')).JwtTokenService()
+      const accessExpiresAt = accessToken ? jwt.getAccessExpiresAtMs(accessToken) ?? 0 : 0
+      return {
+        user,
+        permHash: auth.permHash,
+        permissionsVersion: auth.permissionsVersion,
+        accessExpiresAt,
+      }
     })
 
     await registerStoreRoutes(api, app.ctx)
