@@ -1,0 +1,74 @@
+# =============================================================================
+# Docker Compose — base compartido
+# =============================================================================
+x-api-common: &api-common
+  build:
+    context: .
+    target: production
+  restart: unless-stopped
+  networks:
+    - lumia-network
+  depends_on:
+    mongo:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  volumes:
+    - api-uploads:/app/uploads
+    - api-logs:/app/logs
+  healthcheck:
+    test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3001/health/ready']
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 30s
+
+services:
+  api:
+    <<: *api-common
+    ports:
+      - '${PORT:-3001}:3001'
+    env_file:
+      - .env.production
+
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    networks:
+      - lumia-network
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-lumia}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-lumia_secret}
+    volumes:
+      - mongo-data:/data/db
+      - ./docker/mongo/init-databases.js:/docker-entrypoint-initdb.d/init-databases.js:ro
+    healthcheck:
+      test: ['CMD', 'mongosh', '--eval', "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks:
+      - lumia-network
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  lumia-network:
+    driver: bridge
+
+volumes:
+  mongo-data:
+  redis-data:
+  api-uploads:
+  api-logs:

@@ -1,0 +1,49 @@
+# =============================================================================
+# Docker Compose — Desarrollo
+# Uso: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# =============================================================================
+services:
+  mongo:
+    ports:
+      - '27017:27017'
+
+  redis:
+    ports:
+      - '6379:6379'
+
+  api:
+    build:
+      context: .
+      target: builder
+    command: sh -c "npm install && npm run dev"
+    env_file:
+      - .env.development
+    environment:
+      MONGO_AUTH_URI: mongodb://${MONGO_ROOT_USER:-lumia}:${MONGO_ROOT_PASSWORD:-lumia_secret}@mongo:27017/?authSource=admin
+      MONGO_CATALOG_URI: mongodb://${MONGO_ROOT_USER:-lumia}:${MONGO_ROOT_PASSWORD:-lumia_secret}@mongo:27017/?authSource=admin
+      MONGO_SALES_URI: mongodb://${MONGO_ROOT_USER:-lumia}:${MONGO_ROOT_PASSWORD:-lumia_secret}@mongo:27017/?authSource=admin
+      MONGO_PRODUCTION_URI: mongodb://${MONGO_ROOT_USER:-lumia}:${MONGO_ROOT_PASSWORD:-lumia_secret}@mongo:27017/?authSource=admin
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - ./src:/app/src
+      - ./scripts:/app/scripts
+      - ./package.json:/app/package.json
+    ports:
+      - '3001:3001'
+
+  mongo-express:
+    image: mongo-express:latest
+    restart: unless-stopped
+    networks:
+      - lumia-network
+    ports:
+      - '8081:8081'
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USER:-lumia}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD:-lumia_secret}
+      ME_CONFIG_MONGODB_URL: mongodb://${MONGO_ROOT_USER:-lumia}:${MONGO_ROOT_PASSWORD:-lumia_secret}@mongo:27017/
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: admin
+    depends_on:
+      mongo:
+        condition: service_healthy

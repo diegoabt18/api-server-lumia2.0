@@ -1,0 +1,140 @@
+import QRCode from 'qrcode'
+import { generateSecret, generateURI, verify } from 'otplib'
+import { AppError } from '../../../common/errors/app.error.js'
+import { getEnv } from '../../../config/env.js'
+import type { UserRepository } from '../../identity/infrastructure/user.repository.js'
+import type { TwoFactorRepository } from '../infrastructure/two-factor.repository.js'
+import {
+  decryptTwoFactorSecret,
+  encryptTwoFactorSecret,
+} from '../../identity/utils/two-factor-crypto.utils.js'
+import {
+  signTwoFactorTempToken,
+  verifyTwoFactorTempToken,
+} from '../../identity/infrastructure/jwt-2fa.js'
+import type { AuthService } from '../../identity/services/auth.service.js'
+import type { AuthAuditRepository } from '../../identity/infrastructure/auth-audit.repository.js'
+
+export class TwoFactorService {
+  constructor(
+    private readonly users: UserRepository,
+    private readonly twoFactor: TwoFactorRepository,
+    private readonly authAudit: AuthAuditRepository,
+    private readonly getAuthService: () => AuthService,
+  ) {}
+
+  async setup(userId: string) {
+    const user = await this.users.findByIdSafe(userId)
+    if (!user) throw AppError.notFound('User not found')
+    if (user.role !== 'admin') {
+      throw AppError.forbidden('2FA setup is only available for admin accounts')
+    }
+
+    const secret = generateSecret()
+    const secretEnc = encryptTwoFactorSecret(secret)
+    await this.twoFactor.setPendingSecret(userId, secretEnc)
+
+    const env = getEnv()
+    const otpauthUrl = generateURI({
+      issuer: env.APP_NAME,
+      label: user.email,
+      secret,
+    })
+    const qrCodeDataUrl = await QRCode.toDataURL(otpauthUrl)
+
+    return {
+      otpauthUrl,
+      qrCodeDataUrl,
+      secret,
+    }
+  }
+
+  async confirmSetup(userId: string, code: string) {
+    const pendingEnc = await this.twoFactor.getPendingSecretEnc(userId)
+    if (!pendingEnc) throw AppError.badRequest('No hay configuración 2FA pendiente')
+
+    const secret = decryptTwoFactorSecret(pendingEnc)
+    const result = await verify({ secret, token: code })
+    if (!result.valid) throw AppError.badRequest('Código 2FA inválido')
+
+    await this.twoFactor.confirmSetup(userId, pendingEnc)
+    return { ok: true, enabled: true }
+  }
+
+  async disable(userId: string, code: string) {
+    const secretEnc = await this.twoFactor.getSecretEnc(userId)
+    if (!secretEnc) throw AppError.badRequest('2FA no está activo')
+
+    const secret = decryptTwoFactorSecret(secretEnc)
+    const result = await verify({ secret, token: code })
+    if (!result.valid) throw AppError.badRequest('Código 2FA inválido')
+
+    await this.twoFactor.disable(userId)
+    return { ok: true, enabled: false }
+  }
+
+  async verifyLogin(params: {
+    tempToken: string
+    code: string
+    ip?: string
+    userAgent?: string
+  }) {
+    const payload = verifyTwoFactorTempToken(params.tempToken)
+    if (!payload) throw AppError.unauthorized('Token 2FA inválido o expirado')
+
+    const secretEnc = await this.twoFactor.getSecretEnc(payload.userId)
+    if (!secretEnc) throw AppError.badRequest('2FA no configurado')
+
+    const user = await this.users.findByIdSafe(payload.userId)
+    if (!user) throw AppError.unauthorized('Usuario no encontrado')
+
+    const secret = decryptTwoFactorSecret(secretEnc)
+    const result = await verify({ secret, token: params.code })
+    if (!result.valid) {
+      await this.authAudit.log({
+        event: 'LOGIN_2FA_FAILED',
+        userId: user._id,
+        email: user.email,
+        ip: params.ip ?? payload.ip ?? null,
+        userAgent: params.userAgent ?? payload.userAgent ?? null,
+      })
+      throw AppError.unauthorized('Código 2FA inválido')
+    }
+
+    const tokens = await this.getAuthService().issueTokensForUser(user, {
+      rememberMe: payload.rememberMe,
+      userAgent: payload.userAgent ?? params.userAgent,
+      ip: payload.ip ?? params.ip,
+      country: payload.country,
+      acceptLanguage: payload.acceptLanguage,
+    })
+
+    await this.authAudit.log({
+      event: 'LOGIN_SUCCESS',
+      userId: user._id,
+      email: user.email,
+      ip: params.ip ?? payload.ip ?? null,
+      userAgent: params.userAgent ?? payload.userAgent ?? null,
+      metadata: { via2fa: true },
+    })
+
+    return tokens
+  }
+
+  isTwoFactorEnabled(user: { twoFactor?: { enabled?: boolean } }): boolean {
+    return !!user.twoFactor?.enabled
+  }
+
+  createLoginTempToken(
+    userId: string,
+    meta: {
+      rememberMe?: boolean
+      userAgent?: string
+      ip?: string
+      country?: string | null
+      acceptLanguage?: string
+    },
+  ) {
+    return signTwoFactorTempToken({ userId, ...meta })
+  }
+}

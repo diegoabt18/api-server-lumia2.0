@@ -1,0 +1,1 @@
+export const MAX_OPTION_AXES_PER_PRODUCT = 3

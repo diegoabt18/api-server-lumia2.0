@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build
+dist/
+
+# Environment
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+
+# Logs
+logs/
+*.log
+
+# Uploads & backups
+uploads/*
+!uploads/.gitkeep
+backups/*
+!backups/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test
+coverage/
+
+# Docker volumes (local)
+docker/data/
+
+# Binarios locales
+tools/cloudflared.exe
