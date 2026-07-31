@@ -10,6 +10,31 @@ import {
   type InventoryItemEntity,
 } from '../domain/catalog.entity.js'
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** Cada palabra debe aparecer en nombre, slug, descripción o marca (sin distinguir mayúsculas). */
+function buildProductSearchClause(search: string): Record<string, unknown> | null {
+  const tokens = search
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(escapeRegex)
+  if (!tokens.length) return null
+
+  const tokenClauses = tokens.map((token) => ({
+    $or: [
+      { name: { $regex: token, $options: 'i' } },
+      { slug: { $regex: token, $options: 'i' } },
+      { description: { $regex: token, $options: 'i' } },
+      { brand: { $regex: token, $options: 'i' } },
+    ],
+  }))
+
+  return tokenClauses.length === 1 ? tokenClauses[0]! : { $and: tokenClauses }
+}
+
 export class ProductRepository extends BaseRepository<ProductEntity> {
   private readonly variants = getCollection<VariantEntity>(this.collection.db, 'variants')
   private readonly inventory = getCollection<InventoryItemEntity>(this.collection.db, 'inventory_items')
@@ -28,24 +53,18 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
   }
 
   private buildActiveFilter(search?: string, categorySlug?: string): Record<string, unknown> {
-    const filter: Record<string, unknown> = {
-      $or: [{ status: 'active' }, { status: { $exists: false } }],
-    }
+    const clauses: Record<string, unknown>[] = [
+      { $or: [{ status: 'active' }, { status: { $exists: false } }] },
+    ]
+
     if (categorySlug) {
-      filter.category_slug = categorySlug
+      clauses.push({ category_slug: categorySlug })
     }
-    if (search) {
-      filter.$and = [
-        {
-          $or: [
-            { name: { $regex: search, $options: 'i' } },
-            { slug: { $regex: search, $options: 'i' } },
-            { description: { $regex: search, $options: 'i' } },
-          ],
-        },
-      ]
-    }
-    return filter
+
+    const searchClause = search?.trim() ? buildProductSearchClause(search) : null
+    if (searchClause) clauses.push(searchClause)
+
+    return clauses.length === 1 ? clauses[0]! : { $and: clauses }
   }
 
   async findActivePaged(
