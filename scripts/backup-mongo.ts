@@ -13,9 +13,17 @@ const outDir = `./backups/${timestamp}`
 
 mkdirSync(outDir, { recursive: true })
 
-for (const [, dbName] of Object.entries(MONGO_DB_NAMES)) {
+const uriByKey = {
+  identity: env.MONGO_AUTH_URI,
+  catalog: env.MONGO_CATALOG_URI,
+  sales: env.MONGO_SALES_URI,
+  production: env.MONGO_PRODUCTION_URI,
+} as const
+
+for (const [key, dbName] of Object.entries(MONGO_DB_NAMES)) {
+  const uri = uriByKey[key as keyof typeof uriByKey]
   console.log(`Backing up ${dbName}...`)
-  execSync(`mongodump --uri="${env.MONGO_AUTH_URI}" --db=${dbName} --out="${outDir}"`, {
+  execSync(`mongodump --uri="${uri}" --db=${dbName} --out="${outDir}"`, {
     stdio: 'inherit',
   })
 }

@@ -19,6 +19,11 @@
     "test:coverage": "vitest run --coverage",
     "seed": "tsx scripts/seed.ts",
     "backup:mongo": "tsx scripts/backup-mongo.ts",
+    "db:sync-from-prod": "tsx scripts/sync-db-from-prod.ts",
+    "docker:dev:local": "docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile local up -d --build",
+    "docker:dev:atlas": "docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile atlas up -d --build",
+    "docker:dev:prod": "docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile prod up -d --build",
+    "docker:dev:down": "docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile local --profile atlas --profile prod down",
     "expire:orders": "tsx scripts/expire-orders.ts",
     "typecheck": "tsc --noEmit"
   },

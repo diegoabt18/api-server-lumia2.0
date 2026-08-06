@@ -1,54 +1,99 @@
 # =============================================================================
-# Docker Compose — Desarrollo local (lumia admin → API en Docker)
+# Docker Compose — Desarrollo local (perfiles de base de datos)
 # =============================================================================
 #
-# Uso:
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# Perfiles (elige uno):
+#   local  — Mongo + Redis + API + mongo-express (desarrollo seguro, datos vía sync)
+#   atlas  — Redis + API → URIs Atlas de .env.development
+#   prod   — Redis + API → URIs Atlas de .env.production (admin local → datos reales)
 #
-# Usa .env.development. Cookies/CORS para lumia en http://localhost:3002
-# (sobrescritos abajo). Mongo local opcional: MONGO_* → mongo:27017 en .env.development
+# Comandos npm:
+#   npm run docker:dev:local
+#   npm run docker:dev:atlas
+#   npm run docker:dev:prod
+#
+# Copiar prod → local: npm run db:sync-from-prod  (con profile local levantado)
 # =============================================================================
+
+x-api-dev: &api-dev
+  build:
+    context: .
+    target: builder
+  restart: unless-stopped
+  command: sh -c "npm install --include=dev && npm run dev"
+  networks:
+    - lumia-network
+  depends_on:
+    mongo:
+      condition: service_healthy
+      required: false
+    redis:
+      condition: service_healthy
+  environment: &api-dev-env
+    NODE_ENV: development
+    APP_URL: http://localhost:3001
+    HOST: 0.0.0.0
+    PORT: 3001
+    FRONTEND_URL: ${LUMIA_ADMIN_URL:-http://localhost:3002}
+    CORS_ORIGINS: ${LUMIA_ADMIN_URL:-http://localhost:3002},http://localhost:3000,http://127.0.0.1:3002
+    COOKIE_DOMAIN: ''
+    COOKIE_SECURE: 'false'
+    REDIS_URL: redis://redis:6379
+    REDIS_ENABLED: 'true'
+  volumes:
+    - ./src:/app/src
+    - ./scripts:/app/scripts
+    - ./package.json:/app/package.json
+    - ./package-lock.json:/app/package-lock.json
+    - ./tsconfig.json:/app/tsconfig.json
+    - ./tsconfig.build.json:/app/tsconfig.build.json
+  ports:
+    - '${PORT:-3001}:3001'
+  healthcheck:
+    disable: true
+
 services:
   mongo:
+    profiles: [local]
     ports:
       - '27017:27017'
 
   redis:
+    profiles: [local, atlas, prod]
     ports:
       - '6379:6379'
 
   api:
-    build:
-      context: .
-      target: builder
-    restart: unless-stopped
-    command: sh -c "npm install && npm run dev"
+    <<: *api-dev
+    profiles: [local]
     env_file:
       - .env.development
     environment:
-      NODE_ENV: development
-      APP_URL: http://localhost:3001
-      HOST: 0.0.0.0
-      PORT: 3001
-      FRONTEND_URL: ${LUMIA_ADMIN_URL:-http://localhost:3002}
-      CORS_ORIGINS: ${LUMIA_ADMIN_URL:-http://localhost:3002},http://localhost:3000,http://127.0.0.1:3002
-      COOKIE_DOMAIN: ''
-      COOKIE_SECURE: 'false'
-      REDIS_URL: redis://redis:6379
-      REDIS_ENABLED: 'true'
-    volumes:
-      - ./src:/app/src
-      - ./scripts:/app/scripts
-      - ./package.json:/app/package.json
-      - ./package-lock.json:/app/package-lock.json
-      - ./tsconfig.json:/app/tsconfig.json
-      - ./tsconfig.build.json:/app/tsconfig.build.json
-    ports:
-      - '${PORT:-3001}:3001'
-    healthcheck:
-      disable: true
+      <<: *api-dev-env
+      MONGO_AUTH_URI: mongodb://lumia:lumia_secret@mongo:27017/?authSource=admin
+      MONGO_CATALOG_URI: mongodb://lumia:lumia_secret@mongo:27017/?authSource=admin
+      MONGO_SALES_URI: mongodb://lumia:lumia_secret@mongo:27017/?authSource=admin
+      MONGO_PRODUCTION_URI: mongodb://lumia:lumia_secret@mongo:27017/?authSource=admin
+
+  api-atlas:
+    <<: *api-dev
+    profiles: [atlas]
+    container_name: server-api
+    env_file:
+      - .env.development
+
+  api-prod:
+    <<: *api-dev
+    profiles: [prod]
+    container_name: server-api
+    env_file:
+      - .env.production
+    environment:
+      <<: *api-dev-env
+      NODE_ENV: production
 
   mongo-express:
+    profiles: [local]
     image: mongo-express:latest
     restart: unless-stopped
     networks:
