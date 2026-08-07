@@ -350,6 +350,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     logger,
   )
   mail.logStartupStatus()
+  void mail.verifySmtpConnection()
   const push = new PushService(
     {
       enabled: env.FCM_ENABLED,

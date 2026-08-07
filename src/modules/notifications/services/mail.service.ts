@@ -48,6 +48,24 @@ export class MailService {
     )
   }
 
+  /** Comprueba conectividad SMTP al arrancar (no bloquea el server). */
+  async verifySmtpConnection(): Promise<void> {
+    if (!this.isReady()) return
+    try {
+      await this.getTransporter().verify()
+      this.logger?.info(
+        { smtpHost: this.config.smtpHost, smtpPort: this.config.smtpPort },
+        'SMTP connection verified',
+      )
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      this.logger?.error(
+        { err, smtpHost: this.config.smtpHost, smtpPort: this.config.smtpPort },
+        `SMTP connection failed: ${message}`,
+      )
+    }
+  }
+
   private getTransporter(): Transporter {
     if (!this.transporter) {
       this.transporter = nodemailer.createTransport({
@@ -89,8 +107,16 @@ export class MailService {
         'Pre-order notification email sent',
       )
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
       this.logger?.error(
-        { err, orderId: order.id, orderNumber: order.orderNumber },
+        {
+          err,
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          smtpHost: this.config.smtpHost,
+          smtpPort: this.config.smtpPort,
+          errorMessage: message,
+        },
         'Failed to send pre-order notification email',
       )
     }
