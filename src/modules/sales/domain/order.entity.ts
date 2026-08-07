@@ -86,6 +86,7 @@ export interface OrderDomain {
   email: string | null
   customerName: string
   phone: string
+  whatsapp?: string
   address: string
   city: string
   reference: string
@@ -110,6 +111,7 @@ export function toOrderDomain(e: OrderEntity): OrderDomain {
     email: e.email,
     customerName: e.customerName,
     phone: e.phone,
+    whatsapp: e.whatsapp,
     address: e.address,
     city: e.city,
     reference: e.reference,

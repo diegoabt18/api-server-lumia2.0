@@ -105,6 +105,7 @@ export class PushService {
         total: String(order.total),
         itemCount: String(itemCount),
         customerName: order.customerName ?? '',
+        whatsapp: order.whatsapp ?? order.phone ?? '',
       },
       android: {
         priority: 'high',
