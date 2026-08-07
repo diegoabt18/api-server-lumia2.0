@@ -91,14 +91,15 @@ export class PushService {
 
     const itemCount = order.items.reduce((sum, i) => sum + i.quantity, 0)
     const orderNumber = order.orderNumber ?? order.id
-    const title = 'Nuevo pedido'
+    const title = '🛍️ Nuevo pedido'
     const body = `${orderNumber} · ${formatCop(order.total)} · ${itemCount} artículo${itemCount === 1 ? '' : 's'}`
 
     const message: MulticastMessage = {
       tokens,
-      notification: { title, body },
       data: {
         type: 'order.created',
+        title,
+        body,
         orderId: order.id,
         orderNumber,
         total: String(order.total),
@@ -107,10 +108,6 @@ export class PushService {
       },
       android: {
         priority: 'high',
-        notification: {
-          channelId: 'orders',
-          priority: 'high' as const,
-        },
       },
     }
 
