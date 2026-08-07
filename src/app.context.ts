@@ -30,6 +30,7 @@ import { StoreSettingsRepository } from './modules/store/infrastructure/store-se
 import { StoreService } from './modules/store/services/store.service.js'
 import { NotificationRepository } from './modules/notifications/infrastructure/notification.repository.js'
 import { NotificationService } from './modules/notifications/services/notification.service.js'
+import { MailService } from './modules/notifications/services/mail.service.js'
 import { DashboardService } from './modules/admin/services/dashboard.service.js'
 import { AdminProductService } from './modules/admin/services/admin-product.service.js'
 import { AdminOrderService } from './modules/admin/services/admin-order.service.js'
@@ -329,6 +330,19 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   const twoFactor = new TwoFactorService(users, twoFactorRepo, authAudit, () => auth)
   auth = new AuthService(users, sessions, jwt, authAudit, twoFactor, authorization)
   const manualPayments = new ManualPaymentService(payments, orders, carts)
+  const mail = new MailService(
+    {
+      enabled: env.EMAIL_ENABLED,
+      smtpHost: env.SMTP_HOST,
+      smtpPort: env.SMTP_PORT,
+      smtpSecure: env.SMTP_SECURE,
+      smtpUser: env.SMTP_USER,
+      smtpPass: env.SMTP_PASS,
+      mailFrom: env.MAIL_FROM,
+      salesNotifyEmail: env.SALES_NOTIFY_EMAIL,
+    },
+    logger,
+  )
   const store = new StoreService(storeSettings, storeBanners)
   const adminDashboard = new DashboardService(users, sessions, products, orders, promotions, favorites)
   const adminProducts = new AdminProductService(products, categories, catalogOptions)
@@ -473,7 +487,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       permissionCache,
       products: new ProductService(products, promotions),
       categories: new CategoryService(categories),
-      orders: new OrderService(orders, carts, inventory, manualPayments),
+      orders: new OrderService(orders, carts, inventory, manualPayments, mail),
       cart: new CartService(carts, products),
       favorites: new FavoritesService(favorites),
       feedback: new FeedbackService(reviews, products),

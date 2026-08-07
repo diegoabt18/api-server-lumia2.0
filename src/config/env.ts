@@ -83,6 +83,22 @@ const envSchema = z.object({
 
   // 2FA
   TWO_FACTOR_ENCRYPTION_KEY: z.string().optional(),
+
+  // Email (notificaciones internas — p. ej. pre-venta a ventas@)
+  EMAIL_ENABLED: z
+    .string()
+    .transform((v) => v === 'true')
+    .default('false'),
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().default(587),
+  SMTP_SECURE: z
+    .string()
+    .transform((v) => v === 'true')
+    .default('false'),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  MAIL_FROM: z.string().default('notificaciones@lumiadalistore.com'),
+  SALES_NOTIFY_EMAIL: z.string().email().default('ventas@lumiadalistore.com'),
 })
 
 export type Env = z.infer<typeof envSchema>
