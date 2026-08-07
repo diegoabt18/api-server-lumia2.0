@@ -99,6 +99,18 @@ const envSchema = z.object({
   SMTP_PASS: z.string().optional(),
   MAIL_FROM: z.string().default('notificaciones@lumiadalistore.com'),
   SALES_NOTIFY_EMAIL: z.string().email().default('ventas@lumiadalistore.com'),
+
+  // FCM push (LumiChat — notificaciones de nuevos pedidos)
+  FCM_ENABLED: z
+    .string()
+    .transform((v) => v === 'true')
+    .default('false'),
+  FCM_PROJECT_ID: z.string().optional(),
+  FCM_CLIENT_EMAIL: z.string().optional(),
+  /** Clave privada del service account (PEM). En .env usar \\n para saltos de línea. */
+  FCM_PRIVATE_KEY: z.string().optional(),
+  /** Clave compartida app ↔ API para registrar tokens FCM */
+  LUMICHAT_DEVICE_KEY: z.string().min(16).optional(),
 })
 
 export type Env = z.infer<typeof envSchema>

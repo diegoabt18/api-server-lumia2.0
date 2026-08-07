@@ -1,6 +1,7 @@
 import { AppError } from '../../../common/errors/app.error.js'
 import type { InventoryRepository } from '../../catalog/infrastructure/inventory.repository.js'
 import type { MailService } from '../../notifications/services/mail.service.js'
+import type { PushService } from '../../notifications/services/push.service.js'
 import type { ManualPaymentService } from '../../payments/services/manual-payment.service.js'
 import type { CartRepository } from '../infrastructure/cart.repository.js'
 import type { OrderRepository } from '../infrastructure/order.repository.js'
@@ -65,6 +66,7 @@ export class OrderService {
     private readonly inventory: InventoryRepository,
     private readonly manualPayments: ManualPaymentService,
     private readonly mail: MailService,
+    private readonly push: PushService,
   ) {}
 
   private async validateCartInventory(items: CartItemEntity[]) {
@@ -170,6 +172,7 @@ export class OrderService {
     })
 
     void this.mail.notifyPreOrderCreated(order)
+    void this.push.notifyPreOrderCreated(order)
 
     return {
       id: order.id,

@@ -31,6 +31,8 @@ import { StoreService } from './modules/store/services/store.service.js'
 import { NotificationRepository } from './modules/notifications/infrastructure/notification.repository.js'
 import { NotificationService } from './modules/notifications/services/notification.service.js'
 import { MailService } from './modules/notifications/services/mail.service.js'
+import { PushService } from './modules/notifications/services/push.service.js'
+import { PushDeviceRepository } from './modules/notifications/infrastructure/push-device.repository.js'
 import { DashboardService } from './modules/admin/services/dashboard.service.js'
 import { AdminProductService } from './modules/admin/services/admin-product.service.js'
 import { AdminOrderService } from './modules/admin/services/admin-order.service.js'
@@ -121,6 +123,7 @@ export interface AppContext {
     storeBanners: StoreBannerRepository
     storeSettings: StoreSettingsRepository
     notifications: NotificationRepository
+    pushDevices: PushDeviceRepository
     authAudit: AuthAuditRepository
     roles: RoleRepository
     userRoles: UserRoleRepository
@@ -168,6 +171,7 @@ export interface AppContext {
     manualPayments: ManualPaymentService
     store: StoreService
     notifications: NotificationService
+    push: PushService
     adminDashboard: DashboardService
     adminProducts: AdminProductService
     adminOrders: AdminOrderService
@@ -240,6 +244,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   const storeBanners = new StoreBannerRepository(catalogDb)
   const storeSettings = new StoreSettingsRepository(identityDb)
   const notifications = new NotificationRepository(identityDb)
+  const pushDevices = new PushDeviceRepository(identityDb)
   const productionMaterialsRepo = new MaterialRepository(productionDb)
   const productionSuppliersRepo = new SupplierRepository(productionDb)
   const productionRecipesRepo = new RecipeRepository(productionDb)
@@ -297,6 +302,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     catalogOptions.ensureIndexes().catch((err) => logger.warn({ err }, 'catalog options indexes skipped')),
     storeBanners.ensureIndexes().catch((err) => logger.warn({ err }, 'store banners indexes skipped')),
     notifications.ensureIndexes().catch((err) => logger.warn({ err }, 'notifications indexes skipped')),
+    pushDevices.ensureIndexes().catch((err) => logger.warn({ err }, 'push_devices indexes skipped')),
     productionMaterialsRepo.ensureIndexes().catch((err) => logger.warn({ err }, 'production materials indexes skipped')),
     productionSuppliersRepo.ensureIndexes().catch((err) => logger.warn({ err }, 'production suppliers indexes skipped')),
     productionRecipesRepo.ensureIndexes().catch((err) => logger.warn({ err }, 'production recipes indexes skipped')),
@@ -341,6 +347,16 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       mailFrom: env.MAIL_FROM,
       salesNotifyEmail: env.SALES_NOTIFY_EMAIL,
     },
+    logger,
+  )
+  const push = new PushService(
+    {
+      enabled: env.FCM_ENABLED,
+      projectId: env.FCM_PROJECT_ID,
+      clientEmail: env.FCM_CLIENT_EMAIL,
+      privateKey: env.FCM_PRIVATE_KEY,
+    },
+    pushDevices,
     logger,
   )
   const store = new StoreService(storeSettings, storeBanners)
@@ -449,6 +465,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       storeBanners,
       storeSettings,
       notifications,
+      pushDevices,
       authAudit,
       roles,
       userRoles,
@@ -487,7 +504,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       permissionCache,
       products: new ProductService(products, promotions),
       categories: new CategoryService(categories),
-      orders: new OrderService(orders, carts, inventory, manualPayments, mail),
+      orders: new OrderService(orders, carts, inventory, manualPayments, mail, push),
       cart: new CartService(carts, products),
       favorites: new FavoritesService(favorites),
       feedback: new FeedbackService(reviews, products),
@@ -496,6 +513,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       manualPayments,
       store,
       notifications: new NotificationService(notifications),
+      push,
       adminDashboard,
       adminProducts,
       adminOrders,
