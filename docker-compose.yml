@@ -30,6 +30,9 @@ services:
       - '${PORT:-3001}:3001'
     env_file:
       - .env.production
+    # Linux: permite que el contenedor llegue a Postfix en el host (puerto 25)
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
 
   mongo:
     image: mongo:7

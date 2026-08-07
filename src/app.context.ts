@@ -349,6 +349,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     },
     logger,
   )
+  mail.logStartupStatus()
   const push = new PushService(
     {
       enabled: env.FCM_ENABLED,

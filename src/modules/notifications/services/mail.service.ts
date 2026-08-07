@@ -27,6 +27,27 @@ export class MailService {
     return this.config.enabled && Boolean(this.config.smtpHost && this.config.salesNotifyEmail)
   }
 
+  logStartupStatus(): void {
+    if (!this.config.enabled) {
+      this.logger?.info('Email notifications disabled (EMAIL_ENABLED=false)')
+      return
+    }
+    if (!this.config.smtpHost) {
+      this.logger?.warn('EMAIL_ENABLED but SMTP_HOST is missing — pre-order emails will be skipped')
+      return
+    }
+    this.logger?.info(
+      {
+        smtpHost: this.config.smtpHost,
+        smtpPort: this.config.smtpPort,
+        mailFrom: this.config.mailFrom,
+        salesNotifyEmail: this.config.salesNotifyEmail,
+        smtpAuth: Boolean(this.config.smtpUser && this.config.smtpPass),
+      },
+      'Email notifications configured',
+    )
+  }
+
   private getTransporter(): Transporter {
     if (!this.transporter) {
       this.transporter = nodemailer.createTransport({
@@ -37,6 +58,10 @@ export class MailService {
           this.config.smtpUser && this.config.smtpPass
             ? { user: this.config.smtpUser, pass: this.config.smtpPass }
             : undefined,
+        connectionTimeout: 10_000,
+        greetingTimeout: 10_000,
+        socketTimeout: 15_000,
+        tls: this.config.smtpSecure ? undefined : { rejectUnauthorized: false },
       })
     }
     return this.transporter
@@ -45,7 +70,7 @@ export class MailService {
   /** Notificación interna a ventas — no envía correo al cliente. */
   async notifyPreOrderCreated(order: OrderDomain): Promise<void> {
     if (!this.isReady()) {
-      this.logger?.debug('Pre-order mail skipped: SMTP not configured')
+      this.logger?.warn('Pre-order mail skipped: SMTP not configured')
       return
     }
 
