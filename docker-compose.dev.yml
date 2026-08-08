@@ -5,7 +5,8 @@
 # Perfiles (elige uno):
 #   local  — Mongo + Redis + API + mongo-express (desarrollo seguro, datos vía sync)
 #   atlas  — Redis + API → URIs Atlas de .env.development
-#   prod   — Redis + API → URIs Atlas de .env.production (admin local → datos reales)
+#   prod   — Redis + API → URIs Atlas de .env.production
+#            (FRONTEND_URL/CORS/cookies salen de .env.production; no se pisan con localhost)
 #
 # Comandos npm:
 #   npm run docker:dev:local
@@ -88,9 +89,14 @@ services:
     container_name: server-api
     env_file:
       - .env.production
+    # No reutilizar api-dev-env: pisaba FRONTEND_URL/APP_URL/CORS/cookies con localhost
+    # (LUMIA_ADMIN_URL) y rompía Google OAuth detrás del tunnel de producción.
     environment:
-      <<: *api-dev-env
       NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3001
+      REDIS_URL: redis://redis:6379
+      REDIS_ENABLED: 'true'
 
   mongo-express:
     profiles: [local]
