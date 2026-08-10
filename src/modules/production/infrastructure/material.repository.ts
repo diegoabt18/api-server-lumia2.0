@@ -115,6 +115,14 @@ export class MaterialRepository extends BaseRepository<MaterialEntity> {
       if (patch.rollMeters === null) $unset.roll_meters = ''
       else $set.roll_meters = patch.rollMeters
     }
+    if (patch.contentUnit !== undefined) {
+      if (patch.contentUnit === null || patch.contentUnit === '') $unset.content_unit = ''
+      else $set.content_unit = patch.contentUnit
+    }
+    if (patch.contentQuantity !== undefined) {
+      if (patch.contentQuantity === null) $unset.content_quantity = ''
+      else $set.content_quantity = patch.contentQuantity
+    }
     if (patch.stockEnabled !== undefined) $set.stock_enabled = patch.stockEnabled
     if (patch.stockCurrent !== undefined) {
       if (patch.stockCurrent === null) $unset.stock_current = ''

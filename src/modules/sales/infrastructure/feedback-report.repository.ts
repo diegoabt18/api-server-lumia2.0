@@ -4,9 +4,11 @@ import { getCollection } from '../../../database/repositories/base.repository.js
 import { buildPaginationMeta } from '../../../common/utils/pagination.js'
 
 export class FeedbackReportRepository {
+  private readonly db: Db
   private readonly collection
 
   constructor(db: Db) {
+    this.db = db
     this.collection = getCollection(db, 'feedback_reports')
   }
 
@@ -31,7 +33,7 @@ export class FeedbackReportRepository {
 
   async patchQuestion(id: string, patch: { hidden?: boolean; answered?: boolean }): Promise<boolean> {
     if (!ObjectId.isValid(id)) return false
-    const col = this.collection.db.collection('product_questions')
+    const col = this.db.collection('product_questions')
     const res = await col.updateOne({ _id: new ObjectId(id) }, { $set: { ...patch, updated_at: new Date() } })
     return res.matchedCount > 0
   }

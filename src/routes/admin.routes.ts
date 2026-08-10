@@ -513,10 +513,10 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
     return services.adminCostSummary.listSnapshots(id, decodeURIComponent(sku))
   })
 
-  // ─── Product images (stub) ───
+  // ─── Product images: generación AVIF vive en Lumia (Nitro + sharp), no aquí ───
   api.post('/admin/product-images/generate', { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_UPDATE) }, async () => ({
     ok: false,
-    message: 'Not configured',
+    message: 'Image generation runs on Lumia admin (local Nitro), not on this API',
   }))
 
   // ─── Registry modules POST ───

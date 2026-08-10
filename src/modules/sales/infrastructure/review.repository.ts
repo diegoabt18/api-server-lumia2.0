@@ -16,8 +16,11 @@ interface ReviewDocument {
 }
 
 export class ReviewRepository extends BaseRepository<ReviewDocument & { _id: ObjectId }> {
+  private readonly db: Db
+
   constructor(db: Db) {
     super(getCollection(db, 'product_reviews'))
+    this.db = db
   }
 
   async ensureIndexes(): Promise<void> {
@@ -99,7 +102,7 @@ export class ReviewRepository extends BaseRepository<ReviewDocument & { _id: Obj
       userId?: string
       status?: string
       items?: Array<{ productSlug?: string }>
-    }>(this.collection.db, 'orders')
+    }>(this.db, 'orders')
     const found = await orders.findOne({
       userId,
       status: { $in: ['paid', 'shipped', 'delivered', 'pending'] },

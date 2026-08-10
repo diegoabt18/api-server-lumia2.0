@@ -77,7 +77,7 @@ export class RecipeService {
       cached_indirect_cost: 0,
       cached_total_cost: 0,
       currency: 'COP',
-      margin_percentage: input.marginPercentage != null ? Number(input.marginPercentage) : undefined,
+      margin_percentage: input.marginPercentage != null ? Number(input.marginPercentage) : 80,
       pricing_mode: (input.pricingMode as 'auto_margin' | 'fixed_margin' | 'manual') ?? 'auto_margin',
       manual_price: input.manualPrice != null ? Number(input.manualPrice) : undefined,
       costs_outdated: true,

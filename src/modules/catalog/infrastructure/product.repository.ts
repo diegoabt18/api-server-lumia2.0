@@ -36,11 +36,15 @@ function buildProductSearchClause(search: string): Record<string, unknown> | nul
 }
 
 export class ProductRepository extends BaseRepository<ProductEntity> {
-  private readonly variants = getCollection<VariantEntity>(this.collection.db, 'variants')
-  private readonly inventory = getCollection<InventoryItemEntity>(this.collection.db, 'inventory_items')
+  private readonly db: Db
+  private readonly variants: ReturnType<typeof getCollection<VariantEntity>>
+  private readonly inventory: ReturnType<typeof getCollection<InventoryItemEntity>>
 
   constructor(db: Db) {
     super(getCollection(db, 'products'))
+    this.db = db
+    this.variants = getCollection<VariantEntity>(db, 'variants')
+    this.inventory = getCollection<InventoryItemEntity>(db, 'inventory_items')
   }
 
   async ensureIndexes(): Promise<void> {
@@ -271,7 +275,7 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
   }
 
   async findEmptyCategories(limit: number) {
-    return this.collection.db
+    return this.db
       .collection('categories')
       .aggregate([
         { $lookup: { from: 'products', localField: 'slug', foreignField: 'category_slug', as: 'products' } },
@@ -421,14 +425,14 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
   }
 
   async insertCostSnapshot(doc: Record<string, unknown>): Promise<string> {
-    const col = this.collection.db.collection('variant_cost_snapshots')
+    const col = this.db.collection('variant_cost_snapshots')
     const result = await col.insertOne({ ...doc, calculated_at: new Date() })
     return result.insertedId.toString()
   }
 
   async listCostSnapshots(productId: string, variantSku: string, limit = 50) {
     const { ObjectId } = await import('mongodb')
-    const col = this.collection.db.collection('variant_cost_snapshots')
+    const col = this.db.collection('variant_cost_snapshots')
     return col
       .find({ product_id: new ObjectId(productId), variant_sku: variantSku })
       .sort({ calculated_at: -1 })
@@ -436,11 +440,23 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
       .toArray()
   }
 
-  async getLatestSnapshotsByProduct(productId: string) {
+  async getLatestSnapshotsByProduct(productId: string): Promise<
+    Array<{
+      _id: string
+      suggested_price?: number
+      margin_percentage?: number
+      calculated_at?: Date
+    }>
+  > {
     const { ObjectId } = await import('mongodb')
-    const col = this.collection.db.collection('variant_cost_snapshots')
+    const col = this.db.collection('variant_cost_snapshots')
     return col
-      .aggregate([
+      .aggregate<{
+        _id: string
+        suggested_price?: number
+        margin_percentage?: number
+        calculated_at?: Date
+      }>([
         { $match: { product_id: new ObjectId(productId) } },
         { $sort: { calculated_at: -1 } },
         {

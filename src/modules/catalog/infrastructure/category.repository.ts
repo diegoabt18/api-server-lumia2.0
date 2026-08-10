@@ -7,8 +7,11 @@ import {
 } from '../domain/catalog.entity.js'
 
 export class CategoryRepository extends BaseRepository<CategoryEntity> {
+  private readonly db: Db
+
   constructor(db: Db) {
     super(getCollection(db, 'categories'))
+    this.db = db
   }
 
   async ensureIndexes(): Promise<void> {
@@ -84,7 +87,7 @@ export class CategoryRepository extends BaseRepository<CategoryEntity> {
   }
 
   async productCountByCategorySlug(): Promise<Map<string, number>> {
-    const rows = await this.collection.db
+    const rows = await this.db
       .collection('products')
       .aggregate([{ $group: { _id: '$category_slug', n: { $sum: 1 } } }])
       .toArray()

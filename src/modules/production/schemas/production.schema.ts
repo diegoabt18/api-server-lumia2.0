@@ -11,6 +11,10 @@ export const unitOfMeasureSchema = z.enum([
   'unidad', 'pliego', 'rollo', 'caja', 'bolsa', 'paquete', 'otro',
 ])
 
+const contentUnitSchema = z.enum([
+  'unidad', 'kg', 'g', 'mg', 'l', 'ml', 'm', 'cm', 'mm', 'm2', 'cm2',
+])
+
 export const createMaterialSchema = z.object({
   name: z.string().min(1).max(200),
   code: z.string().max(100).optional(),
@@ -21,7 +25,10 @@ export const createMaterialSchema = z.object({
   purchaseUnit: unitOfMeasureSchema,
   lastCost: z.number().min(0).optional(),
   lastCostUnit: unitOfMeasureSchema.optional(),
-  rollMeters: z.number().int().positive().optional(),
+  /** @deprecated Preferir contentUnit + contentQuantity */
+  rollMeters: z.number().positive().optional(),
+  contentUnit: contentUnitSchema.optional(),
+  contentQuantity: z.number().positive().optional(),
   stockEnabled: z.boolean().optional(),
   stockCurrent: z.number().min(0).optional(),
   stockMinimum: z.number().min(0).optional(),
@@ -36,7 +43,9 @@ export const updateMaterialSchema = z.object({
   imagePath: z.string().max(500).optional().nullable(),
   active: z.boolean().optional(),
   purchaseUnit: unitOfMeasureSchema.optional(),
-  rollMeters: z.number().int().positive().optional().nullable(),
+  rollMeters: z.number().positive().optional().nullable(),
+  contentUnit: contentUnitSchema.optional().nullable(),
+  contentQuantity: z.number().positive().optional().nullable(),
   stockEnabled: z.boolean().optional(),
   stockCurrent: z.number().min(0).optional().nullable(),
   stockMinimum: z.number().min(0).optional().nullable(),

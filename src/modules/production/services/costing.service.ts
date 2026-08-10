@@ -8,6 +8,7 @@ import type { MaterialRepository } from '../infrastructure/material.repository.j
 import type { ProductionConfigRepository } from '../infrastructure/production-config.repository.js'
 import type { ProductionAuditRepository } from '../infrastructure/production-audit.repository.js'
 import type { RecipeRepository } from '../infrastructure/recipe.repository.js'
+import { calculateMaterialConsumptionCostAmount } from '../domain/unit-cost-engine/index.js'
 import { UnitConversionService } from './unit-conversion.service.js'
 
 export class CostingService {
@@ -41,31 +42,22 @@ export class CostingService {
           }
         }
 
-        let costValue: number
-        const isRollo = mat.purchaseUnit === 'rollo'
-        const rolloMeters = l.rolloMeters ?? mat.rollMeters
-
-        if (isRollo && rolloMeters && rolloMeters > 0) {
-          if (l.unit === 'rollo') {
-            costValue = l.quantity * Math.max(mat.lastCost, 0.001)
-          } else {
-            const conversion = await this.conversion.convert({
-              value: l.quantity,
-              fromUnit: l.unit,
-              toUnit: 'm',
-            })
-            const costPerMeter = Math.max(mat.lastCost, 0.001) / rolloMeters
-            costValue = conversion.toValue * costPerMeter
-          }
-        } else {
-          const costResult = await this.conversion.calculateCost({
-            price: Math.max(mat.lastCost, 0.001),
-            purchaseUnit: mat.lastCostUnit || mat.purchaseUnit,
-            recipeQuantity: l.quantity,
-            recipeUnit: l.unit,
-          })
-          costValue = costResult.cost
-        }
+        // Motor único (mismo que LUMIA preview/recetas): físicas universales + contenido por material
+        const costValue = calculateMaterialConsumptionCostAmount(
+          {
+            purchaseUnit: mat.purchaseUnit,
+            lastCost: mat.lastCost,
+            lastCostUnit: mat.lastCostUnit,
+            rollMeters: mat.rollMeters,
+            contentUnit: mat.contentUnit,
+            contentQuantity: mat.contentQuantity,
+          },
+          {
+            quantity: l.quantity,
+            unit: l.unit,
+            rolloMeters: l.rolloMeters,
+          },
+        )
 
         const unitCost = l.quantity > 0 ? costValue / l.quantity : 0
         return {
@@ -100,6 +92,8 @@ export class CostingService {
       costs_outdated: false,
       costs_last_calculated_at: new Date(),
       costs_last_calculated_by: ObjectId.isValid(userId) ? new ObjectId(userId) : userId,
+      // Persistir el margen efectivo usado (receta o default de config) para que la UI lo muestre
+      margin_percentage: marginPct,
       suggested_price: suggestedPrice,
     })
 

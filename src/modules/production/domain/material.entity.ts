@@ -13,7 +13,10 @@ export interface MaterialEntity {
   purchase_unit: UnitOfMeasure
   last_cost: number
   last_cost_unit: UnitOfMeasure
+  /** @deprecated Preferir content_unit + content_quantity */
   roll_meters?: number
+  content_unit?: string
+  content_quantity?: number
   stock_enabled: boolean
   stock_current?: number
   stock_minimum?: number
@@ -33,7 +36,10 @@ export interface MaterialDomain {
   purchaseUnit: UnitOfMeasure
   lastCost: number
   lastCostUnit: UnitOfMeasure
+  /** @deprecated Preferir contentUnit + contentQuantity */
   rollMeters?: number
+  contentUnit?: string
+  contentQuantity?: number
   stockEnabled: boolean
   stockCurrent?: number
   stockMinimum?: number
@@ -55,6 +61,8 @@ export function toMaterialDomain(entity: MaterialEntity & { _id?: { toString(): 
     lastCost: entity.last_cost,
     lastCostUnit: entity.last_cost_unit,
     rollMeters: entity.roll_meters,
+    contentUnit: entity.content_unit,
+    contentQuantity: entity.content_quantity,
     stockEnabled: entity.stock_enabled,
     stockCurrent: entity.stock_current,
     stockMinimum: entity.stock_minimum,
@@ -75,6 +83,8 @@ export function toMaterialEntity(input: {
   lastCost?: number
   lastCostUnit?: UnitOfMeasure
   rollMeters?: number
+  contentUnit?: string
+  contentQuantity?: number
   stockEnabled?: boolean
   stockCurrent?: number
   stockMinimum?: number
@@ -82,6 +92,13 @@ export function toMaterialEntity(input: {
 }): Omit<MaterialEntity, '_id'> {
   const now = new Date()
   const defaultUnit = input.purchaseUnit
+  const contentUnit = input.contentUnit?.trim() || undefined
+  const contentQuantity =
+    input.contentQuantity != null && input.contentQuantity > 0 ? input.contentQuantity : undefined
+  const rollMeters =
+    input.purchaseUnit === 'rollo'
+      ? (input.rollMeters ?? (contentUnit === 'm' ? contentQuantity : undefined))
+      : undefined
   return {
     name: input.name.trim(),
     code: input.code?.trim(),
@@ -92,7 +109,9 @@ export function toMaterialEntity(input: {
     purchase_unit: input.purchaseUnit,
     last_cost: input.lastCost ?? 0,
     last_cost_unit: input.lastCostUnit ?? defaultUnit,
-    roll_meters: input.purchaseUnit === 'rollo' ? input.rollMeters : undefined,
+    roll_meters: rollMeters,
+    content_unit: contentUnit,
+    content_quantity: contentQuantity,
     stock_enabled: input.stockEnabled ?? false,
     stock_current: input.stockCurrent,
     stock_minimum: input.stockMinimum,

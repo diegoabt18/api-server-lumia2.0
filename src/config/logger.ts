@@ -1,8 +1,8 @@
-import pino from 'pino'
+import { pino, type Logger } from 'pino'
 import type { FastifyBaseLogger } from 'fastify'
 import type { Env } from './env.js'
 
-export type AppLogger = FastifyBaseLogger | pino.Logger
+export type AppLogger = FastifyBaseLogger | Logger
 
 /** Logger standalone para scripts CLI (seed, backup). */
 export function createScriptLogger(): AppLogger {

@@ -17,7 +17,13 @@ export default fp(async (app) => {
     origin: getCorsOrigins(env),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-Request-ID',
+      'X-Lumia-Admin-Origin',
+      'Idempotency-Key',
+    ],
   })
 
   await app.register(compress)

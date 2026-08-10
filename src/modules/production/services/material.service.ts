@@ -119,9 +119,10 @@ export class MaterialService {
     let effectiveUnitCost = unitCost
     let storedRolloMeters: number | null = null
 
+    // Semántica canónica: lastCost = $/unidad de compra (ej. $/rollo, no $/m)
     if (unit === 'rollo' && rolloMeters && rolloMeters > 0) {
       storedRolloMeters = rolloMeters
-      effectiveUnitCost = unitCost / rolloMeters
+      effectiveUnitCost = unitCost
     }
 
     const entry = await this.materials.createPriceEntry({
@@ -142,7 +143,7 @@ export class MaterialService {
     })
 
     if (unit === 'rollo' && storedRolloMeters) {
-      await this.materials.updateLastCost(materialId, effectiveUnitCost, 'm', storedRolloMeters)
+      await this.materials.updateLastCost(materialId, unitCost, 'rollo', storedRolloMeters)
     } else {
       await this.materials.updateLastCost(materialId, unitCost, unit)
     }

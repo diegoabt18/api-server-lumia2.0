@@ -143,10 +143,12 @@ export class AdminCostSummaryService {
     const variants = await this.products.listVariantsByProductSlug(product.slug)
     const latestSnapshots = await this.products.getLatestSnapshotsByProduct(String(product._id))
     const snapshotMap = new Map(
-      latestSnapshots.map((s) => [
-        String((s as { _id: string })._id),
-        s as { suggested_price?: number; margin_percentage?: number; calculated_at?: Date },
-      ]),
+      latestSnapshots.map((s: {
+        _id: string
+        suggested_price?: number
+        margin_percentage?: number
+        calculated_at?: Date
+      }) => [String(s._id), s]),
     )
 
     const items = variants.map((v) => {
@@ -372,8 +374,8 @@ export class AdminCostSummaryService {
     const decodedSku = decodeURIComponent(sku)
     const snapshots = await this.products.listCostSnapshots(productId, decodedSku)
 
-    const items = snapshots.map((s) => {
-      const row = s as Record<string, unknown>
+    const items = snapshots.map((s: Record<string, unknown>) => {
+      const row = s
       return {
         id: String(row._id),
         productId,
