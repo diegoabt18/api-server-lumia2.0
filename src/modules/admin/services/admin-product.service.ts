@@ -3,7 +3,7 @@ import { buildPaginationMeta, resolvePagingQuery } from '../../../common/utils/p
 import type { ProductRepository } from '../../catalog/infrastructure/product.repository.js'
 import type { CategoryRepository } from '../../catalog/infrastructure/category.repository.js'
 import type { CatalogOptionRepository } from '../../catalog/infrastructure/catalog-option.repository.js'
-import type { ProductDomain } from '../../catalog/domain/catalog.entity.js'
+import type { ProductDomain, VariantDomain } from '../../catalog/domain/catalog.entity.js'
 
 function serializeProduct(p: ProductDomain) {
   return {
@@ -17,6 +17,33 @@ function serializeProduct(p: ProductDomain) {
     createdAt: p.createdAt ?? null,
     updatedAt: p.updatedAt ?? null,
     imagePath: p.imagePath ?? null,
+  }
+}
+
+function serializeAdminVariant(v: VariantDomain) {
+  const optionValueIds = v.optionValueIds ?? []
+  const productionRecipeId = v.productionRecipeId ?? null
+  return {
+    id: v.id ?? v.sku,
+    sku: v.sku,
+    price: v.price,
+    currency: v.currency,
+    options: v.options ?? {},
+    optionValueIds,
+    optionRules: v.optionRules ?? [],
+    compareAtPrice: v.compareAtPrice ?? null,
+    imagePath: v.imagePath ?? null,
+    combinationKey: optionValueIds.length ? [...optionValueIds].sort().join('|') : null,
+    stock: v.stock,
+    reserved: v.reserved,
+    available: v.available,
+    inventory: v.inventory ?? [],
+    production_recipe_id: productionRecipeId,
+    productionRecipeId,
+    pricing_status: v.pricingStatus ?? null,
+    cost_status: v.costStatus ?? null,
+    suggested_price: v.suggestedPrice ?? null,
+    production_data: v.productionData ?? null,
   }
 }
 
@@ -40,7 +67,32 @@ export class AdminProductService {
   async get(idOrSlug: string) {
     const product = await this.products.findBySlugOrId(idOrSlug)
     if (!product) throw AppError.notFound('Producto no encontrado')
-    return { product: { ...serializeProduct(product), variants: product.variants } }
+    const raw = await this.products.getProductRawByIdOrSlug(product.id)
+    const axes = await this.catalogOptions.listAxesWithValuesByProductId(product.id)
+    const legacy = axes.length ? [] : await this.catalogOptions.listLegacyOptionsByProductSlug(product.slug)
+    const variants = product.variants.map(serializeAdminVariant)
+    const rawAny = raw as Record<string, unknown> | null
+    return {
+      product: {
+        ...serializeProduct(product),
+        pdpShowSensoryBlock: rawAny?.pdpShowSensoryBlock === true,
+        pdpSensoryNotes: Array.isArray(rawAny?.pdpSensoryNotes) ? rawAny.pdpSensoryNotes : [],
+        pdpSensoryIntensity: (rawAny?.pdpSensoryIntensity as string | null | undefined) ?? null,
+        pdpSensoryIdealFor: (rawAny?.pdpSensoryIdealFor as string | null | undefined) ?? null,
+        pdpSensoryBurnHours: (rawAny?.pdpSensoryBurnHours as string | null | undefined) ?? null,
+        pdpTrustBadgeIds: Array.isArray(rawAny?.pdpTrustBadgeIds) ? rawAny.pdpTrustBadgeIds : [],
+        productionRecipeId:
+          typeof rawAny?.productionRecipeId === 'string' ? rawAny.productionRecipeId : null,
+      },
+      variants,
+      options: legacy.map((o, idx) => ({
+        id: `legacy-${idx}`,
+        name: o.name,
+        values: o.values ?? [],
+      })),
+      optionsFormat: axes.length ? ('normalized' as const) : ('legacy' as const),
+      optionAxes: axes.length ? axes : null,
+    }
   }
 
   async create(data: {
@@ -112,19 +164,22 @@ export class AdminProductService {
   async listVariants(productIdOrSlug: string) {
     const product = await this.products.findBySlugOrId(productIdOrSlug)
     if (!product) throw AppError.notFound('Producto no encontrado')
-    return {
-      variants: product.variants.map((v) => ({
-        sku: v.sku,
-        price: v.price,
-        currency: v.currency,
-        options: v.options,
-        compareAtPrice: v.compareAtPrice ?? null,
-        imagePath: v.imagePath ?? null,
-        stock: v.stock,
-        reserved: v.reserved,
-        available: v.available,
-      })),
-    }
+    const data = product.variants.map((v) => ({
+      id: v.id ?? v.sku,
+      sku: v.sku,
+      price: v.price,
+      currency: v.currency,
+      options: v.options ?? {},
+      stock: v.stock,
+      productionRecipeId: v.productionRecipeId ?? null,
+      production_recipe_id: v.productionRecipeId ?? null,
+      compareAtPrice: v.compareAtPrice ?? null,
+      imagePath: v.imagePath ?? null,
+      reserved: v.reserved,
+      available: v.available,
+    }))
+    // `data` es el contrato del admin LUMIA; `variants` queda por compatibilidad.
+    return { data, variants: data }
   }
 
   async createVariant(

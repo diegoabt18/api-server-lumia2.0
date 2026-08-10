@@ -100,23 +100,38 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     if (!doc) return null
 
     const product = toProductDomain(doc)
-    const variantDocs = await this.variants.find({ product_slug: product.slug }).toArray()
+    const variantDocs = await this.variants.find({ product_slug: product.slug }).sort({ sku: 1 }).toArray()
     const skus = variantDocs.map((v) => v.sku)
     const inventoryDocs =
       skus.length > 0
         ? await this.inventory.find({ sku: { $in: skus } }).toArray()
         : []
-    const inventoryBySku = new Map(inventoryDocs.map((i) => [i.sku, i]))
+    const inventoryBySku = new Map<string, InventoryItemEntity[]>()
+    for (const i of inventoryDocs) {
+      const list = inventoryBySku.get(i.sku) ?? []
+      list.push(i)
+      inventoryBySku.set(i.sku, list)
+    }
 
     const variants: VariantDomain[] = variantDocs.map((v) => {
-      const inv = inventoryBySku.get(v.sku)
-      const quantity = inv?.quantity ?? 0
-      const reserved = inv?.reserved ?? 0
+      const invRows = inventoryBySku.get(v.sku) ?? []
+      const quantity = invRows.reduce((sum, row) => sum + (row.quantity ?? 0), 0)
+      const reserved = invRows.reduce((sum, row) => sum + (row.reserved ?? 0), 0)
+      const optionValueIds = (v.option_value_ids ?? [])
+        .map((x) => (x != null ? String(x) : ''))
+        .filter(Boolean)
+      const optionRules = (v.option_rules ?? []).map((r) => ({
+        optionId: String(r.option_id),
+        allowedValueIds: (r.allowed_value_ids ?? []).map((x) => String(x)),
+      }))
       return {
+        id: v._id != null ? String(v._id) : undefined,
         sku: v.sku,
         productSlug: v.product_slug,
         description: v.description,
         options: v.options ?? {},
+        optionValueIds,
+        optionRules,
         price: v.price,
         currency: v.currency ?? 'COP',
         compareAtPrice: v.compare_at_price,
@@ -124,6 +139,23 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
         stock: quantity,
         reserved,
         available: Math.max(0, quantity - reserved),
+        inventory: invRows.map((row) => ({
+          sku: row.sku,
+          quantity: row.quantity ?? 0,
+          reserved: row.reserved ?? 0,
+          warehouse: row.warehouse ?? 'default',
+          is_per_order: row.is_per_order === true,
+          updatedAt:
+            row.updated_at instanceof Date
+              ? row.updated_at.toISOString()
+              : String(row.updated_at ?? ''),
+        })),
+        productionRecipeId:
+          v.production_recipe_id != null ? String(v.production_recipe_id) : null,
+        pricingStatus: v.pricing_status ?? null,
+        costStatus: v.cost_status ?? null,
+        suggestedPrice: typeof v.suggested_price === 'number' ? v.suggested_price : null,
+        productionData: v.production_data ?? null,
       }
     })
 

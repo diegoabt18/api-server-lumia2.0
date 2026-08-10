@@ -21,12 +21,18 @@ export interface VariantEntity {
   sku: string
   description?: string
   options?: Record<string, string>
+  option_value_ids?: unknown[]
+  option_rules?: Array<{ option_id: unknown; allowed_value_ids?: unknown[] }>
   price: number
   currency: string
   compare_at_price?: number
   image_path?: string
   created_at?: Date
   production_recipe_id?: unknown
+  pricing_status?: string
+  cost_status?: string
+  suggested_price?: number
+  production_data?: Record<string, unknown>
 }
 
 export interface InventoryItemEntity {
@@ -63,10 +69,13 @@ export interface ProductDomain {
 }
 
 export interface VariantDomain {
+  id?: string
   sku: string
   productSlug: string
   description?: string
   options: Record<string, string>
+  optionValueIds?: string[]
+  optionRules?: Array<{ optionId: string; allowedValueIds: string[] }>
   price: number
   currency: string
   compareAtPrice?: number
@@ -74,6 +83,19 @@ export interface VariantDomain {
   stock: number
   reserved: number
   available: number
+  inventory?: Array<{
+    sku: string
+    quantity: number
+    reserved: number
+    warehouse: string
+    is_per_order: boolean
+    updatedAt: string
+  }>
+  productionRecipeId?: string | null
+  pricingStatus?: string | null
+  costStatus?: string | null
+  suggestedPrice?: number | null
+  productionData?: Record<string, unknown> | null
 }
 
 export interface ProductWithVariants extends ProductDomain {
