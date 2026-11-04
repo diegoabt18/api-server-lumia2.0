@@ -79,6 +79,7 @@ import { CostingService } from './modules/production/services/costing.service.js
 import { MaterialService } from './modules/production/services/material.service.js'
 import { SupplierService } from './modules/production/services/supplier.service.js'
 import { RecipeService } from './modules/production/services/recipe.service.js'
+import { VariantPriceRepostService } from './modules/production/services/variant-price-repost.service.js'
 import { UnitService } from './modules/production/services/unit.service.js'
 import { ProductionConfigService } from './modules/production/services/production-config.service.js'
 import { ProductionAuditService, ProductionDashboardService } from './modules/production/services/dashboard.service.js'
@@ -202,6 +203,7 @@ export interface AppContext {
     productionEquivalences: EquivalenceService
     productionIndirectCosts: IndirectCostService
     productionApprovals: PriceApprovalService
+    productionVariantRepost: VariantPriceRepostService
     productionImpact: CostImpactService
   }
   jwt: JwtTokenService
@@ -406,6 +408,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     productionPackagingCostsRepo,
     productionRecipeCostsRepo,
     productionServiceCostsRepo,
+    productionApprovalsRepo,
   )
   const productionUnits = new UnitService(productionUnitsRepo)
   const productionEquivalences = new EquivalenceService(
@@ -415,6 +418,14 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   )
   const productionIndirectCosts = new IndirectCostService(productionIndirectCostsRepo)
   const productionApprovals = new PriceApprovalService(productionApprovalsRepo, productionAuditRepo, products)
+  const productionVariantRepost = new VariantPriceRepostService(
+    products,
+    productionRecipesRepo,
+    productionCosting,
+    productionCostSheetsRepo,
+    productionApprovalsRepo,
+    productionAuditRepo,
+  )
   const productionImpact = new CostImpactService(productionImpactsRepo, productionAuditRepo)
   const productionConfig = new ProductionConfigService(productionConfigRepo, productionAuditRepo)
   const productionDashboard = new ProductionDashboardService(
@@ -546,6 +557,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       productionEquivalences,
       productionIndirectCosts,
       productionApprovals,
+      productionVariantRepost,
       productionImpact,
     },
     jwt,

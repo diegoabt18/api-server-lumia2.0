@@ -19,4 +19,31 @@ export class RecipeVersionRepository extends BaseRepository<RecipeVersionEntity>
     })
     return docs.map(toRecipeVersionDomain)
   }
+
+  async createSnapshot(input: {
+    recipeId: string
+    version: number
+    lines: unknown[]
+    indirectCosts: unknown[]
+    materialsCost: number
+    indirectCost: number
+    totalCost: number
+    changesDescription: string
+    changedBy: string
+  }): Promise<void> {
+    if (!ObjectId.isValid(input.recipeId)) return
+    const entity: RecipeVersionEntity = {
+      recipe_id: new ObjectId(input.recipeId),
+      version: input.version,
+      lines: input.lines,
+      indirect_costs: input.indirectCosts,
+      materials_cost: input.materialsCost,
+      indirect_cost: input.indirectCost,
+      total_cost: input.totalCost,
+      changes_description: input.changesDescription,
+      changed_by: ObjectId.isValid(input.changedBy) ? new ObjectId(input.changedBy) : input.changedBy,
+      created_at: new Date(),
+    }
+    await this.insertOne(entity as never)
+  }
 }

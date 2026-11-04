@@ -5,6 +5,7 @@ export type ProductionAuditEventType =
   | 'recipe_modified'
   | 'recipe_deleted'
   | 'cost_calculated'
+  | 'variant_cost_calculated'
   | 'config_updated'
   | 'price_approved'
   | 'price_rejected'

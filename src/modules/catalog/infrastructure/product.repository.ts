@@ -634,43 +634,73 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     return { items, total }
   }
 
-  async listForProduction(options: { search?: string; limit: number; skip: number }) {
+  async listForProduction(options: {
+    search?: string
+    limit: number
+    skip: number
+    /** Si true, trae hasta 500 productos (para filtrar en memoria por repostStatus). */
+    fetchAllForFilter?: boolean
+  }) {
     const filter: Record<string, unknown> = {}
     if (options.search?.trim()) {
       const s = options.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       filter.$or = [{ name: { $regex: s, $options: 'i' } }, { slug: { $regex: s, $options: 'i' } }]
     }
 
+    const fetchAll = options.fetchAllForFilter === true
     const [products, total] = await Promise.all([
       this.collection
         .find(filter, {
           projection: { _id: 1, name: 1, slug: 1, status: 1, image_path: 1, productionRecipeId: 1 },
         })
         .sort({ name: 1 })
-        .skip(options.skip)
-        .limit(options.limit)
+        .skip(fetchAll ? 0 : options.skip)
+        .limit(fetchAll ? 500 : options.limit)
         .toArray(),
       this.collection.countDocuments(filter),
     ])
 
     const productSlugs = products.map((p) => p.slug).filter(Boolean) as string[]
-    const variantCounts: Record<string, number> = {}
+    const variantsBySlug = new Map<
+      string,
+      Array<{
+        sku: string
+        productionRecipeId: string | null
+        costStatus: string | null
+        pricingStatus: string | null
+      }>
+    >()
     const variantRecipeMap: Record<string, Set<string>> = {}
 
     if (productSlugs.length > 0) {
       const variants = await this.variants
         .find(
           { product_slug: { $in: productSlugs } },
-          { projection: { product_slug: 1, production_recipe_id: 1 } },
+          {
+            projection: {
+              product_slug: 1,
+              sku: 1,
+              production_recipe_id: 1,
+              cost_status: 1,
+              pricing_status: 1,
+            },
+          },
         )
         .toArray()
 
       for (const v of variants) {
-        const slug = v.product_slug
-        variantCounts[slug] = (variantCounts[slug] ?? 0) + 1
-        if (v.production_recipe_id) {
+        const slug = String(v.product_slug)
+        const recipeId = v.production_recipe_id != null ? String(v.production_recipe_id) : null
+        if (!variantsBySlug.has(slug)) variantsBySlug.set(slug, [])
+        variantsBySlug.get(slug)!.push({
+          sku: String(v.sku),
+          productionRecipeId: recipeId,
+          costStatus: (v as { cost_status?: string }).cost_status ?? null,
+          pricingStatus: (v as { pricing_status?: string }).pricing_status ?? null,
+        })
+        if (recipeId) {
           if (!variantRecipeMap[slug]) variantRecipeMap[slug] = new Set()
-          variantRecipeMap[slug].add(String(v.production_recipe_id))
+          variantRecipeMap[slug].add(recipeId)
         }
       }
     }
@@ -681,6 +711,7 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
       const recipeId = (p as unknown as { productionRecipeId?: unknown }).productionRecipeId
         ? String((p as unknown as { productionRecipeId: unknown }).productionRecipeId)
         : null
+      const variants = variantsBySlug.get(slug) ?? []
       const variantRecipeCount = variantRecipeMap[slug]?.size ?? 0
 
       return {
@@ -689,11 +720,13 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
         slug,
         status: String((p as { status?: string }).status ?? 'active'),
         imagePath: (p as { image_path?: string }).image_path ?? null,
-        variantCount: variantCounts[slug] ?? 0,
+        variantCount: variants.length,
         hasRecipe: !!(recipeId || variantRecipeCount > 0),
         hasProductRecipe: !!recipeId,
         variantRecipeCount,
         productionRecipeId: recipeId,
+        variants,
+        variantRecipeIds: [...(variantRecipeMap[slug] ?? [])],
       }
     })
 
@@ -741,6 +774,31 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
       { sku } as never,
       { $set: { price, updated_at: new Date() } },
     )
+    return result.matchedCount > 0
+  }
+
+  async updateVariantPricingState(
+    productSlug: string,
+    sku: string,
+    patch: {
+      suggestedPrice: number
+      pricingStatus: string
+      costStatus: string
+      productionData?: Record<string, unknown>
+    },
+  ): Promise<boolean> {
+    const set: Record<string, unknown> = {
+      suggested_price: patch.suggestedPrice,
+      pricing_status: patch.pricingStatus,
+      cost_status: patch.costStatus,
+      updated_at: new Date(),
+    }
+    if (patch.productionData) {
+      for (const [k, v] of Object.entries(patch.productionData)) {
+        set[`production_data.${k}`] = v
+      }
+    }
+    const result = await this.variants.updateOne({ product_slug: productSlug, sku } as never, { $set: set })
     return result.matchedCount > 0
   }
 }

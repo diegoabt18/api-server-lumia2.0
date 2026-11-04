@@ -62,6 +62,13 @@ export class RecipeRepository extends BaseRepository<RecipeEntity> {
     return doc ? toRecipeDomain(doc) : null
   }
 
+  async getByIds(ids: string[]): Promise<RecipeDomain[]> {
+    const oids = ids.filter((id) => ObjectId.isValid(id)).map((id) => new ObjectId(id))
+    if (!oids.length) return []
+    const docs = await this.findMany({ _id: { $in: oids } } as Filter<RecipeEntity>)
+    return docs.map(toRecipeDomain)
+  }
+
   async create(entity: Omit<RecipeEntity, '_id'>): Promise<RecipeDomain> {
     const id = await this.insertOne(entity as never)
     const doc = await this.findById(id)

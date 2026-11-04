@@ -9,12 +9,20 @@ import type { CostSheetRepository } from '../infrastructure/cost-sheet.repositor
 import type { LaborCostRepository } from '../infrastructure/labor-cost.repository.js'
 import type { MaterialRepository } from '../infrastructure/material.repository.js'
 import type { PackagingCostRepository } from '../infrastructure/packaging-cost.repository.js'
+import type { PriceApprovalRepository } from '../infrastructure/price-approval.repository.js'
 import type { ProductionAuditRepository } from '../infrastructure/production-audit.repository.js'
 import type { RecipeProductionCostRepository } from '../infrastructure/recipe-production-cost.repository.js'
 import type { RecipeRepository } from '../infrastructure/recipe.repository.js'
 import type { RecipeVersionRepository } from '../infrastructure/recipe-version.repository.js'
 import type { ServiceCostRepository } from '../infrastructure/service-cost.repository.js'
 import type { ProductRepository } from '../../catalog/infrastructure/product.repository.js'
+import {
+  countVariantsNeedingRepost,
+  resolveProductRepostStatus,
+  resolveVariantRepostStatus,
+  type ProductRepostStatus,
+  type VariantRepostContext,
+} from '../domain/repost-status.js'
 import type { CostingService } from './costing.service.js'
 
 export class RecipeService {
@@ -30,6 +38,7 @@ export class RecipeService {
     private readonly packagingCosts?: PackagingCostRepository,
     private readonly productionCosts?: RecipeProductionCostRepository,
     private readonly serviceCosts?: ServiceCostRepository,
+    private readonly priceApprovals?: PriceApprovalRepository,
   ) {}
 
   async list(query: Record<string, unknown>) {
@@ -102,7 +111,28 @@ export class RecipeService {
     const prev = await this.recipes.getById(id)
     if (!prev) throw AppError.notFound('Receta no encontrada')
 
-    const updatePatch: Record<string, unknown> = {}
+    // Snapshot + bump de versión (mismo contrato que LUMIA embedded) para que el
+    // listado de productos vea el cambio (vN → vN+1, costsOutdated, needs_repost).
+    if (this.recipeVersions) {
+      await this.recipeVersions.createSnapshot({
+        recipeId: id,
+        version: prev.version,
+        lines: prev.lines,
+        indirectCosts: prev.indirectCosts,
+        materialsCost: prev.cachedMaterialsCost,
+        indirectCost: prev.cachedIndirectCost,
+        totalCost: prev.cachedTotalCost,
+        changesDescription: patch.changesDescription
+          ? String(patch.changesDescription)
+          : 'Actualización de receta',
+        changedBy: userId,
+      })
+    }
+
+    const updatePatch: Record<string, unknown> = {
+      version: prev.version + 1,
+      costs_outdated: true,
+    }
     if (patch.name !== undefined) updatePatch.name = patch.name
     if (patch.productSlug !== undefined) updatePatch.product_slug = patch.productSlug
     if (patch.productName !== undefined) updatePatch.product_name = patch.productName
@@ -116,8 +146,12 @@ export class RecipeService {
 
     if (patch.lines) {
       const enriched = await this.enrichLines(patch.lines as Array<Record<string, unknown>>)
-      updatePatch.lines = this.recipes.buildLineEntities(enriched)
-      updatePatch.costs_outdated = true
+      const lineEntities = this.recipes.buildLineEntities(enriched)
+      updatePatch.lines = lineEntities
+      updatePatch.cached_materials_cost = lineEntities.reduce(
+        (sum, l) => sum + (Number(l.partial_cost) || 0),
+        0,
+      )
     }
     if (patch.indirectCosts) {
       updatePatch.indirect_costs = (patch.indirectCosts as Array<Record<string, unknown>>).map((ic) => ({
@@ -126,7 +160,6 @@ export class RecipeService {
         value: Number(ic.value),
         optional: ic.optional !== false,
       }))
-      updatePatch.costs_outdated = true
     }
 
     const updated = await this.recipes.update(id, updatePatch)
@@ -175,10 +208,117 @@ export class RecipeService {
   async listProducts(query: Record<string, unknown>) {
     if (!this.products) throw AppError.internal('Catálogo no disponible')
     const { page, limit, skip, search } = resolvePagingQuery(query, { defaultLimit: 20, maxLimit: 100 })
-    const { data, total } = await this.products.listForProduction({ search: search || undefined, limit, skip })
+    const repostStatusFilter =
+      typeof query.repostStatus === 'string' && query.repostStatus.trim()
+        ? (query.repostStatus.trim() as ProductRepostStatus)
+        : undefined
+
+    const { data: products, total: totalUnfiltered } = await this.products.listForProduction({
+      search: search || undefined,
+      limit,
+      skip,
+      fetchAllForFilter: !!repostStatusFilter,
+    })
+
+    const allRecipeIds = new Set<string>()
+    for (const p of products) {
+      if (p.productionRecipeId) allRecipeIds.add(p.productionRecipeId)
+      for (const rid of p.variantRecipeIds ?? []) allRecipeIds.add(rid)
+    }
+
+    const recipes = await this.recipes.getByIds([...allRecipeIds])
+    const recipeMap = new Map(recipes.map((r) => [r.id, r]))
+
+    const allSkus = products.flatMap((p) => (p.variants ?? []).map((v) => v.sku)).filter(Boolean)
+    const [sheetBySku, pendingBySku] = await Promise.all([
+      this.costSheets?.getLatestRecipeVersionsBySkus(allSkus) ?? Promise.resolve(new Map<string, number>()),
+      this.priceApprovals?.listPendingVariantSkus() ?? Promise.resolve(new Set<string>()),
+    ])
+
+    let data = products.map((p) => {
+      const productRecipeId = p.productionRecipeId
+      const linkedRecipeIds = [
+        ...(productRecipeId ? [productRecipeId] : []),
+        ...(p.variantRecipeIds ?? []),
+      ]
+      const uniqueLinked = [...new Set(linkedRecipeIds)]
+      const primaryRecipeId = productRecipeId ?? uniqueLinked[0] ?? null
+      const primaryRecipe = primaryRecipeId ? recipeMap.get(primaryRecipeId) : undefined
+      const costsOutdated = uniqueLinked.some((rid) => recipeMap.get(rid)?.costsOutdated === true)
+
+      const variantContexts: VariantRepostContext[] = (p.variants ?? []).map((v) => {
+        const effectiveRecipeId = v.productionRecipeId ?? productRecipeId
+        const effectiveRecipe = effectiveRecipeId ? recipeMap.get(effectiveRecipeId) : undefined
+        return {
+          sku: v.sku,
+          hasRecipe: !!effectiveRecipeId,
+          recipeId: effectiveRecipeId,
+          recipeVersion: effectiveRecipe?.version ?? null,
+          recipeCostsOutdated: effectiveRecipe?.costsOutdated ?? false,
+          lastPublishedRecipeVersion: sheetBySku.get(v.sku) ?? null,
+          costStatus: v.costStatus ?? null,
+          hasPendingApproval: pendingBySku.has(v.sku),
+        }
+      })
+
+      // Productos sin variantes pero con receta a nivel producto
+      if (!variantContexts.length && productRecipeId) {
+        variantContexts.push({
+          sku: `${p.slug}::product`,
+          hasRecipe: true,
+          recipeId: productRecipeId,
+          recipeVersion: primaryRecipe?.version ?? null,
+          recipeCostsOutdated: primaryRecipe?.costsOutdated ?? false,
+          lastPublishedRecipeVersion: null,
+          costStatus: null,
+          hasPendingApproval: false,
+        })
+      }
+
+      const repostStatus: ProductRepostStatus = resolveProductRepostStatus(variantContexts)
+      const variantsNeedingRepost = countVariantsNeedingRepost(variantContexts)
+      const variantsPendingApproval = variantContexts.filter(
+        (v) => resolveVariantRepostStatus(v) === 'pending_approval',
+      ).length
+
+      return {
+        id: p.id,
+        name: p.name,
+        slug: p.slug,
+        status: p.status,
+        imagePath: p.imagePath,
+        variantCount: p.variantCount,
+        hasRecipe: p.hasRecipe,
+        hasProductRecipe: p.hasProductRecipe,
+        variantRecipeCount: p.variantRecipeCount,
+        productionRecipeId: productRecipeId,
+        recipeVersion: primaryRecipe?.version ?? null,
+        recipeName: primaryRecipe?.name ?? null,
+        costsOutdated,
+        recipeActive: primaryRecipe?.isActive ?? false,
+        repostStatus,
+        variantsNeedingRepost,
+        variantsPendingApproval,
+        canRepostPrices: repostStatus === 'needs_repost' || repostStatus === 'mixed',
+      }
+    })
+
+    if (repostStatusFilter) {
+      data = data.filter((p) => p.repostStatus === repostStatusFilter)
+    }
+
+    const total = repostStatusFilter ? data.length : totalUnfiltered
+    const paginatedData = repostStatusFilter ? data.slice(skip, skip + limit) : data
+
     return {
-      data,
-      meta: { total, page, pageSize: limit, totalPages: Math.ceil(total / limit) || 1 },
+      data: paginatedData,
+      meta: {
+        total,
+        page,
+        pageSize: limit,
+        totalPages: Math.ceil(total / limit) || 1,
+        needsRepostCount: data.filter((p) => p.canRepostPrices).length,
+      },
     }
   }
 

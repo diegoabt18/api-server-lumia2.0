@@ -124,6 +124,22 @@ export async function registerProductionAdminRoutes(api: FastifyInstance, ctx: A
     services.productionRecipes.listProducts(request.query as Record<string, unknown>),
   )
 
+  // Importante: rutas estáticas /products/* antes de /recipes/:id
+  api.post(
+    '/admin/production/recipes/products/repost-all',
+    { preHandler: g(PERMISSION_REGISTRY.COSTING_MANAGE) },
+    async (request) => services.productionVariantRepost.repostAllNeedingRepost(userId(request)),
+  )
+
+  api.post(
+    '/admin/production/recipes/products/:id/repost-prices',
+    { preHandler: g(PERMISSION_REGISTRY.COSTING_MANAGE) },
+    async (request) => {
+      const { id } = request.params as { id: string }
+      return services.productionVariantRepost.repostProductPrices(id, userId(request))
+    },
+  )
+
   api.post('/admin/production/recipes/recalculate-all', { preHandler: g(PERMISSION_REGISTRY.RECIPES_UPDATE) }, async (request) =>
     services.productionRecipes.recalculateAll(userId(request)),
   )

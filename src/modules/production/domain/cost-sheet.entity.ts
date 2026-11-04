@@ -1,9 +1,13 @@
 export interface CostSheetEntity {
   _id?: unknown
   recipe_id: unknown
+  recipe_version?: number
   variant_sku?: string
+  product_slug?: string
   materials_cost: number
   indirect_cost: number
+  /** Compat LUMIA cost_sheets_v2 */
+  total_cost_with_waste?: number
   total_cost: number
   suggested_price?: number
   margin_percentage?: number
@@ -15,7 +19,9 @@ export interface CostSheetEntity {
 export interface CostSheetDomain {
   id: string
   recipeId: string
+  recipeVersion?: number
   variantSku?: string
+  productSlug?: string
   materialsCost: number
   indirectCost: number
   totalCost: number
@@ -32,10 +38,12 @@ export function toCostSheetDomain(
   return {
     id: entity._id?.toString?.() ?? '',
     recipeId: (entity.recipe_id as { toString?: () => string })?.toString?.() ?? '',
+    recipeVersion: entity.recipe_version,
     variantSku: entity.variant_sku,
+    productSlug: entity.product_slug,
     materialsCost: entity.materials_cost,
     indirectCost: entity.indirect_cost,
-    totalCost: entity.total_cost,
+    totalCost: entity.total_cost_with_waste ?? entity.total_cost,
     suggestedPrice: entity.suggested_price,
     marginPercentage: entity.margin_percentage,
     currency: entity.currency,

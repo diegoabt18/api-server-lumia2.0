@@ -51,4 +51,71 @@ export class PriceApprovalRepository extends BaseRepository<PriceApprovalEntity>
   async countByStatus(status: ApprovalStatus): Promise<number> {
     return this.count({ status } as Filter<PriceApprovalEntity>)
   }
+
+  async listPendingVariantSkus(): Promise<Set<string>> {
+    const docs = await this.findMany({ status: 'pending' } as Filter<PriceApprovalEntity>, {
+      limit: 5000,
+    })
+    return new Set(
+      docs
+        .map((d) => (d as { variant_sku?: string }).variant_sku)
+        .filter((sku): sku is string => typeof sku === 'string' && !!sku),
+    )
+  }
+
+  async getByVariantSku(variantSku: string): Promise<PriceApprovalDomain[]> {
+    const docs = await this.findMany({ variant_sku: variantSku } as Filter<PriceApprovalEntity>, {
+      sort: { created_at: -1 },
+      limit: 50,
+    })
+    return docs.map(toPriceApprovalDomain)
+  }
+
+  async create(input: {
+    variantSku: string
+    productSlug: string
+    productName?: string
+    previousCost: number
+    newCost: number
+    materialsCost: number
+    previousPrice: number
+    suggestedPrice: number
+    marginPercentage: number
+    currency: string
+    costSheetId?: string
+    recipeId?: string
+    recipeVersion: number
+    createdBy: string
+  }): Promise<PriceApprovalDomain> {
+    const now = new Date()
+    const entity: PriceApprovalEntity = {
+      variant_sku: input.variantSku,
+      product_slug: input.productSlug,
+      product_name: input.productName,
+      previous_cost: input.previousCost,
+      new_cost: input.newCost,
+      materials_cost: input.materialsCost,
+      previous_price: input.previousPrice,
+      suggested_price: input.suggestedPrice,
+      margin_percentage: input.marginPercentage,
+      currency: input.currency,
+      status: 'pending',
+      cost_sheet_id:
+        input.costSheetId && ObjectId.isValid(input.costSheetId)
+          ? new ObjectId(input.costSheetId)
+          : input.costSheetId,
+      recipe_id:
+        input.recipeId && ObjectId.isValid(input.recipeId)
+          ? new ObjectId(input.recipeId)
+          : input.recipeId,
+      recipe_version: input.recipeVersion,
+      created_by: ObjectId.isValid(input.createdBy) ? new ObjectId(input.createdBy) : input.createdBy,
+      created_at: now,
+      updated_at: now,
+    }
+    const id = await this.insertOne(entity as never)
+    const created = await this.getById(id)
+    if (!created) throw new Error('Failed to create price approval')
+    return created
+  }
 }
