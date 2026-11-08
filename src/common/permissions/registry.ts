@@ -122,6 +122,11 @@ export function buildAuthzSnapshot(role: UserRole) {
   }
 }
 
+/** true si el valor es un identificador de permiso registrado. */
+export function isPermissionId(value: unknown): value is PermissionId {
+  return typeof value === 'string' && (ALL_PERMISSION_IDS as string[]).includes(value)
+}
+
 export function hasPermission(keys: PermissionId[], required: PermissionId): boolean {
   return keys.includes(required) || keys.includes(PERMISSION_WILDCARD as PermissionId)
 }

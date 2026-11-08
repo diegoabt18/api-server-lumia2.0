@@ -69,4 +69,13 @@ export class PaymentRepository extends BaseRepository<PaymentDocument> {
     )
     return docs.map((d) => toEntity(d))
   }
+
+
+  /** Marca un pago como aprobado por el proveedor (idempotente por estado terminal). */
+  async markApprovedByProvider(id: string, providerPaymentId: string, paidAt: Date): Promise<void> {
+    await this.collection.updateOne(
+      { _id: new ObjectId(id), status: { $nin: ['approved', 'rejected', 'cancelled', 'refunded', 'charged_back'] } } as never,
+      { $set: { status: 'approved', providerPaymentId, paidAt, updatedAt: new Date() } },
+    )
+  }
 }

@@ -5,15 +5,17 @@ import type { PushService } from '../../notifications/services/push.service.js'
 import type { ManualPaymentService } from '../../payments/services/manual-payment.service.js'
 import type { CartRepository } from '../infrastructure/cart.repository.js'
 import type { OrderRepository } from '../infrastructure/order.repository.js'
+import type { ProductRepository } from '../../catalog/infrastructure/product.repository.js'
 import type { CreateOrderDto } from '../schemas/order.schema.js'
 import type { CheckoutShippingDto } from '../schemas/checkout.schema.js'
 import { signOrderAccessToken } from '../utils/order-access-token.utils.js'
 import type { CartItemEntity } from '../domain/cart.entity.js'
 import type { OrderItemEntity } from '../domain/order.entity.js'
 
-function mapCartItemsToOrderItems(items: CartItemEntity[]): OrderItemEntity[] {
+function mapCartItemsToOrderItems(items: CartItemEntity[], taxRates: Map<string, number | null> = new Map()): OrderItemEntity[] {
   return items.map((i) => ({
     productId: i.productSlug,
+    taxRate: taxRates.get(i.productSlug) ?? null,
     productSlug: i.productSlug,
     variantSku: i.sku,
     variantName: i.variantLabel,
@@ -67,6 +69,7 @@ export class OrderService {
     private readonly manualPayments: ManualPaymentService,
     private readonly mail: MailService,
     private readonly push: PushService,
+    private readonly products: ProductRepository,
   ) {}
 
   private async validateCartInventory(items: CartItemEntity[]) {
@@ -130,7 +133,8 @@ export class OrderService {
 
     await this.validateCartInventory(cart.items)
 
-    const items = mapCartItemsToOrderItems(cart.items)
+    const taxRates = await this.products.findTaxRatesBySlugs(cart.items.map((i) => i.productSlug))
+    const items = mapCartItemsToOrderItems(cart.items, taxRates)
     const subtotal = items.reduce((s, i) => s + i.subtotal, 0)
     const shippingCost = 0
     const total = subtotal + shippingCost

@@ -7,13 +7,78 @@ export interface InventoryAvailability {
   isPerOrder: boolean
 }
 
+export interface InventoryMovementInput {
+  sku: string
+  type: 'pos_sale' | 'pos_cancelled' | 'adjustment'
+  quantityDelta: number
+  orderId?: string
+  orderNumber?: string
+  actorId?: string | null
+  reason?: string
+}
+
+export interface InventoryMovementEntity extends InventoryMovementInput {
+  createdAt: Date
+}
+
 export class InventoryRepository {
   private readonly collection
   private readonly variants
+  private readonly movements
 
   constructor(db: Db) {
     this.collection = getCollection<InventoryItemEntity>(db, 'inventory_items')
     this.variants = getCollection<VariantEntity>(db, 'variants')
+    this.movements = getCollection<InventoryMovementEntity>(db, 'inventory_movements')
+  }
+
+  async ensureIndexes(): Promise<void> {
+    await this.movements.createIndexes([
+      { key: { orderId: 1 } },
+      { key: { sku: 1, createdAt: -1 } },
+      { key: { createdAt: -1 } },
+    ])
+  }
+
+  /**
+   * Descuento atómico de stock disponible (quantity - reserved >= quantity).
+   * Devuelve false si no hay existencias suficientes; no modifica nada en ese caso.
+   */
+  async decrementAtomic(sku: string, quantity: number): Promise<boolean> {
+    if (quantity <= 0) return true
+    const result = await this.collection.updateOne(
+      {
+        sku,
+        $expr: {
+          $gte: [
+            { $subtract: ['$quantity', { $ifNull: ['$reserved', 0] }] },
+            quantity,
+          ],
+        },
+      } as never,
+      {
+        $inc: { quantity: -quantity },
+        $set: { updated_at: new Date() },
+      } as never,
+    )
+    return result.modifiedCount > 0
+  }
+
+  /** Compensación de una venta fallida o cancelación. */
+  async incrementAtomic(sku: string, quantity: number): Promise<void> {
+    if (quantity <= 0) return
+    await this.collection.updateOne(
+      { sku } as never,
+      { $inc: { quantity }, $set: { updated_at: new Date() } } as never,
+    )
+  }
+
+  async logMovement(input: InventoryMovementInput): Promise<void> {
+    await this.movements.insertOne({ ...input, createdAt: new Date() } as never)
+  }
+
+  async listMovementsByOrder(orderId: string): Promise<InventoryMovementEntity[]> {
+    return this.movements.find({ orderId } as never).sort({ createdAt: 1 }).toArray()
   }
 
   async getBySku(sku: string): Promise<InventoryAvailability | null> {

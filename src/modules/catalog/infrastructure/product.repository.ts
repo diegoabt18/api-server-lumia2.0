@@ -54,6 +54,14 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
       { key: { status: 1 } },
       { key: { sales_total_units: -1 } },
     ])
+    await this.variants.createIndexes([
+      { key: { sku: 1 }, unique: true },
+      {
+        key: { barcode: 1 },
+        unique: true,
+        partialFilterExpression: { barcode: { $type: 'string' } },
+      },
+    ])
   }
 
   private buildActiveFilter(search?: string, categorySlug?: string): Record<string, unknown> {
@@ -128,6 +136,7 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
         id: v._id != null ? String(v._id) : undefined,
         sku: v.sku,
         productSlug: v.product_slug,
+        barcode: v.barcode ?? null,
         description: v.description,
         options: v.options ?? {},
         optionValueIds,
@@ -208,6 +217,7 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
   async createProduct(data: {
     name: string
     slug: string
+    tax_rate?: number | null
     description?: string
     category_slug?: string
     brand?: string
@@ -218,6 +228,7 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     const id = await this.insertOne({
       name: data.name,
       slug: data.slug,
+      tax_rate: data.tax_rate ?? null,
       description: data.description,
       category_slug: data.category_slug,
       brand: data.brand,
@@ -236,6 +247,7 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     patch: Partial<{
       name: string
       slug: string
+      tax_rate: number | null
       description?: string
       category_slug?: string
       brand?: string
@@ -339,9 +351,65 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     return this.variants.findOne({ sku })
   }
 
+  async findVariantByBarcode(barcode: string): Promise<VariantEntity | null> {
+    return this.variants.findOne({ barcode } as never)
+  }
+
+  async updateVariantBarcode(sku: string, barcode: string | null): Promise<VariantEntity | null> {
+    const res = await this.variants.updateOne(
+      { sku } as never,
+      { $set: { barcode, updated_at: new Date() } },
+    )
+    if (!res.matchedCount) return null
+    return this.variants.findOne({ sku })
+  }
+
+  /**
+   * Búsqueda para POS: nombre/slug/marca de producto o SKU/código de barras/descripción de variante.
+   * Devuelve productos hidratados con variantes e inventario para evitar múltiples viajes del cliente.
+   */
+  async searchForPos(
+    term: string,
+    page: number,
+    pageSize: number,
+  ): Promise<{ items: ProductWithVariants[]; total: number }> {
+    const trimmed = term.trim()
+    if (!trimmed) return { items: [], total: 0 }
+
+    const rx = new RegExp(escapeRegex(trimmed), 'i')
+    // Distinct slugs keep the match set small: only slugs are transferred, not documents.
+    const [productSlugs, variantSlugs] = await Promise.all([
+      this.collection.distinct('slug', { $or: [{ name: rx }, { slug: rx }, { brand: rx }] } as never),
+      this.variants.distinct('product_slug', {
+        $or: [{ sku: rx }, { barcode: rx }, { description: rx }],
+      } as never),
+    ])
+    const slugs = [...new Set([...productSlugs, ...variantSlugs].map(String))]
+    if (!slugs.length) return { items: [], total: 0 }
+
+    const match = { slug: { $in: slugs } } as never
+    const [total, pageDocs] = await Promise.all([
+      this.collection.countDocuments(match),
+      this.collection
+        .find(match)
+        .project({ slug: 1, name: 1 })
+        .sort({ name: 1, slug: 1 })
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
+        .toArray(),
+    ])
+
+    const hydrated = await Promise.all(pageDocs.map((d) => this.findBySlugOrId(String(d.slug))))
+    return {
+      items: hydrated.filter((p): p is ProductWithVariants => Boolean(p)),
+      total,
+    }
+  }
+
   async createVariant(data: {
     product_slug: string
     sku: string
+    barcode?: string | null
     price: number
     currency: string
     options?: Record<string, string>
@@ -355,10 +423,20 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
       ;(err as Error & { code?: string }).code = 'DUPLICATE_SKU'
       throw err
     }
+    const barcode = data.barcode?.trim() || null
+    if (barcode) {
+      const barcodeOwner = await this.variants.findOne({ barcode } as never)
+      if (barcodeOwner) {
+        const err = new Error('DUPLICATE_BARCODE')
+        ;(err as Error & { code?: string }).code = 'DUPLICATE_BARCODE'
+        throw err
+      }
+    }
     const now = new Date()
     const doc: VariantEntity = {
       product_slug: data.product_slug,
       sku: data.sku.trim(),
+      barcode,
       price: data.price,
       currency: data.currency.trim().toUpperCase(),
       options: data.options ?? {},
@@ -373,7 +451,12 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
 
   async updateVariant(
     sku: string,
-    patch: Partial<Pick<VariantEntity, 'price' | 'currency' | 'options' | 'compare_at_price' | 'image_path' | 'description'>>,
+    patch: Partial<
+      Pick<
+        VariantEntity,
+        'price' | 'currency' | 'options' | 'compare_at_price' | 'image_path' | 'description' | 'barcode'
+      >
+    >,
   ): Promise<VariantEntity | null> {
     const res = await this.variants.updateOne({ sku }, { $set: patch })
     if (!res.matchedCount) return null
@@ -801,4 +884,26 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     const result = await this.variants.updateOne({ product_slug: productSlug, sku } as never, { $set: set })
     return result.matchedCount > 0
   }
+
+
+  /** Resumen de valoración denormalizado para tarjetas de catálogo (lo escribe el módulo de reseñas). */
+  async updateRatingSummary(productSlug: string, average: number, count: number): Promise<void> {
+    await this.collection.updateOne(
+      { slug: productSlug } as never,
+      { $set: { average_rating: average, reviews_count: count, updated_at: new Date() } } as never,
+    )
+  }
+  /** Tasas de IVA por slug en una sola consulta (para congelar la tasa en cada línea de la orden). */
+  async findTaxRatesBySlugs(slugs: string[]): Promise<Map<string, number | null>> {
+    const unique = [...new Set(slugs.filter(Boolean))]
+    const rates = new Map<string, number | null>()
+    if (!unique.length) return rates
+    const docs = await this.collection
+      .find({ slug: { $in: unique } } as never)
+      .project({ slug: 1, tax_rate: 1 })
+      .toArray()
+    for (const doc of docs) rates.set(String(doc.slug), typeof doc.tax_rate === 'number' ? doc.tax_rate : null)
+    return rates
+  }
+
 }

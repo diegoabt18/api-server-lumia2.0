@@ -9,7 +9,6 @@ import type { ProductionConfigRepository } from '../infrastructure/production-co
 import type { ProductionAuditRepository } from '../infrastructure/production-audit.repository.js'
 import type { RecipeRepository } from '../infrastructure/recipe.repository.js'
 import { calculateMaterialConsumptionCostAmount } from '../domain/unit-cost-engine/index.js'
-import { UnitConversionService } from './unit-conversion.service.js'
 
 export class CostingService {
   constructor(
@@ -17,7 +16,6 @@ export class CostingService {
     private readonly materials: MaterialRepository,
     private readonly config: ProductionConfigRepository,
     private readonly audit: ProductionAuditRepository,
-    private readonly conversion: UnitConversionService,
   ) {}
 
   async calculateRecipeCost(recipeId: string, userId: string) {

@@ -1,9 +1,12 @@
 import { AppError } from '../../../common/errors/app.error.js'
 import { buildPaginationMeta, resolvePagingQuery } from '../../../common/utils/pagination.js'
+import type { OrderStockService } from '../../sales/services/order-stock.service.js'
+import type { OrderFinancialEvents } from '../../sales/services/order-financial-events.service.js'
 import type { OrderRepository } from '../../sales/infrastructure/order.repository.js'
 import type { UserRepository } from '../../identity/infrastructure/user.repository.js'
 import type { OrderEntity } from '../../sales/domain/order.entity.js'
 import { renderOrderInvoiceHtml } from '../templates/order-invoice.template.js'
+import { renderPosReceiptHtml } from '../../pos/templates/pos-receipt.template.js'
 
 function serializeOrderListItem(o: OrderEntity, userMap: Map<string, { name: string; email: string }>) {
   return {
@@ -17,6 +20,12 @@ function serializeOrderListItem(o: OrderEntity, userMap: Map<string, { name: str
     total: o.total,
     status: o.status,
     paymentStatus: o.paymentStatus,
+    paymentMethod: o.paymentMethod ?? null,
+    channel: o.channel ?? 'online',
+    fulfillment: o.fulfillment ?? 'delivery',
+    fulfillmentStatus: o.fulfillmentStatus ?? null,
+    createdByUserId: o.createdByUserId ?? null,
+    receiptNumber: o.receiptNumber ?? null,
     createdAt: o.createdAt instanceof Date ? o.createdAt.toISOString() : o.createdAt,
     cancellationRequested: o.cancellationRequested ?? false,
     cancellationRequestStatus: o.cancellationRequestStatus ?? null,
@@ -25,17 +34,24 @@ function serializeOrderListItem(o: OrderEntity, userMap: Map<string, { name: str
   }
 }
 
+const isPaidState = (o: { status?: string; paymentStatus?: string } | null | undefined) =>
+  !!o && (o.status === 'paid' || o.paymentStatus === 'paid' || o.paymentStatus === 'payment_completed')
+
 export class AdminOrderService {
   constructor(
     private readonly orders: OrderRepository,
     private readonly users: UserRepository,
+    private readonly stock: OrderStockService,
+    private readonly deliveryEvents: OrderFinancialEvents,
   ) {}
 
   async list(query: Record<string, unknown>) {
     const { page, limit, skip, search } = resolvePagingQuery(query, { defaultLimit: 20, maxLimit: 100 })
+    const channelRaw = typeof query.channel === 'string' ? query.channel.trim() : ''
+    const channel = channelRaw === 'pos' || channelRaw === 'online' ? channelRaw : undefined
     const [orderList, total] = await Promise.all([
-      this.orders.listAllAdmin(skip, limit, search || undefined),
-      this.orders.countAllAdmin(search || undefined),
+      this.orders.listAllAdmin(skip, limit, search || undefined, channel),
+      this.orders.countAllAdmin(search || undefined, channel),
     ])
 
     const userIds = orderList.filter((o) => o.userId).map((o) => o.userId!)
@@ -98,6 +114,15 @@ export class AdminOrderService {
         paymentStatus: order.paymentStatus ?? null,
         fulfillmentStatus: order.fulfillmentStatus ?? null,
         paymentMethod: order.paymentMethod ?? null,
+        cashReceived: order.cashReceived ?? null,
+        changeGiven: order.changeGiven ?? null,
+        transferReference: order.transferReference ?? null,
+        paymentConfirmedByUserId: order.paymentConfirmedByUserId ?? null,
+        paymentConfirmedAt: order.paymentConfirmedAt instanceof Date ? order.paymentConfirmedAt.toISOString() : (order.paymentConfirmedAt ? String(order.paymentConfirmedAt) : null),
+        channel: order.channel ?? 'online',
+        fulfillment: order.fulfillment ?? 'delivery',
+        createdByUserId: order.createdByUserId ?? null,
+        receiptNumber: order.receiptNumber ?? null,
         currency: order.currency ?? 'COP',
         total: order.total,
         subtotal: order.subtotal ?? 0,
@@ -130,6 +155,7 @@ export class AdminOrderService {
         finalPaymentAmount: order.finalPaymentAmount ?? null,
         finalPaymentPaidAt: order.finalPaymentPaidAt instanceof Date ? order.finalPaymentPaidAt.toISOString() : null,
         paidAt: order.paidAt instanceof Date ? order.paidAt.toISOString() : null,
+        deliveredAt: order.deliveredAt instanceof Date ? order.deliveredAt.toISOString() : null,
       },
     }
   }
@@ -144,8 +170,14 @@ export class AdminOrderService {
     },
     actorId: string,
   ) {
+    const before = await this.orders.findEntityById(id)
     const updated = await this.orders.adminPatch(id, patch, actorId)
     if (!updated) throw AppError.notFound('Orden no encontrada')
+    if (!isPaidState(before) && isPaidState(updated)) await this.stock.applyOnPaid(updated)
+    if (updated.status === 'cancelled' && before?.status !== 'cancelled') await this.stock.restoreIfDecremented(updated)
+    if (updated.status === 'delivered' && before?.status !== 'delivered') {
+      await this.deliveryEvents.recordDelivered(updated, actorId, updated.deliveredAt instanceof Date ? updated.deliveredAt : new Date())
+    }
     return {
       order: {
         id: updated._id,
@@ -169,6 +201,7 @@ export class AdminOrderService {
   ) {
     const updated = await this.orders.resolveCancellationRequest(id, resolution, actorId, adminNote)
     if (!updated) throw AppError.notFound('Orden no encontrada')
+    if (updated.status === 'cancelled') await this.stock.restoreIfDecremented(updated)
     return { ok: true, order: { id: updated._id, status: updated.status, cancellationRequestStatus: updated.cancellationRequestStatus } }
   }
 
@@ -205,6 +238,7 @@ export class AdminOrderService {
     }
     const updated = await this.orders.markFinalPaymentPaid(id, amount, actorId, note)
     if (!updated) throw AppError.notFound('Orden no encontrada')
+    await this.stock.applyOnPaid(updated)
     return { ok: true, message: 'Pago final registrado correctamente' }
   }
 
@@ -214,5 +248,16 @@ export class AdminOrderService {
     const html = renderOrderInvoiceHtml(order, id)
     const orderNumber = order.orderNumber || id.slice(0, 8)
     return { html, filename: `factura-${orderNumber.replace(/[^a-zA-Z0-9]/g, '-')}.html` }
+  }
+
+  async renderReceipt(id: string) {
+    const order = await this.orders.findEntityById(id)
+    if (!order) throw AppError.notFound('Orden no encontrada')
+    const html = renderPosReceiptHtml(order)
+    const receipt = order.receiptNumber || order.orderNumber || id.slice(0, 8)
+    return {
+      html,
+      filename: `comprobante-${receipt.replace(/[^a-zA-Z0-9]/g, '-')}.html`,
+    }
   }
 }

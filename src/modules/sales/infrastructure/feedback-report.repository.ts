@@ -31,6 +31,22 @@ export class FeedbackReportRepository {
     }
   }
 
+  async create(input: {
+    entityType: 'review' | 'question' | 'answer'
+    entityId: string
+    userId: string
+    reason: string
+  }): Promise<void> {
+    await this.collection.insertOne({
+      entity_type: input.entityType,
+      entity_id: input.entityId,
+      user_id: input.userId,
+      reason: input.reason,
+      status: 'pending',
+      created_at: new Date(),
+    } as never)
+  }
+
   async patchQuestion(id: string, patch: { hidden?: boolean; answered?: boolean }): Promise<boolean> {
     if (!ObjectId.isValid(id)) return false
     const col = this.db.collection('product_questions')

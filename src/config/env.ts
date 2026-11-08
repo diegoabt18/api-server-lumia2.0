@@ -59,7 +59,11 @@ const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
 
-  // MercadoPago (fase futura)
+  // MercadoPago (preparado, desactivado). Las credenciales NO activan la integración.
+  MERCADOPAGO_ENABLED: z
+    .string()
+    .transform((v) => v === 'true')
+    .default('false'),
   MP_ACCESS_TOKEN: z.string().optional(),
   MP_WEBHOOK_SECRET: z.string().optional(),
 

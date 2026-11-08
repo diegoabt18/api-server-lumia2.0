@@ -1,9 +1,13 @@
 import type { StoreSettingsRepository } from '../../store/infrastructure/store-settings.repository.js'
 import type { ShippingConfig } from '../../../common/config/shipping-config.js'
 import type { CurrencyConfig } from '../../../common/config/currency-config.js'
-import type { StoreCustomerFrontSettings } from '../../store/infrastructure/store-settings.repository.js'
+import type {
+  BankTransferDetails,
+  PaymentMethodState,
+  StoreCustomerFrontSettings,
+} from '../../store/infrastructure/store-settings.repository.js'
 import {
-  AVAILABLE_PAYMENT_METHODS,
+  resolvePaymentMethodDisplay,
   type PaymentMethod,
 } from '../../payments/domain/payment-method.js'
 
@@ -41,22 +45,26 @@ export class AdminStoreService {
   async getPaymentSettings() {
     const settings = await this.settings.getPaymentSettings()
     const methodsWithMeta = settings.methods.map((m) => {
-      const meta = AVAILABLE_PAYMENT_METHODS.find((pm) => pm.id === (m.methodId as PaymentMethod))
+      const display = resolvePaymentMethodDisplay(m.methodId as PaymentMethod, m)
       return {
         methodId: m.methodId,
         isActive: m.isActive,
-        displayName: meta?.displayName ?? m.methodId,
-        description: meta?.description ?? '',
-        icon: meta?.icon ?? null,
-        requiresRedirect: meta?.requiresRedirect ?? false,
-        estimatedProcessingTime: meta?.estimatedProcessingTime ?? '',
+        ...display,
       }
     })
-    return { methods: methodsWithMeta, updatedAt: settings.updatedAt?.toISOString() ?? null }
+    return {
+      methods: methodsWithMeta,
+      bankTransferDetails: settings.bankTransferDetails ?? null,
+      // Stored documents may hold updatedAt as a Date or as an ISO string (legacy imports).
+      updatedAt: settings.updatedAt ? new Date(settings.updatedAt).toISOString() : null,
+    }
   }
 
-  async patchPaymentSettings(methods: Array<{ methodId: PaymentMethod; isActive: boolean }>) {
-    await this.settings.upsertPaymentSettings(methods)
+  async patchPaymentSettings(
+    methods: Array<PaymentMethodState>,
+    bankTransferDetails?: BankTransferDetails | null,
+  ) {
+    await this.settings.upsertPaymentSettings(methods, bankTransferDetails)
     return this.getPaymentSettings()
   }
 

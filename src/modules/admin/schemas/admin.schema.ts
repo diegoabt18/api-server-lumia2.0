@@ -14,6 +14,7 @@ export const adminProductCreateSchema = z.object({
   brand: z.string().max(120).optional(),
   status: z.enum(['active', 'inactive']).optional(),
   image_path: z.string().max(500).optional(),
+  tax_rate: z.number().min(0).max(100).nullable().optional(),
 })
 
 export const adminProductPatchSchema = z
@@ -31,6 +32,7 @@ export const adminProductPatchSchema = z
     brand: z.string().max(120).optional().nullable(),
     status: z.enum(['active', 'inactive']).optional(),
     image_path: z.string().max(500).optional().nullable(),
+    tax_rate: z.number().min(0).max(100).nullable().optional(),
   })
   .refine((o) => Object.keys(o).length > 0, { message: 'Vacío' })
 
@@ -155,6 +157,13 @@ export type StoreBannerUpsertInput = z.infer<typeof storeBannerUpsertSchema>
 
 export const adminVariantCreateSchema = z.object({
   sku: z.string().min(1).max(80).regex(/^[A-Za-z0-9._\-]+$/),
+  barcode: z
+    .string()
+    .trim()
+    .min(4)
+    .max(64)
+    .regex(/^[A-Za-z0-9._-]+$/)
+    .optional(),
   price: z.number().positive(),
   currency: z.string().min(1).max(8),
   options: z.record(z.string()).optional(),
@@ -164,6 +173,17 @@ export const adminVariantCreateSchema = z.object({
 
 export const adminVariantPatchSchema = z
   .object({
+    barcode: z
+      .union([
+        z
+          .string()
+          .trim()
+          .min(4)
+          .max(64)
+          .regex(/^[A-Za-z0-9._-]+$/),
+        z.null(),
+      ])
+      .optional(),
     price: z.number().positive().optional(),
     currency: z.string().min(1).max(8).optional(),
     options: z.record(z.string()).optional(),
@@ -215,16 +235,30 @@ export const adminProductOptionsSchema = z.object({
     .max(3),
 })
 
+export const adminBankTransferDetailsSchema = z
+  .object({
+    bankName: z.string().trim().min(1).max(120),
+    accountNumber: z.string().trim().min(1).max(80),
+    accountHolder: z.string().trim().min(1).max(160),
+    taxId: z.string().trim().max(40).optional(),
+    instructions: z.string().trim().max(500).optional(),
+  })
+  .nullable()
+
 export const adminPaymentMethodsSchema = z.object({
   methods: z
     .array(
       z.object({
-        methodId: z.enum(['mercadopago', 'manual']),
+        methodId: z.enum(['mercadopago', 'manual', 'cash', 'bank_transfer']),
         isActive: z.boolean(),
+        displayName: z.string().trim().min(1).max(80).optional(),
+        description: z.string().trim().max(300).optional(),
+        estimatedProcessingTime: z.string().trim().max(60).optional(),
       }),
     )
     .min(1)
     .max(10),
+  bankTransferDetails: adminBankTransferDetailsSchema.optional(),
 })
 
 export const adminRevokeSessionSchema = z.object({

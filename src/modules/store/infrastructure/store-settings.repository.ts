@@ -15,10 +15,30 @@ const CUSTOMER_COL = 'store_customer_front_settings'
 const PAYMENT_COL = 'store_payment_settings'
 const DOC_ID = 'default'
 
-export type PaymentMethodState = { methodId: string; isActive: boolean }
+/**
+ * Payment method state stored in `store_payment_settings.methods`. Display metadata is optional:
+ * when absent, the presentation layer falls back to the code defaults in payment-method.ts.
+ */
+export type PaymentMethodState = {
+  methodId: string
+  isActive: boolean
+  displayName?: string
+  description?: string
+  estimatedProcessingTime?: string
+}
+
+/** Bank account details shown when collecting a bank_transfer payment (e.g. POS). */
+export type BankTransferDetails = {
+  bankName: string
+  accountNumber: string
+  accountHolder: string
+  taxId?: string
+  instructions?: string
+}
 
 export type StorePaymentSettings = {
   methods: PaymentMethodState[]
+  bankTransferDetails?: BankTransferDetails | null
   updatedAt?: Date
 }
 
@@ -39,7 +59,20 @@ function defaultPaymentMethodStates(): PaymentMethodState[] {
   return [
     { methodId: 'mercadopago', isActive: true },
     { methodId: 'manual', isActive: true },
+    { methodId: 'cash', isActive: true },
+    { methodId: 'bank_transfer', isActive: true },
   ]
+}
+
+/**
+ * Stored settings may predate newer methods (e.g. cash / bank_transfer). A method with no stored
+ * entry falls back to its default state instead of being treated as disabled.
+ * Stored entries always win, so explicit deactivations are respected.
+ */
+function withDefaultPaymentMethods(stored: PaymentMethodState[] | undefined): PaymentMethodState[] {
+  const known = new Set((stored ?? []).map((method) => method.methodId))
+  const missing = defaultPaymentMethodStates().filter((method) => !known.has(method.methodId))
+  return [...(stored ?? []), ...missing]
 }
 
 function defaultCustomerSettings(): StoreCustomerFrontSettings {
@@ -122,15 +155,27 @@ export class StoreSettingsRepository {
     const doc = await getCollection<StorePaymentSettings & { _id: string }>(this.db, PAYMENT_COL).findOne({
       _id: DOC_ID,
     } as never)
-    if (!doc) return { methods: defaultPaymentMethodStates() }
-    return { methods: doc.methods ?? defaultPaymentMethodStates(), updatedAt: doc.updatedAt }
+    if (!doc) return { methods: defaultPaymentMethodStates(), bankTransferDetails: null }
+    return {
+      methods: withDefaultPaymentMethods(doc.methods),
+      bankTransferDetails: doc.bankTransferDetails ?? null,
+      updatedAt: doc.updatedAt,
+    }
   }
 
-  async upsertPaymentSettings(methods: PaymentMethodState[]): Promise<StorePaymentSettings> {
+  async upsertPaymentSettings(
+    methods: PaymentMethodState[],
+    bankTransferDetails?: BankTransferDetails | null,
+  ): Promise<StorePaymentSettings> {
     const now = new Date()
+    // Persist every known method so a missing entry can never be read as "disabled".
+    const $set: Record<string, unknown> = { methods: withDefaultPaymentMethods(methods), updatedAt: now }
+    if (bankTransferDetails !== undefined) {
+      $set.bankTransferDetails = bankTransferDetails
+    }
     await getCollection(this.db, PAYMENT_COL).updateOne(
       { _id: DOC_ID } as never,
-      { $set: { methods, updatedAt: now }, $setOnInsert: { _id: DOC_ID } },
+      { $set, $setOnInsert: { _id: DOC_ID } },
       { upsert: true },
     )
     return this.getPaymentSettings()

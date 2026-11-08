@@ -10,6 +10,7 @@ function serializeProduct(p: ProductDomain) {
     id: p.id,
     name: p.name,
     slug: p.slug,
+    taxRate: p.taxRate ?? null,
     description: p.description ?? null,
     categorySlug: p.categorySlug ?? null,
     brand: p.brand ?? null,
@@ -26,6 +27,7 @@ function serializeAdminVariant(v: VariantDomain) {
   return {
     id: v.id ?? v.sku,
     sku: v.sku,
+    barcode: v.barcode ?? null,
     price: v.price,
     currency: v.currency,
     options: v.options ?? {},
@@ -103,6 +105,7 @@ export class AdminProductService {
     brand?: string
     status?: 'active' | 'inactive'
     image_path?: string
+    tax_rate?: number | null
   }) {
     if (data.category_slug) {
       const cat = await this.categories.findBySlug(data.category_slug)
@@ -127,9 +130,11 @@ export class AdminProductService {
       brand?: string | null
       status: 'active' | 'inactive'
       image_path?: string | null
+      tax_rate?: number | null
     }>,
   ) {
     const normalized: Parameters<ProductRepository['updateProduct']>[1] = {}
+    if (patch.tax_rate !== undefined) normalized.tax_rate = patch.tax_rate
     if (patch.name !== undefined) normalized.name = patch.name
     if (patch.slug !== undefined) normalized.slug = patch.slug
     if (patch.description !== undefined) normalized.description = patch.description ?? undefined
@@ -167,6 +172,7 @@ export class AdminProductService {
     const data = product.variants.map((v) => ({
       id: v.id ?? v.sku,
       sku: v.sku,
+      barcode: v.barcode ?? null,
       price: v.price,
       currency: v.currency,
       options: v.options ?? {},
@@ -186,6 +192,7 @@ export class AdminProductService {
     productIdOrSlug: string,
     data: {
       sku: string
+      barcode?: string
       price: number
       currency: string
       options?: Record<string, string>
@@ -199,6 +206,7 @@ export class AdminProductService {
       const v = await this.products.createVariant({
         product_slug: product.slug,
         sku: data.sku,
+        barcode: data.barcode,
         price: data.price,
         currency: data.currency,
         options: data.options,
@@ -208,6 +216,7 @@ export class AdminProductService {
       return {
         variant: {
           sku: v.sku,
+          barcode: v.barcode ?? null,
           price: v.price,
           currency: v.currency,
           options: v.options ?? {},
@@ -217,6 +226,7 @@ export class AdminProductService {
       }
     } catch (e: unknown) {
       if ((e as Error).message === 'DUPLICATE_SKU') throw AppError.conflict('Ya existe una variante con ese SKU')
+      if ((e as Error).message === 'DUPLICATE_BARCODE') throw AppError.conflict('Ya existe una variante con ese código de barras')
       throw e
     }
   }
@@ -225,6 +235,7 @@ export class AdminProductService {
     productIdOrSlug: string,
     sku: string,
     patch: Partial<{
+      barcode: string | null
       price: number
       currency: string
       options: Record<string, string>
@@ -239,6 +250,15 @@ export class AdminProductService {
       throw AppError.notFound('La variante no pertenece a este producto')
     }
     const normalized: Parameters<ProductRepository['updateVariant']>[1] = {}
+    if (patch.barcode !== undefined) {
+      if (patch.barcode) {
+        const owner = await this.products.findVariantByBarcode(patch.barcode)
+        if (owner && owner.sku !== sku) {
+          throw AppError.conflict('Ya existe una variante con ese código de barras')
+        }
+      }
+      normalized.barcode = patch.barcode ?? null
+    }
     if (patch.price !== undefined) normalized.price = patch.price
     if (patch.currency !== undefined) normalized.currency = patch.currency.trim().toUpperCase()
     if (patch.options !== undefined) normalized.options = patch.options
@@ -249,6 +269,7 @@ export class AdminProductService {
     return {
       variant: {
         sku: updated.sku,
+        barcode: updated.barcode ?? null,
         price: updated.price,
         currency: updated.currency,
         options: updated.options ?? {},

@@ -250,7 +250,10 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
   api.patch('/admin/store-payment-settings', { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) }, async (request) => {
     const parsed = adminPaymentMethodsSchema.safeParse(request.body)
     if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
-    return services.adminStore.patchPaymentSettings(parsed.data.methods)
+    return services.adminStore.patchPaymentSettings(
+      parsed.data.methods,
+      parsed.data.bankTransferDetails,
+    )
   })
 
   // ─── Promotions (4.3) ───
@@ -512,12 +515,6 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
     const { id, sku } = request.params as { id: string; sku: string }
     return services.adminCostSummary.listSnapshots(id, decodeURIComponent(sku))
   })
-
-  // ─── Product images: generación AVIF vive en Lumia (Nitro + sharp), no aquí ───
-  api.post('/admin/product-images/generate', { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_UPDATE) }, async () => ({
-    ok: false,
-    message: 'Image generation runs on Lumia admin (local Nitro), not on this API',
-  }))
 
   // ─── Registry modules POST ───
   api.post('/admin/registry/modules', { preHandler: g(PERMISSION_REGISTRY.ADMIN_PERMISSIONS_MANAGE) }, async (request) => {

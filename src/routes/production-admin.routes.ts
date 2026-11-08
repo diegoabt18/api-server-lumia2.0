@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { z } from 'zod'
 import type { AppContext } from '../app.context.js'
 import { AppError } from '../common/errors/app.error.js'
 import { PERMISSION_REGISTRY } from '../common/permissions/registry.js'
@@ -50,7 +51,27 @@ export async function registerProductionAdminRoutes(api: FastifyInstance, ctx: A
 
   api.get('/admin/production/materials/:id', { preHandler: g(PERMISSION_REGISTRY.MATERIALS_READ) }, async (request) => {
     const { id } = request.params as { id: string }
-    return services.productionMaterials.get(id)
+    const detail = await services.productionMaterials.get(id)
+    // Lumia lee data.suppliers del detalle; se incluye aquí para mantener el contrato del backend embebido.
+    const suppliers = await services.productionMaterialSuppliers.list(id)
+    return { ...detail, data: { ...detail.data, suppliers } }
+  })
+
+  const linkSupplierBody = z.object({
+    supplierId: z.string().min(1),
+    isPreferred: z.boolean().optional(),
+  })
+
+  api.post('/admin/production/materials/:id/suppliers', { preHandler: g(PERMISSION_REGISTRY.MATERIALS_UPDATE) }, async (request) => {
+    const { id } = request.params as { id: string }
+    const parsed = linkSupplierBody.safeParse(request.body ?? {})
+    if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+    return services.productionMaterialSuppliers.link(id, parsed.data.supplierId, parsed.data.isPreferred === true)
+  })
+
+  api.delete('/admin/production/materials/:id/suppliers/:supplierId', { preHandler: g(PERMISSION_REGISTRY.MATERIALS_UPDATE) }, async (request) => {
+    const { id, supplierId } = request.params as { id: string; supplierId: string }
+    return services.productionMaterialSuppliers.unlink(id, supplierId)
   })
 
   api.patch('/admin/production/materials/:id', { preHandler: g(PERMISSION_REGISTRY.MATERIALS_UPDATE) }, async (request) => {
@@ -76,10 +97,6 @@ export async function registerProductionAdminRoutes(api: FastifyInstance, ctx: A
     if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
     return services.productionMaterials.registerPrice(id, parsed.data, userId(request))
   })
-
-  api.post('/admin/production/materials/images/generate', { preHandler: g(PERMISSION_REGISTRY.MATERIALS_UPDATE) }, async () =>
-    services.productionMaterials.generateImage(),
-  )
 
   // ─── Suppliers ───
   api.get('/admin/production/suppliers', { preHandler: g(PERMISSION_REGISTRY.SUPPLIERS_READ) }, async (request) =>

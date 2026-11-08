@@ -4,7 +4,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['tests/**/*.test.ts'],
+    // Las pruebas de integración contra MongoDB tienen su propia configuración (vitest.integration.config.ts).
+    include: ['tests/unit/**/*.test.ts'],
   },
   resolve: {
     alias: {

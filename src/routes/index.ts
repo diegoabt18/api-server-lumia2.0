@@ -1,10 +1,14 @@
 import type { FastifyInstance } from 'fastify'
 import { isAppError } from '../common/errors/app.error.js'
+import { hasPermission, isPermissionId } from '../common/permissions/registry.js'
 import { getProductionModuleStatus } from '../modules/production/index.js'
 import { registerStoreRoutes } from './store.routes.js'
 import { registerPaymentRoutes } from './payments.routes.js'
+import { registerOnlinePaymentRoutes } from './online-payments.routes.js'
 import { registerStorePublicRoutes, registerAuthExtendedRoutes } from './store-public.routes.js'
 import { registerAdminRoutes } from './admin.routes.js'
+import { registerPosAdminRoutes } from './pos-admin.routes.js'
+import { registerImageRoutes } from './images.routes.js'
 import { registerProductionAdminRoutes } from './production-admin.routes.js'
 import { registerProductionPublicRoutes } from './production-public.routes.js'
 import { registerSecurityRoutes } from './security.routes.js'
@@ -204,6 +208,14 @@ export async function registerApiRoutes(app: FastifyInstance) {
       return { ok: true }
     })
 
+    // Comprobación para la interfaz (Lumia oculta opciones). El servidor vuelve a decidir en cada endpoint.
+    api.get('/auth/can-access', { preHandler: authGuard }, async (request) => {
+      const permission = (request.query as { permission?: unknown }).permission
+      if (!isPermissionId(permission)) throw AppError.badRequest('Invalid permission')
+      const req = request as import('../modules/identity/middleware/auth.middleware.js').AuthenticatedRequest
+      return { permission, allowed: hasPermission(req.permissionKeys, permission) }
+    })
+
     api.get('/auth/me', {
       preHandler: authGuard,
       schema: { tags: ['auth'], summary: 'Current user', security: [{ bearerAuth: [] }, { cookieAuth: [] }] },
@@ -224,11 +236,14 @@ export async function registerApiRoutes(app: FastifyInstance) {
 
     await registerStoreRoutes(api, app.ctx)
     await registerPaymentRoutes(api, app.ctx)
+    await registerOnlinePaymentRoutes(api, app.ctx)
     await registerStorePublicRoutes(api, app.ctx)
     await registerAuthExtendedRoutes(api, app.ctx)
     await registerSecurityRoutes(api, app.ctx)
     await registerLumichatRoutes(api, app.ctx)
     await registerAdminRoutes(api, app.ctx)
+    await registerPosAdminRoutes(api, app.ctx)
+    await registerImageRoutes(api, app.ctx)
     await registerProductionAdminRoutes(api, app.ctx)
     await registerProductionPublicRoutes(api, app.ctx)
 

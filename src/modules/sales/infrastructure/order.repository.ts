@@ -12,8 +12,11 @@ function toEntity(doc: OrderDocument): OrderEntity {
 }
 
 export class OrderRepository extends BaseRepository<OrderDocument> {
+  private readonly db: Db
+
   constructor(db: Db) {
     super(getCollection(db, 'orders'))
+    this.db = db
   }
 
   async ensureIndexes(): Promise<void> {
@@ -22,6 +25,17 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
       { key: { userId: 1, createdAt: -1 } },
       { key: { status: 1 } },
       { key: { createdAt: -1 } },
+      { key: { channel: 1, createdAt: -1 } },
+      {
+        key: { idempotencyKey: 1 },
+        unique: true,
+        partialFilterExpression: { idempotencyKey: { $type: 'string' } },
+      },
+      {
+        key: { receiptNumber: 1 },
+        unique: true,
+        partialFilterExpression: { receiptNumber: { $type: 'string' } },
+      },
     ])
   }
 
@@ -32,6 +46,23 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
     const count = await this.count({})
     const seq = String(count + 1).padStart(6, '0')
     return `${prefix}-${year}-${seq}`
+  }
+
+  /**
+   * Consecutivo atómico para ventas presenciales. Usa una colección de contadores
+   * para evitar colisiones del `count()` bajo concurrencia.
+   */
+  async generatePosOrderNumber(): Promise<string> {
+    const env = getEnv()
+    const year = new Date().getFullYear()
+    const counters = getCollection<{ _id: string; seq: number }>(this.db, 'counters')
+    const counter = await counters.findOneAndUpdate(
+      { _id: `pos_order_${year}` } as never,
+      { $inc: { seq: 1 } } as never,
+      { upsert: true, returnDocument: 'after' },
+    )
+    const seq = counter?.seq ?? 1
+    return `${env.ORDER_NUMBER_PREFIX}-POS-${year}-${String(seq).padStart(6, '0')}`
   }
 
   async createOrder(data: Omit<OrderEntity, '_id' | 'createdAt' | 'orderNumber'>): Promise<OrderDomain> {
@@ -51,6 +82,28 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
   async findByIdSafe(id: string): Promise<OrderDomain | null> {
     const doc = await this.findById(id)
     return doc ? toOrderDomain(toEntity(doc)) : null
+  }
+
+  async findByIdempotencyKey(idempotencyKey: string): Promise<OrderEntity | null> {
+    const doc = await this.findOne({ idempotencyKey } as never)
+    return doc ? toEntity(doc) : null
+  }
+
+  async createPosOrder(
+    data: Omit<OrderEntity, '_id' | 'createdAt' | 'orderNumber' | 'receiptNumber'>,
+    receiptNumber: string,
+  ): Promise<OrderEntity> {
+    const now = new Date()
+    const id = await this.insertOne({
+      ...data,
+      orderNumber: receiptNumber,
+      receiptNumber,
+      createdAt: now,
+      updatedAt: now,
+    } as OrderDocument)
+    const created = await this.findById(id)
+    if (!created) throw new Error('Failed to create POS order')
+    return toEntity(created)
   }
 
   async findByOrderNumber(orderNumber: string): Promise<OrderDomain | null> {
@@ -146,6 +199,7 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
     const result = await this.collection.updateMany(
       {
         status: 'pending',
+        channel: { $ne: 'pos' },
         paymentStatus: { $in: ['unpaid', 'pending', 'pending_manual', 'in_process'] },
         createdAt: { $lt: cutoff },
       } as never,
@@ -164,27 +218,41 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
     return result.modifiedCount
   }
 
-  private buildAdminSearchFilter(search?: string): Record<string, unknown> {
-    if (!search?.trim()) return {}
-    const term = search.trim()
-    return {
-      $or: [
-        { orderNumber: { $regex: term, $options: 'i' } },
-        { customerName: { $regex: term, $options: 'i' } },
-        { email: { $regex: term, $options: 'i' } },
-        { phone: { $regex: term, $options: 'i' } },
-      ],
+  private buildAdminSearchFilter(search?: string, channel?: string): Record<string, unknown> {
+    const clauses: Record<string, unknown>[] = []
+    if (search?.trim()) {
+      const term = search.trim()
+      clauses.push({
+        $or: [
+          { orderNumber: { $regex: term, $options: 'i' } },
+          { customerName: { $regex: term, $options: 'i' } },
+          { email: { $regex: term, $options: 'i' } },
+          { phone: { $regex: term, $options: 'i' } },
+        ],
+      })
     }
+    if (channel === 'pos') {
+      clauses.push({ channel: 'pos' })
+    } else if (channel === 'online') {
+      clauses.push({ $or: [{ channel: 'online' }, { channel: { $exists: false } }] })
+    }
+    if (!clauses.length) return {}
+    return clauses.length === 1 ? clauses[0]! : { $and: clauses }
   }
 
-  async listAllAdmin(skip: number, limit: number, search?: string): Promise<OrderEntity[]> {
-    const filter = this.buildAdminSearchFilter(search)
+  async listAllAdmin(
+    skip: number,
+    limit: number,
+    search?: string,
+    channel?: string,
+  ): Promise<OrderEntity[]> {
+    const filter = this.buildAdminSearchFilter(search, channel)
     const docs = await this.findMany(filter as never, { skip, limit, sort: { createdAt: -1 } })
     return docs.map((d) => toEntity(d))
   }
 
-  async countAllAdmin(search?: string): Promise<number> {
-    return this.count(this.buildAdminSearchFilter(search) as never)
+  async countAllAdmin(search?: string, channel?: string): Promise<number> {
+    return this.count(this.buildAdminSearchFilter(search, channel) as never)
   }
 
   async sumPaidTotal(): Promise<number> {
@@ -222,6 +290,7 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
 
     if (patch.status) {
       set.status = patch.status
+      if (patch.status === 'delivered') set.deliveredAt = now
       if (patch.status === 'cancelled') {
         set.cancelledAt = now
         set.cancelledBy = 'admin'
@@ -264,6 +333,52 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
     const ops: Record<string, unknown> = { $set: set }
     if (events.length) ops.$push = { events: { $each: events } }
     await this.collection.updateOne({ _id: new ObjectId(id) } as never, ops)
+    return this.findEntityById(id)
+  }
+
+  async confirmPosPayment(
+    id: string,
+    details: {
+      actorId: string
+      cashReceived?: number | null
+      changeGiven?: number | null
+      transferReference?: string | null
+    },
+  ): Promise<OrderEntity | null> {
+    if (!ObjectId.isValid(id)) return null
+    const order = await this.findEntityById(id)
+    if (!order) return null
+    const now = new Date()
+    const set: Record<string, unknown> = {
+      status: 'paid',
+      paymentStatus: 'paid',
+      paidAt: now,
+      paymentConfirmedByUserId: details.actorId,
+      paymentConfirmedAt: now,
+      updatedAt: now,
+    }
+    if (details.cashReceived !== undefined) set.cashReceived = details.cashReceived
+    if (details.changeGiven !== undefined) set.changeGiven = details.changeGiven
+    if (details.transferReference !== undefined) set.transferReference = details.transferReference
+
+    const event: OrderEvent = {
+      type: 'payment.manual_confirmed',
+      timestamp: now,
+      source: 'admin',
+      actorId: details.actorId,
+      data: {
+        paymentMethod: order.paymentMethod,
+        total: order.total,
+        cashReceived: details.cashReceived ?? null,
+        changeGiven: details.changeGiven ?? null,
+        transferReference: details.transferReference ?? null,
+      },
+    }
+
+    await this.collection.updateOne(
+      { _id: new ObjectId(id) } as never,
+      { $set: set, $push: { events: event } },
+    )
     return this.findEntityById(id)
   }
 
@@ -404,4 +519,83 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
       .toArray()
     return rows.length > 0 ? Number((rows[0] as { total: number }).total) : 0
   }
+
+
+  /**
+   * Marca una orden en línea como pagada con Mercado Pago. Idempotente: si ya está pagada no
+   * hace nada y devuelve false, así un webhook duplicado no repite efectos.
+   */
+  async markOnlinePaid(
+    orderId: string,
+    data: { paymentMethod: string; providerPaymentId: string; paidAt: Date; actorId?: string },
+  ): Promise<boolean> {
+    if (!ObjectId.isValid(orderId)) return false
+    const now = new Date()
+    const result = await this.collection.updateOne(
+      { _id: new ObjectId(orderId), status: { $ne: 'paid' } } as never,
+      {
+        $set: {
+          status: 'paid',
+          paymentStatus: 'paid',
+          paidAt: data.paidAt,
+          paymentMethod: data.paymentMethod,
+          mpPaymentId: data.providerPaymentId,
+          updatedAt: now,
+        },
+        $push: {
+          events: {
+            type: 'payment.approved',
+            timestamp: now,
+            source: 'provider',
+            data: { paymentMethod: data.paymentMethod, providerPaymentId: data.providerPaymentId },
+          },
+        },
+      } as never,
+    )
+    return result.modifiedCount > 0
+  }
+  /**
+   * Reclama el descuento de stock de una orden. Es atómico: solo una llamada concurrente obtiene
+   * `true`, así una orden nunca descuenta stock dos veces.
+   */
+  async claimStockDecrement(id: string): Promise<boolean> {
+    if (!ObjectId.isValid(id)) return false
+    const now = new Date()
+    const res = await this.collection.updateOne(
+      { _id: new ObjectId(id), stockDecrementedAt: null } as never,
+      { $set: { stockDecrementedAt: now, updatedAt: now } } as never,
+    )
+    return res.modifiedCount > 0
+  }
+
+  /** Registra líneas que no se pudieron descontar, para revisión del administrador. */
+  async recordInventoryFailure(id: string, details: string[]): Promise<void> {
+    if (!ObjectId.isValid(id) || !details.length) return
+    const now = new Date()
+    await this.collection.updateOne(
+      { _id: new ObjectId(id) } as never,
+      {
+        $push: {
+          events: {
+            type: 'inventory.updated',
+            timestamp: now,
+            source: 'system',
+            data: { error: 'INVENTORY_DECREMENT_FAILED', details },
+          },
+        },
+      } as never,
+    )
+  }
+
+  /** Marca que el stock de la orden fue devuelto. Idempotente por la condición del filtro. */
+  async markStockRestored(id: string): Promise<boolean> {
+    if (!ObjectId.isValid(id)) return false
+    const now = new Date()
+    const res = await this.collection.updateOne(
+      { _id: new ObjectId(id), stockDecrementedAt: { $ne: null }, stockRestoredAt: null } as never,
+      { $set: { stockRestoredAt: now, updatedAt: now } } as never,
+    )
+    return res.modifiedCount > 0
+  }
+
 }

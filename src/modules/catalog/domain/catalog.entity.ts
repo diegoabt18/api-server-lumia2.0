@@ -2,6 +2,8 @@ export interface ProductEntity {
   _id?: unknown
   name: string
   slug: string
+  /** Tasa de IVA en porcentaje (0-100). null = no configurada; nunca se asume un valor. */
+  tax_rate?: number | null
   description?: string
   category_slug?: string
   brand?: string
@@ -19,6 +21,8 @@ export interface VariantEntity {
   _id?: unknown
   product_slug: string
   sku: string
+  /** Código de barras EAN/UPC/GTIN. Único por variante cuando está presente. */
+  barcode?: string | null
   description?: string
   options?: Record<string, string>
   option_value_ids?: unknown[]
@@ -55,6 +59,7 @@ export interface ProductDomain {
   id: string
   name: string
   slug: string
+  taxRate?: number | null
   description?: string
   categorySlug?: string
   brand?: string
@@ -72,6 +77,7 @@ export interface VariantDomain {
   id?: string
   sku: string
   productSlug: string
+  barcode?: string | null
   description?: string
   options: Record<string, string>
   optionValueIds?: string[]
@@ -124,6 +130,7 @@ export function toProductDomain(e: ProductEntity): ProductDomain {
     id: String(e._id),
     name: e.name,
     slug: e.slug,
+    taxRate: e.tax_rate ?? null,
     description: e.description,
     categorySlug: e.category_slug,
     brand: e.brand,

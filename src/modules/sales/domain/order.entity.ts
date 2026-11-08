@@ -15,6 +15,9 @@ export type OrderPaymentStatus =
 
 export type CancelledBy = 'customer' | 'admin' | 'system'
 export type CancellationRequestStatus = 'requested' | 'approved' | 'rejected' | 'info_needed'
+export type OrderChannel = 'online' | 'pos'
+export type OrderFulfillment = 'delivery' | 'in_store'
+export type PosPaymentState = 'pending_manual' | 'paid'
 
 export interface OrderEvent {
   type: string
@@ -26,6 +29,8 @@ export interface OrderEvent {
 
 export interface OrderItemEntity {
   productId: string
+  /** Tasa de IVA (%) vigente al vender; congelada en la línea. null = no configurada. */
+  taxRate?: number | null
   productSlug?: string
   variantSku?: string
   variantName?: string
@@ -36,6 +41,10 @@ export interface OrderItemEntity {
   selectionLabel?: string
   selectedOptions?: Array<{ label: string; value: string }>
   imageUrl?: string
+  /** Precio de catálogo antes de promoción (solo POS). */
+  originalUnitPrice?: number
+  promotionPercentOff?: number
+  promotionId?: string
 }
 
 export interface OrderEntity {
@@ -59,9 +68,31 @@ export interface OrderEntity {
   status: OrderStatus
   paymentStatus?: OrderPaymentStatus
   fulfillmentStatus?: string
+  /** Canal comercial. Ausente = online (compatibilidad con pedidos existentes). */
+  channel?: OrderChannel
+  /** Cliente de mostrador (pos_customers) cuando la venta no tiene cuenta web. */
+  posCustomerId?: string | null
+  /** Stock descontado para esta orden (al pagarse o al venderse en POS). */
+  stockDecrementedAt?: Date | null
+  /** Stock devuelto tras cancelar una orden cuyo stock se había descontado. */
+  stockRestoredAt?: Date | null
+  /** Modalidad de entrega. Ausente = delivery (compatibilidad). */
+  fulfillment?: OrderFulfillment
+  /** Administrador que registró una venta POS. */
+  createdByUserId?: string | null
+  /** Consecutivo interno del comprobante POS. */
+  receiptNumber?: string
+  /** Clave de idempotencia del POS (única cuando está presente). */
+  idempotencyKey?: string
   currency?: string
   paymentMethod?: string
   paidAt?: Date | null
+  cashReceived?: number | null
+  changeGiven?: number | null
+  transferReference?: string | null
+  paymentConfirmedByUserId?: string | null
+  paymentConfirmedAt?: Date | null
+  deliveredAt?: Date | null
   depositPercentage?: number
   depositAmount?: number
   depositPaidAt?: Date | null
@@ -97,6 +128,11 @@ export interface OrderDomain {
   total: number
   status: OrderStatus
   paymentStatus?: OrderPaymentStatus
+  fulfillmentStatus?: string
+  channel?: OrderChannel
+  fulfillment?: OrderFulfillment
+  createdByUserId?: string | null
+  receiptNumber?: string
   currency?: string
   createdAt: string
   cancellationRequested?: boolean
@@ -123,6 +159,10 @@ export function toOrderDomain(e: OrderEntity): OrderDomain {
     status: e.status,
     paymentStatus: e.paymentStatus,
     currency: e.currency ?? 'COP',
+    channel: e.channel,
+    fulfillment: e.fulfillment,
+    createdByUserId: e.createdByUserId,
+    receiptNumber: e.receiptNumber,
     createdAt: e.createdAt.toISOString(),
     cancellationRequested: e.cancellationRequested,
     cancellationRequestStatus: e.cancellationRequestStatus,

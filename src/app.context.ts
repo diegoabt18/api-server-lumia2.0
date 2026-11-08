@@ -24,6 +24,13 @@ import { GoogleOAuthService } from './modules/identity/services/google-oauth.ser
 import { InventoryRepository } from './modules/catalog/infrastructure/inventory.repository.js'
 import { PaymentRepository } from './modules/payments/infrastructure/payment.repository.js'
 import { ManualPaymentService } from './modules/payments/services/manual-payment.service.js'
+import { MaterialSupplierRepository } from './modules/production/infrastructure/material-supplier.repository.js'
+import { MaterialSupplierService } from './modules/production/services/material-supplier.service.js'
+import { OrderStockService } from './modules/sales/services/order-stock.service.js'
+import { OrderFinancialEvents } from './modules/sales/services/order-financial-events.service.js'
+import { OnlinePaymentService } from './modules/payments/services/online-payment.service.js'
+import { createMercadoPagoClient } from './modules/payments/infrastructure/mercadopago.client.js'
+import { isMercadoPagoEnabled } from './modules/payments/domain/mercadopago-gate.js'
 import { PromotionRepository } from './modules/catalog/infrastructure/promotion.repository.js'
 import { StoreBannerRepository } from './modules/catalog/infrastructure/store-banner.repository.js'
 import { StoreSettingsRepository } from './modules/store/infrastructure/store-settings.repository.js'
@@ -53,6 +60,7 @@ import { AdminPricingService } from './modules/admin/services/admin-pricing.serv
 import { AdminCostSummaryService } from './modules/admin/services/admin-cost-summary.service.js'
 import { CatalogOptionRepository } from './modules/catalog/infrastructure/catalog-option.repository.js'
 import { RegistryRepository } from './modules/admin/infrastructure/registry.repository.js'
+import { QuestionRepository } from './modules/sales/infrastructure/question.repository.js'
 import { FeedbackReportRepository } from './modules/sales/infrastructure/feedback-report.repository.js'
 import { MaterialRepository } from './modules/production/infrastructure/material.repository.js'
 import { SupplierRepository } from './modules/production/infrastructure/supplier.repository.js'
@@ -85,6 +93,8 @@ import { ProductionConfigService } from './modules/production/services/productio
 import { ProductionAuditService, ProductionDashboardService } from './modules/production/services/dashboard.service.js'
 import { AuthAuditRepository } from './modules/identity/infrastructure/auth-audit.repository.js'
 import { TwoFactorRepository } from './modules/identity/infrastructure/two-factor.repository.js'
+import { PosCustomerRepository } from './modules/identity/infrastructure/pos-customer.repository.js'
+import { FinancialOutboxRepository } from './modules/sales/infrastructure/financial-outbox.repository.js'
 import { TwoFactorService } from './modules/identity/services/two-factor.service.js'
 import { RoleRepository } from './modules/security/infrastructure/role.repository.js'
 import { UserRoleRepository } from './modules/security/infrastructure/user-role.repository.js'
@@ -101,6 +111,7 @@ import { AuthorizationService } from './modules/security/services/authorization.
 import { SecurityAdminService } from './modules/security/services/security-admin.service.js'
 import { SecurityEnterpriseService } from './modules/security/services/security-enterprise.service.js'
 import { PermissionCacheService } from './modules/security/services/permission-cache.service.js'
+import { PosSaleService } from './modules/pos/services/pos-sale.service.js'
 
 export interface AppContext {
   env: Env
@@ -170,6 +181,7 @@ export interface AppContext {
     newsletter: NewsletterService
     googleOAuth: GoogleOAuthService
     manualPayments: ManualPaymentService
+    onlinePayments: OnlinePaymentService
     store: StoreService
     notifications: NotificationService
     push: PushService
@@ -191,7 +203,9 @@ export interface AppContext {
     adminMeta: AdminMetaService
     adminPricing: AdminPricingService
     adminCostSummary: AdminCostSummaryService
+    pos: PosSaleService
     productionMaterials: MaterialService
+    productionMaterialSuppliers: MaterialSupplierService
     productionSuppliers: SupplierService
     productionRecipes: RecipeService
     productionUnits: UnitService
@@ -238,6 +252,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   const carts = new CartRepository(salesDb)
   const favorites = new FavoritesRepository(salesDb)
   const reviews = new ReviewRepository(salesDb)
+  const questionRepo = new QuestionRepository(salesDb)
   const newsletter = new NewsletterRepository(salesDb)
   const payments = new PaymentRepository(salesDb)
   const inventory = new InventoryRepository(catalogDb)
@@ -265,6 +280,8 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   const productionCostSheetsRepo = new CostSheetRepository(productionDb)
   const authAudit = new AuthAuditRepository(identityDb)
   const twoFactorRepo = new TwoFactorRepository(identityDb)
+  const posCustomers = new PosCustomerRepository(identityDb)
+  const financialOutbox = new FinancialOutboxRepository(salesDb)
   const roles = new RoleRepository(identityDb)
   const userRoles = new UserRoleRepository(identityDb)
   const temporalPermissions = new TemporalPermissionRepository(identityDb)
@@ -293,11 +310,15 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     permissionAudit.ensureIndexes().catch((err) => logger.warn({ err }, 'permission_audit indexes skipped')),
     securityWebhooks.ensureIndexes().catch((err) => logger.warn({ err }, 'security_webhooks indexes skipped')),
     products.ensureIndexes().catch((err) => logger.warn({ err }, 'products indexes skipped')),
+    inventory.ensureIndexes().catch((err) => logger.warn({ err }, 'inventory indexes skipped')),
+    posCustomers.ensureIndexes().catch((err) => logger.warn({ err }, 'pos_customers indexes skipped')),
+    financialOutbox.ensureIndexes().catch((err) => logger.warn({ err }, 'financial_outbox indexes skipped')),
     categories.ensureIndexes().catch((err) => logger.warn({ err }, 'categories indexes skipped')),
     orders.ensureIndexes().catch((err) => logger.warn({ err }, 'orders indexes skipped')),
     carts.ensureIndexes().catch((err) => logger.warn({ err }, 'carts indexes skipped')),
     favorites.ensureIndexes().catch((err) => logger.warn({ err }, 'favorites indexes skipped')),
     reviews.ensureIndexes().catch((err) => logger.warn({ err }, 'reviews indexes skipped')),
+    questionRepo.ensureIndexes().catch((err) => logger.warn({ err }, 'product questions indexes skipped')),
     newsletter.ensureIndexes().catch((err) => logger.warn({ err }, 'newsletter indexes skipped')),
     payments.ensureIndexes().catch((err) => logger.warn({ err }, 'payments indexes skipped')),
     promotions.ensureIndexes().catch((err) => logger.warn({ err }, 'promotions indexes skipped')),
@@ -338,6 +359,21 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   const twoFactor = new TwoFactorService(users, twoFactorRepo, authAudit, () => auth)
   auth = new AuthService(users, sessions, jwt, authAudit, twoFactor, authorization)
   const manualPayments = new ManualPaymentService(payments, orders, carts)
+  const mercadoPagoClient = isMercadoPagoEnabled(env)
+    ? createMercadoPagoClient({ accessToken: env.MP_ACCESS_TOKEN as string })
+    : null
+  const onlinePayments = new OnlinePaymentService(
+    payments,
+    orders,
+    carts,
+    inventory,
+    manualPayments,
+    mercadoPagoClient,
+    {
+      frontendUrl: env.FRONTEND_URL.replace(/\/$/, ''),
+      notificationUrl: `${env.APP_URL.replace(/\/$/, '')}/api/mercadopago/webhook`,
+    },
+  )
   const mail = new MailService(
     {
       enabled: env.EMAIL_ENABLED,
@@ -366,7 +402,9 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   const store = new StoreService(storeSettings, storeBanners)
   const adminDashboard = new DashboardService(users, sessions, products, orders, promotions, favorites)
   const adminProducts = new AdminProductService(products, categories, catalogOptions)
-  const adminOrders = new AdminOrderService(orders, users)
+  const orderStock = new OrderStockService(inventory, orders)
+  const orderFinancialEvents = new OrderFinancialEvents(financialOutbox)
+  const adminOrders = new AdminOrderService(orders, users, orderStock, orderFinancialEvents)
   const adminCategories = new AdminCategoryService(categories)
   const adminStore = new AdminStoreService(storeSettings)
   const adminPromotions = new AdminPromotionService(promotions)
@@ -378,11 +416,13 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   const adminSession = new AdminSessionService(sessions)
   const adminAnalytics = new AdminAnalyticsService(orders, users, products)
   const feedbackReports = new FeedbackReportRepository(salesDb)
-  const adminFeedback = new AdminFeedbackService(reviews, feedbackReports)
+  const feedbackService = new FeedbackService(reviews, questionRepo, feedbackReports, products)
+  const adminFeedback = new AdminFeedbackService(reviews, feedbackReports, feedbackService)
   const adminUsers = new AdminUsersService(users, orders, roles, userRoles)
   const adminAudit = new AdminAuditService(authAudit)
   const adminMeta = new AdminMetaService(env)
   const adminPricing = new AdminPricingService(productionConfigRepo)
+  const pos = new PosSaleService(orders, products, inventory, promotions, users, payments, storeSettings, posCustomers, financialOutbox)
 
   const productionUnitConversion = new UnitConversionService(productionUnitsRepo, productionEquivalencesRepo)
   const productionCosting = new CostingService(
@@ -390,11 +430,15 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     productionMaterialsRepo,
     productionConfigRepo,
     productionAuditRepo,
-    productionUnitConversion,
   )
   const adminCostSummary = new AdminCostSummaryService(products, productionRecipesRepo, productionConfigRepo, productionCosting)
 
   const productionMaterials = new MaterialService(productionMaterialsRepo, productionRecipesRepo, productionAuditRepo)
+  const productionMaterialSuppliers = new MaterialSupplierService(
+    productionMaterialsRepo,
+    productionSuppliersRepo,
+    new MaterialSupplierRepository(productionDb),
+  )
   const productionSuppliers = new SupplierService(productionSuppliersRepo)
   const productionRecipes = new RecipeService(
     productionRecipesRepo,
@@ -517,13 +561,14 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       permissionCache,
       products: new ProductService(products, promotions),
       categories: new CategoryService(categories),
-      orders: new OrderService(orders, carts, inventory, manualPayments, mail, push),
+      orders: new OrderService(orders, carts, inventory, manualPayments, mail, push, products),
       cart: new CartService(carts, products),
       favorites: new FavoritesService(favorites),
-      feedback: new FeedbackService(reviews, products),
+      feedback: feedbackService,
       newsletter: new NewsletterService(newsletter),
       googleOAuth: new GoogleOAuthService(users, auth, carts),
       manualPayments,
+      onlinePayments,
       store,
       notifications: new NotificationService(notifications),
       push,
@@ -545,7 +590,9 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       adminMeta,
       adminPricing,
       adminCostSummary,
+      pos,
       productionMaterials,
+      productionMaterialSuppliers,
       productionSuppliers,
       productionRecipes,
       productionUnits,

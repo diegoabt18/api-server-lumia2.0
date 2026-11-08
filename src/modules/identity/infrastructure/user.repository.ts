@@ -52,6 +52,29 @@ function toEntity(doc: UserDocument): UserEntity {
   }
 }
 
+/**
+ * Every whitespace-separated token must match at least one field (AND of ORs), so
+ * "Diego Botello" and "botello" both work. Tokens are escaped and case-insensitive.
+ */
+function buildUserSearchFilter(search: string | undefined): Record<string, unknown> {
+  const tokens = (search ?? '').trim().split(/\s+/).filter(Boolean).slice(0, 5)
+  if (!tokens.length) return {}
+  return {
+    $and: tokens.map((token) => {
+      const rx = new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      return {
+        $or: [
+          { email: rx },
+          { name: rx },
+          { nickname: rx },
+          { 'shippingAddresses.recipientName': rx },
+          { 'shippingAddresses.phone': rx },
+        ],
+      }
+    }),
+  }
+}
+
 export class UserRepository extends BaseRepository<UserDocument> {
   constructor(db: Db) {
     super(getCollection(db, 'users'))
@@ -250,10 +273,7 @@ export class UserRepository extends BaseRepository<UserDocument> {
     const filter: Record<string, unknown> = {}
     if (opts.type === 'staff') filter.isStaff = true
     else if (opts.type === 'customers') filter.isStaff = { $ne: true }
-    if (opts.search?.trim()) {
-      const rx = new RegExp(opts.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
-      filter.$or = [{ email: rx }, { name: rx }, { nickname: rx }]
-    }
+    Object.assign(filter, buildUserSearchFilter(opts.search))
     const [docs, total] = await Promise.all([
       this.collection
         .find(filter as never, { projection: { passwordHash: 0 } })

@@ -1,4 +1,4 @@
-export type PaymentMethod = 'manual' | 'mercadopago'
+export type PaymentMethod = 'manual' | 'mercadopago' | 'cash' | 'bank_transfer'
 
 export type PaymentStatus =
   | 'created'
