@@ -12,6 +12,7 @@ function serializeOrderListItem(o: OrderEntity, userMap: Map<string, { name: str
   return {
     id: o._id,
     orderNumber: o.orderNumber,
+    customerReference: o.customerReference ?? o.orderNumber ?? null,
     userId: o.userId,
     userEmail: o.email ?? userMap.get(o.userId ?? '')?.email ?? null,
     userName: o.customerName || userMap.get(o.userId ?? '')?.name || null,
@@ -110,6 +111,7 @@ export class AdminOrderService {
       order: {
         id: order._id,
         orderNumber: order.orderNumber ?? null,
+        customerReference: order.customerReference ?? order.orderNumber ?? null,
         status: order.status,
         paymentStatus: order.paymentStatus ?? null,
         fulfillmentStatus: order.fulfillmentStatus ?? null,
@@ -170,6 +172,12 @@ export class AdminOrderService {
     },
     actorId: string,
   ) {
+    // El estado pagado solo lo decide el libro de pagos (saldo cubierto), nunca un cambio manual.
+    if (patch.status === 'paid' || patch.paymentStatus === 'paid') {
+      throw AppError.badRequest(
+        'El pedido solo queda pagado cuando el anticipo y el saldo están registrados. Registra los pagos en el libro de pagos.',
+      )
+    }
     const before = await this.orders.findEntityById(id)
     const updated = await this.orders.adminPatch(id, patch, actorId)
     if (!updated) throw AppError.notFound('Orden no encontrada')
@@ -205,41 +213,23 @@ export class AdminOrderService {
     return { ok: true, order: { id: updated._id, status: updated.status, cancellationRequestStatus: updated.cancellationRequestStatus } }
   }
 
-  async configureDeposit(id: string, percentage: number, actorId: string) {
-    const order = await this.orders.findEntityById(id)
-    if (!order) throw AppError.notFound('Orden no encontrada')
-    if (order.paymentStatus === 'paid' || order.paymentStatus === 'payment_completed') {
-      throw AppError.badRequest('La orden ya está pagada por completo')
-    }
-    const updated = await this.orders.configureDeposit(id, percentage, actorId)
-    if (!updated) throw AppError.notFound('Orden no encontrada')
-    return { ok: true, message: `Anticipo del ${percentage}% configurado correctamente` }
+  /**
+   * Retirado en G3: el anticipo por porcentaje sobre el total del pedido cobraba también las
+   * líneas de stock. El anticipo se configura por SKU (política) y los pagos se registran con
+   * POST /admin/orders/:id/payments.
+   */
+  async configureDeposit(_id: string, _percentage: number, _actorId: string): Promise<never> {
+    throw AppError.badRequest(
+      'El anticipo por porcentaje del pedido fue retirado. Configura la política de anticipo por SKU.',
+    )
   }
 
-  async markDepositPaid(id: string, amount: number, actorId: string, note?: string) {
-    const order = await this.orders.findEntityById(id)
-    if (!order) throw AppError.notFound('Orden no encontrada')
-    if (!order.depositPercentage) {
-      throw AppError.badRequest('Esta orden no tiene configurado un plan de anticipo')
-    }
-    if (order.paymentStatus === 'final_payment_pending' || order.depositPaidAt) {
-      throw AppError.badRequest('El anticipo ya fue pagado')
-    }
-    const updated = await this.orders.markDepositPaid(id, amount, actorId, note)
-    if (!updated) throw AppError.notFound('Orden no encontrada')
-    return { ok: true, message: 'Anticipo registrado como pagado' }
+  async markDepositPaid(_id: string, _amount: number, _actorId: string, _note?: string): Promise<never> {
+    throw AppError.badRequest('Registra el pago con el libro de pagos del pedido (efectivo o transferencia).')
   }
 
-  async markFinalPaymentPaid(id: string, amount: number, actorId: string, note?: string) {
-    const order = await this.orders.findEntityById(id)
-    if (!order) throw AppError.notFound('Orden no encontrada')
-    if (order.paymentStatus !== 'final_payment_pending') {
-      throw AppError.badRequest('El pago final solo puede registrarse cuando el anticipo ya fue pagado')
-    }
-    const updated = await this.orders.markFinalPaymentPaid(id, amount, actorId, note)
-    if (!updated) throw AppError.notFound('Orden no encontrada')
-    await this.stock.applyOnPaid(updated)
-    return { ok: true, message: 'Pago final registrado correctamente' }
+  async markFinalPaymentPaid(_id: string, _amount: number, _actorId: string, _note?: string): Promise<never> {
+    throw AppError.badRequest('Registra el pago con el libro de pagos del pedido (efectivo o transferencia).')
   }
 
   async renderInvoice(id: string) {

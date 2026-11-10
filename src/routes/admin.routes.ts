@@ -33,6 +33,7 @@ import {
   storeBannerUpsertSchema,
 } from '../modules/admin/schemas/admin.schema.js'
 import type { AuthenticatedRequest } from '../modules/identity/middleware/auth.middleware.js'
+import { orderPaymentRegisterSchema } from '../modules/payments/schemas/payment.schema.js'
 
 export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext) {
   const { services, repos } = ctx
@@ -114,7 +115,8 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
     if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
     const decodedSku = decodeURIComponent(sku)
     await services.adminProducts.assertVariantBelongs(id, decodedSku)
-    return services.adminInventory.upsertBySku(decodedSku, parsed.data)
+    const auth = (request as AuthenticatedRequest).auth
+    return services.adminInventory.upsertBySku(decodedSku, parsed.data, auth.userId)
   })
 
   api.get('/admin/products/:id/options', { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_READ) }, async (request) => {
@@ -176,6 +178,20 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
     if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
     const auth = (request as AuthenticatedRequest).auth
     return services.adminOrders.resolveCancellation(id, parsed.data.resolution, auth.userId, parsed.data.adminNote)
+  })
+
+  // G3: pagos y saldos. Efectivo y transferencia; Mercado Pago queda fuera mientras esté desactivado.
+  api.get('/admin/orders/:id/payments', { preHandler: g(PERMISSION_REGISTRY.ORDERS_READ) }, async (request) => {
+    const { id } = request.params as { id: string }
+    return services.orderPayments.getSummary(id.trim())
+  })
+
+  api.post('/admin/orders/:id/payments', { preHandler: g(PERMISSION_REGISTRY.ORDERS_UPDATE) }, async (request) => {
+    const { id } = request.params as { id: string }
+    const parsed = orderPaymentRegisterSchema.safeParse(request.body ?? {})
+    if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+    const auth = (request as AuthenticatedRequest).auth
+    return services.orderPayments.registerPayment(id.trim(), parsed.data, { userId: auth.userId })
   })
 
   api.post('/admin/orders/:id/deposit', { preHandler: g(PERMISSION_REGISTRY.ORDERS_UPDATE) }, async (request) => {
@@ -328,11 +344,17 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
     services.adminInventory.list(request.query as Record<string, unknown>),
   )
 
+  api.get('/admin/inventory/:sku/deposit-policy/history', { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_READ) }, async (request) => {
+    const { sku } = request.params as { sku: string }
+    return services.adminInventory.depositPolicyHistory(decodeURIComponent(sku))
+  })
+
   api.put('/admin/inventory/:sku', { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_UPDATE) }, async (request) => {
     const { sku } = request.params as { sku: string }
     const parsed = adminInventoryUpsertSchema.safeParse(request.body)
     if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
-    return services.adminInventory.upsertBySku(decodeURIComponent(sku), parsed.data)
+    const auth = (request as AuthenticatedRequest).auth
+    return services.adminInventory.upsertBySku(decodeURIComponent(sku), parsed.data, auth.userId)
   })
 
   // ─── Staff users (4.7) ───

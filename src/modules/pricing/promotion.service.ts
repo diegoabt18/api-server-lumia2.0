@@ -30,6 +30,7 @@ export function applyPromotionToVariants<T extends { price: number }>(
     promotionEndsAt?: string
     promotionLabel?: string
     promotionId?: string
+    promotionColor?: string | null
     promotionDiscountSource?: 'general' | 'individual'
   }
 > {
@@ -46,6 +47,7 @@ export function applyPromotionToVariants<T extends { price: number }>(
       promotionEndsAt: resolved.endsAt.toISOString(),
       promotionLabel: resolved.promotionName,
       promotionId: resolved.promotionId,
+      promotionColor: resolved.promotionColor ?? null,
       promotionDiscountSource: resolved.source,
     }
   })

@@ -11,6 +11,8 @@ export type ProductionAuditEventType =
   | 'price_rejected'
   | 'price_published'
   | 'impact_resolved'
+  | 'deposit_policy_changed'
+  | 'deposit_policy_removed'
 
 export interface ProductionAuditEntryEntity {
   _id?: unknown

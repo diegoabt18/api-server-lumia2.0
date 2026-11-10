@@ -15,12 +15,11 @@ import {
   createPaymentEntity,
   type PaymentMethod as PaymentEntityMethod,
 } from '../../payments/domain/payment.types.js'
-import {
-  paymentStatusForPosSale,
-  POS_CONFIRMED_PAYMENT_STATUS,
-} from '../domain/pos-payment-status.js'
+import { paymentStatusForPosSale } from '../domain/pos-payment-status.js'
 import type { OrderEntity } from '../../sales/domain/order.entity.js'
 import type { OrderRepository } from '../../sales/infrastructure/order.repository.js'
+import type { OrderPaymentService } from '../../sales/services/order-payment.service.js'
+import { nextRequiredPayment } from '../../sales/domain/order-payment-ledger.js'
 import type { FinancialOutboxRepository } from '../../sales/infrastructure/financial-outbox.repository.js'
 import {
   buildPosPaymentEventKey,
@@ -88,6 +87,7 @@ export class PosSaleService {
     private readonly storeSettings: StoreSettingsRepository,
     private readonly posCustomers: PosCustomerRepository,
     private readonly outbox: FinancialOutboxRepository,
+    private readonly orderPayments: OrderPaymentService,
   ) {}
 
   /**
@@ -382,6 +382,10 @@ export class PosSaleService {
           tax: 0,
           discountAmount,
           total,
+          // G3: venta POS con pago inicial = total; el saldo se liquida con pagos registrados.
+          initialPaymentRequired: total,
+          paidAmount: paid ? total : 0,
+          balanceDue: paid ? 0 : total,
           status: paid ? 'paid' : 'pending',
           paymentStatus: paid ? 'paid' : 'pending_manual',
           fulfillmentStatus: 'delivered',
@@ -496,43 +500,36 @@ export class PosSaleService {
     if (order.status === 'cancelled') throw AppError.badRequest('La venta está cancelada y no puede confirmarse')
     if (order.paymentStatus === 'paid') throw AppError.badRequest('La venta ya está pagada')
 
-    let cashReceived = details.cashReceived ?? null
-    let changeGiven = details.changeGiven ?? null
-    let transferReference = details.transferReference ?? null
-
+    // G3: la confirmación liquida el saldo pendiente mediante el libro de pagos. Nunca marca
+    // la venta como pagada por su cuenta: el saldo debe quedar cubierto por pagos aprobados.
+    if (order.paymentMethod !== 'cash' && order.paymentMethod !== 'bank_transfer') {
+      throw AppError.badRequest('Este método de pago no se puede confirmar desde el POS.')
+    }
+    // Importe exacto a cobrar ahora: el anticipo pendiente, o el saldo completo si el anticipo ya está pagado.
+    const paid = order.paidAmount ?? 0
+    const balance = order.balanceDue ?? round2(order.total - paid)
+    const initialRemaining = round2(Math.max(0, (order.initialPaymentRequired ?? order.total) - paid))
+    const next = nextRequiredPayment({ balanceDue: balance, initialRemaining })
     if (order.paymentMethod === 'cash') {
-      const received = cashReceived != null ? round2(cashReceived) : null
-      if (received === null || received < order.total) {
-        throw AppError.badRequest('El importe recibido en efectivo no puede ser inferior al total')
+      const received = details.cashReceived != null ? round2(details.cashReceived) : null
+      if (received === null || received < next) {
+        throw AppError.badRequest('El importe recibido en efectivo no puede ser inferior al importe a cobrar')
       }
-      cashReceived = received
-      changeGiven = round2(received - order.total)
     }
+    await this.orderPayments.registerPayment(
+      id,
+      {
+        method: order.paymentMethod,
+        amount: next,
+        receivedAmount: details.cashReceived ?? null,
+        transferReference: details.transferReference ?? order.transferReference ?? null,
+        note: details.note,
+      },
+      { userId: actor.userId },
+    )
 
-    if (order.paymentMethod === 'bank_transfer') {
-      transferReference = transferReference?.trim() || order.transferReference || null
-    }
-
-    const updated = await this.orders.confirmPosPayment(id, {
-      actorId: actor.userId,
-      cashReceived,
-      changeGiven,
-      transferReference,
-    })
+    const updated = await this.orders.findEntityById(id)
     if (!updated) throw AppError.notFound('Venta no encontrada')
-
-    // Actualizar entidad de pago asociada.
-    try {
-      const payments = await this.payments.listPaymentsByOrderId(id)
-      for (const payment of payments) {
-        if (payment._id) {
-          await this.payments.updatePaymentStatus(payment._id, POS_CONFIRMED_PAYMENT_STATUS, details.note)
-        }
-      }
-    } catch {
-      // No bloquear la confirmación si falla la actualización del pago.
-    }
-
     await this.recordFinancialEvents(updated)
     return toPosSaleView(updated)
   }

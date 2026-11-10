@@ -10,6 +10,8 @@ export interface PromotionEntity {
   name: string
   description?: string
   banner_url?: string
+  /** Color de fondo de la etiqueta de promoción en la tienda (#rrggbb). */
+  color?: string
   active: boolean
   starts_at: Date
   ends_at: Date

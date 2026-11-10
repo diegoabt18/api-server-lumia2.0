@@ -35,7 +35,7 @@ x-api-dev: &api-dev
     APP_URL: http://localhost:3001
     HOST: 0.0.0.0
     PORT: 3001
-    FRONTEND_URL: ${LUMIA_ADMIN_URL:-http://localhost:3002}
+    FRONTEND_URL: ${LUMIA_ADMIN_URL:-http://localhost:3000}
     CORS_ORIGINS: ${LUMIA_ADMIN_URL:-http://localhost:3002},http://localhost:3000,http://127.0.0.1:3002
     COOKIE_DOMAIN: ''
     COOKIE_SECURE: 'false'

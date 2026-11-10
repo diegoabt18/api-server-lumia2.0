@@ -38,7 +38,7 @@ export class AdminAuditService {
       total,
       items: items.map((e) => ({
         ...e,
-        timestamp: e.createdAt.toISOString(),
+        timestamp: e.createdAt?.toISOString() ?? null,
       })),
       pagination: buildPaginationMeta(total, page, limit),
     }

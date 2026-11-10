@@ -475,7 +475,7 @@ export class SecurityEnterpriseService {
       search: typeof query.search === 'string' ? query.search : undefined,
     })
     return {
-      items: items.map((e) => ({ ...e, id: e._id, createdAt: e.createdAt.toISOString() })),
+      items: items.map((e) => ({ ...e, id: e._id, createdAt: e.createdAt?.toISOString() ?? null })),
       total,
       pagination: buildPaginationMeta(total, page, limit),
     }
@@ -651,7 +651,7 @@ export class SecurityEnterpriseService {
         id: e._id,
         event: e.event,
         email: e.email,
-        createdAt: e.createdAt.toISOString(),
+        createdAt: e.createdAt?.toISOString() ?? null,
       })),
     }
   }

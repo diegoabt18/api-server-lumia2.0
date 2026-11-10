@@ -80,6 +80,8 @@ export class PriceApprovalRepository extends BaseRepository<PriceApprovalEntity>
     materialsCost: number
     previousPrice: number
     suggestedPrice: number
+    suggestedPriceNet: number
+    taxRate: number
     marginPercentage: number
     currency: string
     costSheetId?: string
@@ -97,6 +99,9 @@ export class PriceApprovalRepository extends BaseRepository<PriceApprovalEntity>
       materials_cost: input.materialsCost,
       previous_price: input.previousPrice,
       suggested_price: input.suggestedPrice,
+      suggested_price_net: input.suggestedPriceNet,
+      tax_rate: input.taxRate,
+      price_basis: 'tax_included',
       margin_percentage: input.marginPercentage,
       currency: input.currency,
       status: 'pending',

@@ -87,6 +87,7 @@ function buildService(opts: {
     storeSettings as never,
       { findOrCreate: async (input: { name?: string }) => ({ id: 'pc-1', name: input.name || 'Consumidor final', email: null, phone: null }), findById: async () => null, search: async () => [] } as never,
       { enqueue: async () => true } as never,
+      { registerPayment: async () => ({}) } as never,
     )
   return { service, orders, inventory, payments }
 }
@@ -306,6 +307,7 @@ describe('POS product search pagination', () => {
       {} as never,
       { findOrCreate: async (input: { name?: string }) => ({ id: 'pc-1', name: input.name || 'Consumidor final', email: null, phone: null }), findById: async () => null, search: async () => [] } as never,
       { enqueue: async () => true } as never,
+      { registerPayment: async () => ({}) } as never,
     )
     const res = await service.searchProducts('vela', 2, 10)
     expect(searchForPos).toHaveBeenCalledWith('vela', 2, 10)

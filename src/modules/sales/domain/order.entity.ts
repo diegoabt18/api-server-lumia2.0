@@ -1,3 +1,5 @@
+import type { DepositPolicy } from '../../catalog/domain/deposit-policy.js'
+
 export type OrderStatus = 'pending' | 'paid' | 'shipped' | 'delivered' | 'cancelled' | 'expired'
 export type OrderPaymentStatus =
   | 'unpaid'
@@ -27,8 +29,15 @@ export interface OrderEvent {
   data?: Record<string, unknown>
 }
 
+/** Modalidad de la línea al momento de la compra (fotografía, no cambia si luego se edita el SKU). */
+export type FulfillmentMode = 'stock' | 'made_to_order'
+
 export interface OrderItemEntity {
   productId: string
+  /** Modalidad de venta congelada al comprar. Ausente en pedidos anteriores a G1. */
+  fulfillmentMode?: FulfillmentMode
+  /** Política de anticipo congelada al comprar. null = no configurada en ese momento. */
+  depositPolicy?: DepositPolicy | null
   /** Tasa de IVA (%) vigente al vender; congelada en la línea. null = no configurada. */
   taxRate?: number | null
   productSlug?: string
@@ -45,11 +54,19 @@ export interface OrderItemEntity {
   originalUnitPrice?: number
   promotionPercentOff?: number
   promotionId?: string
+  /** Pago inicial exigido por la línea (G2): 100 % en stock; anticipo en made_to_order. Ausente = pedido anterior a G2. */
+  initialPaymentRequired?: number
+  /** Saldo de la línea tras el pago inicial (G2). 0 en stock. */
+  balanceDue?: number
+  /** Importe pagado de la línea, recalculado desde pagos aprobados (G3). */
+  paidAmount?: number
 }
 
 export interface OrderEntity {
   _id?: string
   orderNumber?: string
+  /** Referencia corta para el cliente (ORD-XXXXXXXX). Ausente en pedidos anteriores: se usa orderNumber. */
+  customerReference?: string
   userId: string | null
   email: string | null
   customerName: string
@@ -65,6 +82,12 @@ export interface OrderEntity {
   tax?: number
   discountAmount?: number
   total: number
+  /** Pago inicial exigido por el pedido (G2). Ausente = pedido anterior a G2: se exige el total. */
+  initialPaymentRequired?: number
+  /** Importe confirmado como pagado hasta ahora. Solo se incrementa con pagos confirmados. */
+  paidAmount?: number
+  /** Saldo pendiente del pedido (G2): total − pagos confirmados. */
+  balanceDue?: number
   status: OrderStatus
   paymentStatus?: OrderPaymentStatus
   fulfillmentStatus?: string
@@ -113,6 +136,8 @@ export interface OrderEntity {
 export interface OrderDomain {
   id: string
   orderNumber?: string
+  /** Referencia corta para el cliente (ORD-XXXXXXXX). Ausente en pedidos anteriores: se usa orderNumber. */
+  customerReference?: string
   userId: string | null
   email: string | null
   customerName: string
@@ -126,6 +151,9 @@ export interface OrderDomain {
   subtotal?: number
   shippingCost?: number
   total: number
+  initialPaymentRequired?: number
+  paidAmount?: number
+  balanceDue?: number
   status: OrderStatus
   paymentStatus?: OrderPaymentStatus
   fulfillmentStatus?: string
@@ -143,6 +171,7 @@ export function toOrderDomain(e: OrderEntity): OrderDomain {
   return {
     id: e._id!,
     orderNumber: e.orderNumber,
+    customerReference: e.customerReference ?? e.orderNumber,
     userId: e.userId,
     email: e.email,
     customerName: e.customerName,
@@ -156,6 +185,9 @@ export function toOrderDomain(e: OrderEntity): OrderDomain {
     subtotal: e.subtotal,
     shippingCost: e.shippingCost,
     total: e.total,
+    initialPaymentRequired: e.initialPaymentRequired,
+    paidAmount: e.paidAmount,
+    balanceDue: e.balanceDue,
     status: e.status,
     paymentStatus: e.paymentStatus,
     currency: e.currency ?? 'COP',

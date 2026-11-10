@@ -9,7 +9,10 @@ export interface CostSheetEntity {
   /** Compat LUMIA cost_sheets_v2 */
   total_cost_with_waste?: number
   total_cost: number
+  /** Precio final con IVA (hojas creadas al enviar a aprobación desde la regla con IVA). */
   suggested_price?: number
+  suggested_price_net?: number
+  tax_rate?: number
   margin_percentage?: number
   currency: string
   calculated_at: Date
@@ -26,6 +29,8 @@ export interface CostSheetDomain {
   indirectCost: number
   totalCost: number
   suggestedPrice?: number
+  suggestedPriceNet?: number
+  taxRate?: number
   marginPercentage?: number
   currency: string
   calculatedAt: string
@@ -45,6 +50,8 @@ export function toCostSheetDomain(
     indirectCost: entity.indirect_cost,
     totalCost: entity.total_cost_with_waste ?? entity.total_cost,
     suggestedPrice: entity.suggested_price,
+    suggestedPriceNet: entity.suggested_price_net,
+    taxRate: entity.tax_rate,
     marginPercentage: entity.margin_percentage,
     currency: entity.currency,
     calculatedAt: entity.calculated_at?.toISOString?.() ?? '',

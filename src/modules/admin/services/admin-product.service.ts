@@ -131,6 +131,12 @@ export class AdminProductService {
       status: 'active' | 'inactive'
       image_path?: string | null
       tax_rate?: number | null
+      option_axes?: Array<{
+        id?: string
+        name: string
+        position?: number
+        values: Array<{ id?: string; optionId?: string; value: string; slug?: string; position?: number } | string>
+      }>
     }>,
   ) {
     const normalized: Parameters<ProductRepository['updateProduct']>[1] = {}
@@ -153,6 +159,24 @@ export class AdminProductService {
     try {
       const updated = await this.products.updateProduct(id, normalized)
       if (!updated) throw AppError.notFound('Producto no encontrado')
+
+      // Actualizar ejes de opciones si se proporcionan
+      if (patch.option_axes !== undefined) {
+        const normalizedAxes = patch.option_axes.map((axis, idx) => ({
+          name: axis.name,
+          position: axis.position ?? idx,
+          values: axis.values.map((val, vidx) => {
+            const value = typeof val === 'string' ? val : val.value
+            return {
+              value,
+              position: typeof val === 'string' ? vidx : (val.position ?? vidx),
+              slug: typeof val === 'string' ? undefined : val.slug,
+            }
+          }),
+        }))
+        await this.catalogOptions.replaceCatalogForProduct(updated.id, normalizedAxes)
+      }
+
       return { product: serializeProduct(updated) }
     } catch (e: unknown) {
       if ((e as { code?: number }).code === 11000) throw AppError.conflict('Ya existe un producto con ese slug')
@@ -196,12 +220,44 @@ export class AdminProductService {
       price: number
       currency: string
       options?: Record<string, string>
+      optionValueIds?: string[]
+      optionRules?: Array<{ optionId: string; allowedValueIds?: string[] }>
       compare_at_price?: number
       image_path?: string
     },
   ) {
     const product = await this.products.findBySlugOrId(productIdOrSlug)
     if (!product) throw AppError.notFound('Producto no encontrado')
+
+    // Validar optionValueIds si se proporcionan
+    if (data.optionValueIds?.length) {
+      const axes = await this.catalogOptions.listAxesWithValuesByProductId(product.id)
+      const allValidIds = new Set<string>()
+      for (const axis of axes) {
+        for (const value of axis.values) {
+          if (value.id) allValidIds.add(String(value.id))
+        }
+      }
+
+      for (const id of data.optionValueIds) {
+        if (!allValidIds.has(id)) {
+          throw AppError.badRequest(`El valor de opción ${id} no existe para este producto`)
+        }
+      }
+    }
+
+    // Validar que no exista variante con las mismas opciones
+    const newOptions = data.options ?? {}
+    if (Object.keys(newOptions).length > 0) {
+      const newOptionsStr = JSON.stringify(newOptions)
+      for (const variant of product.variants) {
+        const existingOptionsStr = JSON.stringify(variant.options ?? {})
+        if (existingOptionsStr === newOptionsStr) {
+          throw AppError.conflict('Ya existe una variante con exactamente las mismas opciones')
+        }
+      }
+    }
+
     try {
       const v = await this.products.createVariant({
         product_slug: product.slug,
@@ -210,6 +266,8 @@ export class AdminProductService {
         price: data.price,
         currency: data.currency,
         options: data.options,
+        option_value_ids: data.optionValueIds,
+        option_rules: data.optionRules?.map((r) => ({ option_id: r.optionId, allowed_value_ids: r.allowedValueIds })),
         compare_at_price: data.compare_at_price,
         image_path: data.image_path,
       })
@@ -239,6 +297,8 @@ export class AdminProductService {
       price: number
       currency: string
       options: Record<string, string>
+      optionValueIds: string[]
+      optionRules: Array<{ optionId: string; allowedValueIds?: string[] }>
       compare_at_price: number | null
       image_path: string | null
     }>,
@@ -249,6 +309,24 @@ export class AdminProductService {
     if (!variant || variant.product_slug !== product.slug) {
       throw AppError.notFound('La variante no pertenece a este producto')
     }
+
+    // Validar optionValueIds si se proporcionan
+    if (patch.optionValueIds?.length) {
+      const axes = await this.catalogOptions.listAxesWithValuesByProductId(product.id)
+      const allValidIds = new Set<string>()
+      for (const axis of axes) {
+        for (const value of axis.values) {
+          if (value.id) allValidIds.add(String(value.id))
+        }
+      }
+
+      for (const id of patch.optionValueIds) {
+        if (!allValidIds.has(id)) {
+          throw AppError.badRequest(`El valor de opción ${id} no existe para este producto`)
+        }
+      }
+    }
+
     const normalized: Parameters<ProductRepository['updateVariant']>[1] = {}
     if (patch.barcode !== undefined) {
       if (patch.barcode) {
@@ -261,7 +339,23 @@ export class AdminProductService {
     }
     if (patch.price !== undefined) normalized.price = patch.price
     if (patch.currency !== undefined) normalized.currency = patch.currency.trim().toUpperCase()
-    if (patch.options !== undefined) normalized.options = patch.options
+
+    // Validar opciones duplicadas si se están actualizando
+    if (patch.options !== undefined) {
+      const newOptionsStr = JSON.stringify(patch.options)
+      for (const v of product.variants) {
+        if (v.sku !== sku) { // No comparar consigo mismo
+          const existingOptionsStr = JSON.stringify(v.options ?? {})
+          if (existingOptionsStr === newOptionsStr) {
+            throw AppError.conflict('Ya existe otra variante con exactamente las mismas opciones')
+          }
+        }
+      }
+      normalized.options = patch.options
+    }
+
+    if (patch.optionValueIds !== undefined) normalized.option_value_ids = patch.optionValueIds
+    if (patch.optionRules !== undefined) normalized.option_rules = patch.optionRules?.map((r) => ({ option_id: r.optionId, allowed_value_ids: r.allowedValueIds }))
     if (patch.compare_at_price !== undefined) normalized.compare_at_price = patch.compare_at_price ?? undefined
     if (patch.image_path !== undefined) normalized.image_path = patch.image_path ?? undefined
     const updated = await this.products.updateVariant(sku, normalized)

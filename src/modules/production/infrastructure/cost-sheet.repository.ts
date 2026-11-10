@@ -64,6 +64,8 @@ export class CostSheetRepository extends BaseRepository<CostSheetEntity> {
     indirectCost: number
     totalCost: number
     suggestedPrice?: number
+    suggestedPriceNet?: number
+    taxRate?: number
     marginPercentage?: number
     currency: string
     calculatedBy: string
@@ -78,6 +80,8 @@ export class CostSheetRepository extends BaseRepository<CostSheetEntity> {
       total_cost: input.totalCost,
       total_cost_with_waste: input.totalCost,
       suggested_price: input.suggestedPrice,
+      suggested_price_net: input.suggestedPriceNet,
+      tax_rate: input.taxRate,
       margin_percentage: input.marginPercentage,
       currency: input.currency,
       calculated_at: new Date(),

@@ -113,23 +113,25 @@ export async function registerStoreRoutes(api: FastifyInstance, ctx: AppContext)
     return services.orders.getByAccessToken(query.token.trim())
   })
 
-  api.get('/orders/by-number/:orderNumber', async (request) => {
+  api.get('/orders/by-number/:orderNumber', { preHandler: optionalAuthGuard }, async (request) => {
     const { orderNumber } = request.params as { orderNumber: string }
-    return services.orders.getIdByOrderNumber(orderNumber)
+    const auth = (request as AuthenticatedRequest).auth
+    return services.orders.getIdByOrderNumber(orderNumber, auth?.userId ?? null)
   })
 
   // Vista pública post-pago (thank-you, invitados). Solo campos no sensibles.
   api.get('/orders/public/:id', async (request) => {
     const { id } = request.params as { id: string }
     if (!id?.trim()) throw AppError.badRequest('id required')
-    const order = await services.orders.getById(id.trim())
-    if (!order) throw AppError.notFound('Order not found')
-    return {
-      id: order.id,
-      orderNumber: order.orderNumber,
-      status: order.status,
-      paymentStatus: order.paymentStatus,
-    }
+    return services.orders.getPublicView(id.trim())
+  })
+
+  // Cotización del carrito (sin crear pedido). Solo lee el carrito: no crea cookie ni registros.
+  api.post('/orders/quote', { preHandler: optionalAuthGuard }, async (request) => {
+    const auth = (request as AuthenticatedRequest).auth
+    const { getGuestCartKey } = await import('../common/utils/guest-cart.utils.js')
+    const cartKey = auth?.userId ?? getGuestCartKey(request) ?? null
+    return services.orders.quoteFromCart(cartKey)
   })
 
   api.post('/orders/create', { preHandler: optionalAuthGuard }, async (request, reply) => {

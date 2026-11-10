@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { isStoreBannerPosition, type StoreBannerPosition } from '../../catalog/domain/store-banner.entity.js'
+import { depositPolicySchema } from '../../catalog/domain/deposit-policy.js'
 
 export const adminProductCreateSchema = z.object({
   name: z.string().trim().min(1).max(200),
@@ -33,6 +34,29 @@ export const adminProductPatchSchema = z
     status: z.enum(['active', 'inactive']).optional(),
     image_path: z.string().max(500).optional().nullable(),
     tax_rate: z.number().min(0).max(100).nullable().optional(),
+    option_axes: z
+      .array(
+        z.object({
+          id: z.string().optional(),
+          name: z.string().min(1).max(120),
+          position: z.number().int().min(0).optional(),
+          values: z
+            .array(
+              z.union([
+                z.string(),
+                z.object({
+                  id: z.string().optional(),
+                  optionId: z.string().optional(),
+                  value: z.string().min(1).max(200),
+                  slug: z.string().optional(),
+                  position: z.number().int().min(0).optional(),
+                }),
+              ]),
+            )
+            .min(1),
+        }),
+      )
+      .optional(),
   })
   .refine((o) => Object.keys(o).length > 0, { message: 'Vacío' })
 
@@ -86,6 +110,7 @@ export const promotionUpsertSchema = z
     name: z.string().min(1).max(200),
     description: z.string().max(8000).optional().nullable(),
     banner_url: z.union([z.string().max(2000), z.literal('')]).optional().nullable(),
+    color: z.union([z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Color HEX inválido (#rrggbb)'), z.literal('')]).optional().nullable(),
     active: z.boolean().optional(),
     starts_at: z.string(),
     ends_at: z.string(),
@@ -192,12 +217,21 @@ export const adminVariantPatchSchema = z
   })
   .refine((o) => Object.keys(o).length > 0, { message: 'Vacío' })
 
-export const adminInventoryUpsertSchema = z.object({
-  quantity: z.number().int().min(0),
-  reserved: z.number().int().min(0).optional(),
-  warehouse: z.string().max(100).optional(),
-  is_per_order: z.boolean().optional(),
-})
+export const adminInventoryUpsertSchema = z
+  .object({
+    // Ausente = conservar el stock actual (permite actualizar solo la política de anticipo).
+    quantity: z.number().int().min(0).optional(),
+    reserved: z.number().int().min(0).optional(),
+    warehouse: z.string().max(100).optional(),
+    is_per_order: z.boolean().optional(),
+    deposit_policy: depositPolicySchema.nullable().optional(),
+    expected_version: z.number().int().min(0).optional(),
+  })
+  .refine((o) => Object.keys(o).length > 0, { message: 'Vacío' })
+  .refine((o) => o.deposit_policy === undefined || o.expected_version !== undefined, {
+    message: 'Falta la versión de la política (expected_version).',
+    path: ['expected_version'],
+  })
 
 export const adminStaffRoleSchema = z.object({
   role: z.enum(['admin', 'moderator', 'user']),

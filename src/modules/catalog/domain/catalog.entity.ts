@@ -1,3 +1,5 @@
+import type { DepositPolicy } from './deposit-policy.js'
+
 export interface ProductEntity {
   _id?: unknown
   name: string
@@ -15,6 +17,9 @@ export interface ProductEntity {
   sales_order_count?: number
   popularity_score?: number
   last_purchased_at?: Date
+  /** Resumen denormalizado de reseñas visibles (lo mantiene FeedbackService / db:recalculate-ratings). */
+  average_rating?: number
+  reviews_count?: number
 }
 
 export interface VariantEntity {
@@ -45,6 +50,10 @@ export interface InventoryItemEntity {
   reserved: number
   warehouse: string
   is_per_order: boolean
+  /** Política de anticipo (solo SKUs por pedido). Ausente o null = no configurada. */
+  deposit_policy?: DepositPolicy | null
+  /** Versión de control optimista de la política (G3). */
+  deposit_policy_version?: number
   updated_at?: Date
 }
 
@@ -71,6 +80,8 @@ export interface ProductDomain {
   salesOrderCount?: number
   popularityScore?: number
   lastPurchasedAt?: string
+  averageRating?: number
+  reviewsCount?: number
 }
 
 export interface VariantDomain {
@@ -143,6 +154,8 @@ export function toProductDomain(e: ProductEntity): ProductDomain {
     popularityScore: typeof e.popularity_score === 'number' ? e.popularity_score : undefined,
     lastPurchasedAt:
       e.last_purchased_at instanceof Date ? e.last_purchased_at.toISOString() : undefined,
+    averageRating: typeof e.average_rating === 'number' ? e.average_rating : undefined,
+    reviewsCount: typeof e.reviews_count === 'number' ? e.reviews_count : undefined,
   }
 }
 

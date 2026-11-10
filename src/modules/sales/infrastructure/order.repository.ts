@@ -1,3 +1,17 @@
+import { randomUUID } from 'node:crypto'
+
+/**
+ * Referencia corta para el cliente: mismo prefijo y sufijo aleatorio del número interno.
+ * ORD-20261108-185352-CB07203E → ORD-CB07203E. Identifica el pedido; no es una credencial.
+ */
+export function customerReferenceOf(orderNumber: string): string {
+  const parts = orderNumber.split('-')
+  return `${parts[0]}-${parts[parts.length - 1]}`
+}
+
+function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
 import { ObjectId, type Db } from 'mongodb'
 import { BaseRepository, getCollection } from '../../../database/repositories/base.repository.js'
 import { toOrderDomain, type OrderDomain, type OrderEntity, type OrderEvent, type CancelledBy } from '../domain/order.entity.js'
@@ -22,6 +36,8 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
   async ensureIndexes(): Promise<void> {
     await super.ensureIndexes([
       { key: { orderNumber: 1 }, unique: true, sparse: true },
+      // Referencia corta para el cliente (ORD-XXXXXXXX). Sparse: los pedidos anteriores no la tienen.
+      { key: { customerReference: 1 }, unique: true, sparse: true, name: 'uniq_customer_reference' },
       { key: { userId: 1, createdAt: -1 } },
       { key: { status: 1 } },
       { key: { createdAt: -1 } },
@@ -39,13 +55,28 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
     ])
   }
 
+  /**
+   * Número de pedido no secuencial: prefijo, fecha y hora (zona Bogotá) y 8 caracteres aleatorios.
+   * La unicidad la garantiza el índice único de `orderNumber`; createOrder reintenta si colisiona.
+   */
   async generateOrderNumber(): Promise<string> {
     const env = getEnv()
     const prefix = env.ORDER_NUMBER_PREFIX
-    const year = new Date().getFullYear()
-    const count = await this.count({})
-    const seq = String(count + 1).padStart(6, '0')
-    return `${prefix}-${year}-${seq}`
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Bogota',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date())
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '00'
+    const date = `${get('year')}${get('month')}${get('day')}`
+    const time = `${get('hour')}${get('minute')}${get('second')}`
+    const random = randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase()
+    return `${prefix}-${date}-${time}-${random}`
   }
 
   /**
@@ -67,13 +98,26 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
 
   async createOrder(data: Omit<OrderEntity, '_id' | 'createdAt' | 'orderNumber'>): Promise<OrderDomain> {
     const now = new Date()
-    const orderNumber = await this.generateOrderNumber()
-    const id = await this.insertOne({
-      ...data,
-      orderNumber,
-      createdAt: now,
-      updatedAt: now,
-    } as OrderDocument)
+    let id: string | undefined
+    for (let attempt = 1; attempt <= 3 && !id; attempt++) {
+      const orderNumber = await this.generateOrderNumber()
+      const customerReference = customerReferenceOf(orderNumber)
+      try {
+        id = await this.insertOne({
+          ...data,
+          orderNumber,
+          customerReference,
+          createdAt: now,
+          updatedAt: now,
+        } as OrderDocument)
+      } catch (error) {
+        // Colisión improbable del número aleatorio: se genera otro.
+        if (!(typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000) || attempt === 3) {
+          throw error
+        }
+      }
+    }
+    if (!id) throw new Error('No se pudo asignar un número de pedido único')
     const created = await this.findById(id)
     if (!created) throw new Error('Failed to create order')
     return toOrderDomain(toEntity(created))
@@ -106,8 +150,10 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
     return toEntity(created)
   }
 
+  /** Busca por número interno o por referencia corta del cliente (sin distinguir mayúsculas). */
   async findByOrderNumber(orderNumber: string): Promise<OrderDomain | null> {
-    const doc = await this.findOne({ orderNumber } as never)
+    const code = orderNumber.trim().toUpperCase()
+    const doc = await this.findOne({ $or: [{ orderNumber: code }, { customerReference: code }] } as never)
     return doc ? toOrderDomain(toEntity(doc)) : null
   }
 
@@ -218,18 +264,29 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
     return result.modifiedCount
   }
 
+  /**
+   * Filtro de búsqueda administrativa. Ejecutado en la base de datos:
+   *  - referencia corta completa (ORD-XXXXXXXX) o solo el sufijo (XXXXXXXX): coincidencia exacta, indexada;
+   *  - prefijo del número interno o de la referencia: rango indexado;
+   *  - nombre, correo y teléfono: solo por prefijo, para poder usar índices.
+   * El término se escapa: nunca se interpreta como expresión regular.
+   */
   private buildAdminSearchFilter(search?: string, channel?: string): Record<string, unknown> {
     const clauses: Record<string, unknown>[] = []
     if (search?.trim()) {
       const term = search.trim()
-      clauses.push({
-        $or: [
-          { orderNumber: { $regex: term, $options: 'i' } },
-          { customerName: { $regex: term, $options: 'i' } },
-          { email: { $regex: term, $options: 'i' } },
-          { phone: { $regex: term, $options: 'i' } },
-        ],
-      })
+      const upper = term.toUpperCase()
+      const escaped = escapeRegex(term)
+      const or: Record<string, unknown>[] = []
+      if (/^ORD-[0-9A-F]{8}$/i.test(term)) or.push({ customerReference: upper })
+      else if (/^[0-9A-F]{8}$/i.test(term)) or.push({ customerReference: `ORD-${upper}` })
+      or.push({ customerReference: { $regex: `^${escaped}`, $options: 'i' } })
+      or.push({ orderNumber: { $regex: `^${escaped}`, $options: 'i' } })
+      // Nombre, correo y teléfono: solo por prefijo (pueden usar índices). Sin coincidencias por fragmento interno.
+      or.push({ customerName: { $regex: `^${escaped}`, $options: 'i' } })
+      or.push({ email: { $regex: `^${escaped}`, $options: 'i' } })
+      or.push({ phone: { $regex: `^${escaped}`, $options: 'i' } })
+      clauses.push({ $or: or })
     }
     if (channel === 'pos') {
       clauses.push({ channel: 'pos' })
@@ -497,6 +554,71 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
         },
         $push: { events: event },
       },
+    )
+    return this.findEntityById(id)
+  }
+
+  /**
+   * Bloqueo por pedido para registrar pagos. Es atómico (un solo documento) y caduca si el
+   * proceso que lo tomó se cae: `staleBefore` marca el límite a partir del cual se considera abandonado.
+   */
+  async acquireLedgerLock(id: string, token: string, now: Date, staleBefore: Date): Promise<boolean> {
+    if (!ObjectId.isValid(id)) return false
+    const res = await this.collection.updateOne(
+      {
+        _id: new ObjectId(id),
+        $or: [{ ledgerLock: { $exists: false } }, { ledgerLock: null }, { 'ledgerLock.at': { $lt: staleBefore } }],
+      } as never,
+      { $set: { ledgerLock: { token, at: now } } } as never,
+    )
+    return res.modifiedCount > 0
+  }
+
+  async releaseLedgerLock(id: string, token: string): Promise<void> {
+    if (!ObjectId.isValid(id)) return
+    await this.collection.updateOne(
+      { _id: new ObjectId(id), 'ledgerLock.token': token } as never,
+      { $unset: { ledgerLock: '' } } as never,
+    )
+  }
+
+  /**
+   * Guarda el estado de pago recalculado desde el libro de pagos: importes por línea y del pedido.
+   * Nunca se llama con importes del cliente; los produce OrderPaymentService a partir de pagos aprobados.
+   */
+  async applyPaymentLedger(
+    id: string,
+    data: {
+      lines: Array<{ index: number; paidAmount: number; balanceDue: number }>
+      paidAmount: number
+      balanceDue: number
+      paymentStatus: string
+      markPaid?: { actorId: string | null; paidAt: Date; paymentMethod: string }
+      event: OrderEvent
+    },
+  ): Promise<OrderEntity | null> {
+    if (!ObjectId.isValid(id)) return null
+    const now = new Date()
+    const set: Record<string, unknown> = {
+      paidAmount: data.paidAmount,
+      balanceDue: data.balanceDue,
+      paymentStatus: data.paymentStatus,
+      updatedAt: now,
+    }
+    for (const line of data.lines) {
+      set[`items.${line.index}.paidAmount`] = line.paidAmount
+      set[`items.${line.index}.balanceDue`] = line.balanceDue
+    }
+    if (data.markPaid) {
+      set.status = 'paid'
+      set.paidAt = data.markPaid.paidAt
+      set.paymentMethod = data.markPaid.paymentMethod
+      set.paymentConfirmedAt = data.markPaid.paidAt
+      set.paymentConfirmedByUserId = data.markPaid.actorId
+    }
+    await this.collection.updateOne(
+      { _id: new ObjectId(id) } as never,
+      { $set: set, $push: { events: data.event } } as never,
     )
     return this.findEntityById(id)
   }

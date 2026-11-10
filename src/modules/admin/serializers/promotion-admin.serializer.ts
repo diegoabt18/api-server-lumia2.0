@@ -2,6 +2,7 @@ import {
   computePromotionLifecycle,
   type PromotionEntity,
 } from '../../catalog/domain/promotion.entity.js'
+import { normalizePromotionColor } from '../../pricing/promotion-color.js'
 
 function coerceDate(d: unknown): Date {
   if (d instanceof Date) return d
@@ -37,6 +38,7 @@ export function serializePromotionAdmin(e: PromotionEntity, now: Date) {
       productSlug: x.product_slug,
       percentOff: x.percent_off,
     })),
+    color: normalizePromotionColor(e.color),
     notificationImageSlug: e.notification_image_slug?.trim() || null,
     notificationImagePath: e.notification_image_path?.trim() || null,
     legacyScope: e.scope,

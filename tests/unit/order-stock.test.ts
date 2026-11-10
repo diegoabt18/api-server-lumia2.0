@@ -76,17 +76,17 @@ describe('OrderStockService', () => {
 })
 
 describe('AdminOrderService stock triggers', () => {
-  it('decrements stock when an administrator marks a pending order as paid', async () => {
+  it('an administrator cannot mark an order as paid by hand (only the payment ledger can)', async () => {
     const pending = order()
-    const paid = order({ status: 'paid', paymentStatus: 'paid' })
     const orders = {
       findEntityById: vi.fn(async (..._a: unknown[]) => pending),
-      adminPatch: vi.fn(async (..._a: unknown[]) => paid),
+      adminPatch: vi.fn(async (..._a: unknown[]) => order({ status: 'paid', paymentStatus: 'paid' })),
     }
     const stock = { applyOnPaid: vi.fn(async (..._a: unknown[]) => true), restoreIfDecremented: vi.fn(async (..._a: unknown[]) => false) }
     const admin = new AdminOrderService(orders as never, {} as never, stock as never, { recordDelivered: vi.fn(async (..._a: unknown[]) => undefined) } as never)
-    await admin.patch('o1', { status: 'paid' }, 'admin-1')
-    expect(stock.applyOnPaid).toHaveBeenCalledTimes(1)
+    await expect(admin.patch('o1', { status: 'paid' }, 'admin-1')).rejects.toThrow(/libro de pagos|pagos/)
+    expect(orders.adminPatch).not.toHaveBeenCalled()
+    expect(stock.applyOnPaid).not.toHaveBeenCalled()
   })
 
   it('restores stock when an administrator cancels an order', async () => {

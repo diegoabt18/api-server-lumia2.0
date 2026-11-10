@@ -83,6 +83,52 @@ export function calculateSuggestedPrice(
   return { totalCost, marginPercentage, suggestedPrice, rounding, currency }
 }
 
+export interface ShelfPrice {
+  /** costo × (1 + margen/100), sin IVA y sin redondear. */
+  netPrice: number
+  /** IVA del producto aplicado (%). */
+  taxRate: number
+  /** Precio final con IVA incluido, redondeado hacia arriba a `rounding`: es el que se publica. */
+  grossPrice: number
+  /** Base sin IVA que corresponde al precio final redondeado. */
+  netFromGross: number
+  taxAmount: number
+  /** Recargo real sobre el costo después del redondeo: (netFromGross − costo) / costo × 100. */
+  effectiveMarkupPercent: number
+}
+
+/**
+ * Precio de tienda a partir del costo de la receta. El margen de la receta es un recargo sobre el
+ * costo sin IVA; el IVA es del producto. Los precios de catálogo incluyen IVA (sales/domain/tax.ts),
+ * así que se redondea el precio final que ve el cliente y la base se deriva de él.
+ */
+export function calculateShelfPrice(input: {
+  totalCost: number
+  marginPercentage: number
+  taxRate: number
+  rounding: number
+}): ShelfPrice {
+  const { totalCost, marginPercentage, taxRate, rounding } = input
+  if (!Number.isFinite(totalCost) || totalCost <= 0) throw new Error('El costo total debe ser mayor a 0')
+  if (!Number.isFinite(marginPercentage) || marginPercentage < 0) throw new Error('El margen no puede ser negativo')
+  if (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100) throw new Error('El IVA debe estar entre 0 y 100')
+  if (!Number.isFinite(rounding) || rounding <= 0) throw new Error('El redondeo debe ser mayor a 0')
+
+  const netPrice = totalCost * (1 + marginPercentage / 100)
+  // Redondeo a 2 decimales antes del ceil: evita que errores de coma flotante (p. ej. 11900.000000001) suban un escalón.
+  const grossRaw = round2(netPrice * (1 + taxRate / 100))
+  const grossPrice = Math.ceil(grossRaw / rounding) * rounding
+  const netFromGross = round2(grossPrice / (1 + taxRate / 100))
+  return {
+    netPrice: round2(netPrice),
+    taxRate,
+    grossPrice,
+    netFromGross,
+    taxAmount: round2(grossPrice - netFromGross),
+    effectiveMarkupPercent: round2(((netFromGross - totalCost) / totalCost) * 100),
+  }
+}
+
 export function calculateUnitCost(price: number, quantity: number): number {
   if (quantity <= 0) return 0
   return round2(price / quantity)

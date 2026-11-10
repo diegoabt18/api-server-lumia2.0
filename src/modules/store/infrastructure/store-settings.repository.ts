@@ -52,8 +52,12 @@ export type StoreCustomerFrontSettings = {
   policiesUrl: string
   termsContent: string
   termsUrl: string
+  /** Espera antes de mostrar el tooltip de una promoción en la tienda (ms). */
+  promotionTooltipDelayMs?: number
   updatedAt?: Date
 }
+
+export const DEFAULT_PROMOTION_TOOLTIP_DELAY_MS = 1000
 
 function defaultPaymentMethodStates(): PaymentMethodState[] {
   return [
@@ -84,6 +88,7 @@ function defaultCustomerSettings(): StoreCustomerFrontSettings {
     policiesUrl: '',
     termsContent: '',
     termsUrl: '',
+    promotionTooltipDelayMs: DEFAULT_PROMOTION_TOOLTIP_DELAY_MS,
   }
 }
 

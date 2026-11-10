@@ -10,11 +10,13 @@ import type { PriceApprovalRepository } from '../infrastructure/price-approval.r
 import type { ProductionAuditRepository } from '../infrastructure/production-audit.repository.js'
 import type { RecipeRepository } from '../infrastructure/recipe.repository.js'
 import type { CostingService } from './costing.service.js'
+import { calculateShelfPrice } from '../domain/value-objects/cost-breakdown.vo.js'
 
 export interface RepostVariantPriceResult {
   variantSku: string
   productId: string
   productName: string
+  /** Precio final con IVA que se publicaría (o el actual si se omitió). */
   suggestedPrice: number
   currentPrice: number
   approvalId: string
@@ -54,6 +56,7 @@ export class VariantPriceRepostService {
           productId: product.id,
           productName: product.name,
           productSlug: product.slug,
+          productTaxRate: product.taxRate ?? null,
           productRecipeId,
           variantSku: sku,
           variantRecipeId: v.production_recipe_id != null ? String(v.production_recipe_id) : null,
@@ -167,6 +170,8 @@ export class VariantPriceRepostService {
     productId: string
     productName: string
     productSlug: string
+    /** IVA del producto (%). null = sin configurar: no se envía a aprobación. */
+    productTaxRate: number | null
     productRecipeId: string | null
     variantSku: string
     variantRecipeId: string | null
@@ -222,12 +227,23 @@ export class VariantPriceRepostService {
       }
     }
 
+    // Los precios de catálogo incluyen IVA: sin la tasa del producto no se puede calcular el precio final.
+    if (input.productTaxRate == null) {
+      throw new Error('Configura el IVA del producto (0 si está excluido) antes de enviarlo a aprobación')
+    }
+
     const costResult = await this.costing.calculateRecipeCost(recipeId, input.userId)
     const breakdown = costResult.data
-    const suggestedPrice = breakdown.suggestedPrice
-    if (suggestedPrice == null || suggestedPrice <= 0) {
+    if (breakdown.suggestedPrice == null || breakdown.suggestedPrice <= 0) {
       throw new Error('No se pudo calcular un precio sugerido (revisa margen de la receta)')
     }
+    const shelf = calculateShelfPrice({
+      totalCost: breakdown.totalCost,
+      marginPercentage: breakdown.marginPercentage,
+      taxRate: input.productTaxRate,
+      rounding: breakdown.config.priceRounding,
+    })
+    const suggestedPrice = shelf.grossPrice
 
     const previousCost = previousCostSheet?.totalCost ?? breakdown.totalCost
     const costSheet = await this.costSheets.createForVariant({
@@ -239,6 +255,8 @@ export class VariantPriceRepostService {
       indirectCost: breakdown.indirectCostTotal,
       totalCost: breakdown.totalCost,
       suggestedPrice,
+      suggestedPriceNet: shelf.netFromGross,
+      taxRate: shelf.taxRate,
       marginPercentage: breakdown.marginPercentage,
       currency: breakdown.config.currency,
       calculatedBy: input.userId,
@@ -253,6 +271,8 @@ export class VariantPriceRepostService {
       materialsCost: breakdown.materialsCost,
       previousPrice: input.currentPrice,
       suggestedPrice,
+      suggestedPriceNet: shelf.netFromGross,
+      taxRate: shelf.taxRate,
       marginPercentage: breakdown.marginPercentage,
       currency: breakdown.config.currency,
       costSheetId: costSheet.id,
@@ -268,6 +288,8 @@ export class VariantPriceRepostService {
       productionData: {
         totalCost: breakdown.totalCost,
         suggestedPrice,
+        suggestedPriceNet: shelf.netFromGross,
+        taxRate: shelf.taxRate,
         materialCost: breakdown.materialsCost,
         margin: breakdown.marginPercentage,
         updatedAt: new Date().toISOString(),
@@ -278,12 +300,14 @@ export class VariantPriceRepostService {
       event_type: 'variant_cost_calculated',
       entity_type: 'variant',
       entity_id: input.variantSku,
-      description: `Reposteo de precio desde receta v${recipe.version} para ${input.variantSku}. Precio sugerido: ${suggestedPrice}`,
+      description: `Reposteo de precio desde receta v${recipe.version} para ${input.variantSku}. Precio sugerido: ${suggestedPrice} (IVA ${shelf.taxRate} % incluido)`,
       metadata: {
         recipeId,
         recipeVersion: recipe.version,
         totalCost: breakdown.totalCost,
         suggestedPrice,
+        suggestedPriceNet: shelf.netFromGross,
+        taxRate: shelf.taxRate,
         costSheetId: costSheet.id,
         approvalId: approval.id,
         source: 'recipe_repost',

@@ -1,5 +1,6 @@
 import type { PromotionEntity } from '../catalog/domain/promotion.entity.js'
 import type { UnifiedPromotionRule } from '../pricing/promotion-discount.js'
+import { normalizePromotionColor } from './promotion-color.js'
 
 function dedupeProductEntries(
   entries: Array<{ slug: string; percentOff: number | null }>,
@@ -54,6 +55,7 @@ export function promotionEntityToUnified(e: PromotionEntity): UnifiedPromotionRu
     productEntries: dedupeProductEntries(productEntries),
     legacyScope,
     legacyProductPercents: e.product_percents,
+    color: normalizePromotionColor(e.color),
   }
 }
 

@@ -34,6 +34,11 @@ export interface PaymentEntity {
   createdAt: Date
   updatedAt: Date
   paidAt?: Date
+  /** Pagos registrados en mostrador (G3): efectivo recibido y cambio entregado. */
+  receivedAmount?: number | null
+  changeGiven?: number | null
+  /** Usuario de administración que registró el pago. */
+  registeredByUserId?: string | null
   events: PaymentEvent[]
 }
 

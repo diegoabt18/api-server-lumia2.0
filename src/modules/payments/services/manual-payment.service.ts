@@ -57,7 +57,8 @@ export class ManualPaymentService {
       orderId,
       attemptNumber,
       externalReference,
-      amount: order.total,
+      // G2: el pago inicial exigido (100 % en stock + anticipos por pedido). Pedidos anteriores: total.
+      amount: order.initialPaymentRequired ?? order.total,
       currency: order.currency ?? 'COP',
       paymentMethod: 'manual',
       providerPreferenceId: `manual-${orderId}-${attemptNumber}`,

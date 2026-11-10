@@ -21,6 +21,19 @@ export class PaymentRepository extends BaseRepository<PaymentDocument> {
       { key: { externalReference: 1 }, unique: true, sparse: true },
       { key: { providerPaymentId: 1 }, sparse: true },
       { key: { status: 1, createdAt: 1 } },
+      // Una referencia de transferencia aprobada solo puede existir una vez en todo el sistema,
+      // independientemente del pedido: es la protección global contra abonos duplicados.
+      {
+        key: { paymentMethod: 1, providerPaymentId: 1 },
+        unique: true,
+        // Solo transferencias aprobadas con referencia real (los pagos en efectivo no la tienen: son null).
+        partialFilterExpression: {
+          status: 'approved',
+          paymentMethod: 'bank_transfer',
+          providerPaymentId: { $type: 'string' },
+        },
+        name: 'uniq_approved_provider_reference',
+      },
     ])
   }
 
@@ -41,6 +54,12 @@ export class PaymentRepository extends BaseRepository<PaymentDocument> {
     return doc ? toEntity(doc) : null
   }
 
+  /** Pago aprobado con la misma referencia de transferencia (evita registrar dos veces el mismo abono). */
+  async findApprovedByProviderReference(paymentMethod: string, providerPaymentId: string): Promise<PaymentEntity | null> {
+    const doc = await this.findOne({ paymentMethod, providerPaymentId, status: 'approved' } as never)
+    return doc ? toEntity(doc) : null
+  }
+
   async updatePaymentStatus(
     id: string,
     status: PaymentStatus,
@@ -48,7 +67,7 @@ export class PaymentRepository extends BaseRepository<PaymentDocument> {
   ): Promise<void> {
     const set: Record<string, unknown> = { status, updatedAt: new Date() }
     if (detail !== undefined) set.statusDetail = detail
-    await this.updateById(id, set as never)
+    await this.updateById(id, { $set: set })
   }
 
   async addPaymentEvent(id: string, event: PaymentEvent): Promise<void> {

@@ -148,6 +148,8 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
         stock: quantity,
         reserved,
         available: Math.max(0, quantity - reserved),
+        // Modalidad de venta por pedido (G3): la tienda la usa para vender sin stock.
+        isMadeToOrder: invRows.some((row) => row.is_per_order === true),
         inventory: invRows.map((row) => ({
           sku: row.sku,
           quantity: row.quantity ?? 0,
@@ -413,6 +415,8 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     price: number
     currency: string
     options?: Record<string, string>
+    option_value_ids?: unknown[]
+    option_rules?: Array<{ option_id: unknown; allowed_value_ids?: unknown[] }>
     compare_at_price?: number
     image_path?: string
     description?: string
@@ -440,6 +444,8 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
       price: data.price,
       currency: data.currency.trim().toUpperCase(),
       options: data.options ?? {},
+      ...(data.option_value_ids ? { option_value_ids: data.option_value_ids } : {}),
+      ...(data.option_rules ? { option_rules: data.option_rules } : {}),
       compare_at_price: data.compare_at_price,
       image_path: data.image_path,
       description: data.description,
@@ -454,7 +460,7 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     patch: Partial<
       Pick<
         VariantEntity,
-        'price' | 'currency' | 'options' | 'compare_at_price' | 'image_path' | 'description' | 'barcode'
+        'price' | 'currency' | 'options' | 'option_value_ids' | 'option_rules' | 'compare_at_price' | 'image_path' | 'description' | 'barcode'
       >
     >,
   ): Promise<VariantEntity | null> {

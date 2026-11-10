@@ -1,5 +1,12 @@
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'published'
 
+/**
+ * Base del precio sugerido de la solicitud.
+ * - `tax_included`: `suggested_price` es el precio final con el IVA del producto (`tax_rate`).
+ * - `legacy`: solicitudes anteriores, con el precio sin IVA; no se pueden publicar.
+ */
+export type PriceBasis = 'tax_included' | 'legacy'
+
 export interface PriceApprovalEntity {
   _id?: unknown
   variant_sku: string
@@ -10,6 +17,11 @@ export interface PriceApprovalEntity {
   materials_cost: number
   previous_price: number
   suggested_price: number
+  /** Base sin IVA del precio sugerido (solo `price_basis: 'tax_included'`). */
+  suggested_price_net?: number
+  /** IVA del producto (%) usado al crear la solicitud. */
+  tax_rate?: number
+  price_basis?: 'tax_included'
   margin_percentage: number
   currency: string
   status: ApprovalStatus
@@ -37,6 +49,9 @@ export interface PriceApprovalDomain {
   materialsCost: number
   previousPrice: number
   suggestedPrice: number
+  suggestedPriceNet?: number
+  taxRate?: number
+  priceBasis: PriceBasis
   marginPercentage: number
   currency: string
   status: ApprovalStatus
@@ -67,6 +82,9 @@ export function toPriceApprovalDomain(
     materialsCost: entity.materials_cost ?? 0,
     previousPrice: entity.previous_price,
     suggestedPrice: entity.suggested_price,
+    suggestedPriceNet: entity.suggested_price_net,
+    taxRate: entity.tax_rate,
+    priceBasis: entity.price_basis === 'tax_included' ? 'tax_included' : 'legacy',
     marginPercentage: entity.margin_percentage,
     currency: entity.currency,
     status: entity.status,

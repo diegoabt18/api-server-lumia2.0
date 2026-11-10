@@ -13,12 +13,14 @@ export type UnifiedPromotionRule = {
   productEntries: Array<{ slug: string; percentOff: number | null }>
   legacyScope?: 'global' | 'products'
   legacyProductPercents?: Record<string, number>
+  color?: string | null
 }
 
 export type ResolvedPromotion = {
   percentOff: number
   promotionName: string
   promotionId: string
+  promotionColor?: string | null
   endsAt: Date
   source: DiscountSource
 }
@@ -111,6 +113,7 @@ export function resolveBestPromotionForProduct(
       percentOff: eff.percentOff,
       promotionName: r.name,
       promotionId: r.id,
+      promotionColor: r.color ?? null,
       endsAt: r.endsAt,
       source: eff.source,
     }

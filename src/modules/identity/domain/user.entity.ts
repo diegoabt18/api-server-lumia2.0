@@ -15,6 +15,7 @@ export interface UserNotificationPreferences {
   promotions: boolean
   orderStatus: boolean
   newProducts: boolean
+  newsletter?: boolean
 }
 
 export interface UserTwoFactor {

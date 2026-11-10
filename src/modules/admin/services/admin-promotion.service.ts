@@ -4,6 +4,7 @@ import type { PromotionRepository } from '../../catalog/infrastructure/promotion
 import type { PromotionEntity } from '../../catalog/domain/promotion.entity.js'
 import { serializePromotionAdmin } from '../serializers/promotion-admin.serializer.js'
 import type { PromotionUpsertInput } from '../schemas/admin.schema.js'
+import { normalizePromotionColor } from '../../pricing/promotion-color.js'
 
 function dedupeEntries(entries: Array<{ product_slug: string; percent_off: number | null }>) {
   const m = new Map<string, { product_slug: string; percent_off: number | null }>()
@@ -59,6 +60,8 @@ function buildEntityFromUpsert(data: PromotionUpsertInput, now: Date, existing?:
   if (data.apply_general_discount && data.general_percent_off != null) {
     doc.general_percent_off = data.general_percent_off
   }
+  const color = normalizePromotionColor(data.color)
+  if (color) doc.color = color
   if (data.notification_image_slug?.trim()) doc.notification_image_slug = data.notification_image_slug.trim()
   if (data.notification_image_path?.trim()) doc.notification_image_path = data.notification_image_path.trim()
   return doc

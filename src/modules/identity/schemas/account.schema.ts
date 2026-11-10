@@ -17,6 +17,8 @@ export const notificationPreferencesSchema = z.object({
   promotions: z.boolean(),
   orderStatus: z.boolean(),
   newProducts: z.boolean(),
+  /** Suscripción al newsletter (promociones, anuncios). Se cancela desde Mi cuenta. */
+  newsletter: z.boolean().optional(),
 })
 
 export const accountPreferencesPatchSchema = z.object({

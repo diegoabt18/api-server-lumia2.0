@@ -6,7 +6,7 @@ import {
   publishPriceApprovalPatch,
   rejectPriceApprovalPatch,
 } from '../domain/price-approval.entity.js'
-import type { ApprovalStatus } from '../domain/price-approval.entity.js'
+import type { ApprovalStatus, PriceApprovalDomain } from '../domain/price-approval.entity.js'
 import type { PriceApprovalRepository } from '../infrastructure/price-approval.repository.js'
 import type { ProductionAuditRepository } from '../infrastructure/production-audit.repository.js'
 import type { ProductRepository } from '../../catalog/infrastructure/product.repository.js'
@@ -45,14 +45,27 @@ export class PriceApprovalService {
     }
   }
 
-  async approve(approvalIds: string[], userId: string) {
-    const results = []
-    for (const id of approvalIds) {
+  /**
+   * Carga todas las solicitudes y comprueba su estado ANTES de modificar ninguna: un error en una
+   * solicitud del lote no deja aplicadas las anteriores.
+   */
+  private async loadAll(approvalIds: string[], status: ApprovalStatus, action: string): Promise<PriceApprovalDomain[]> {
+    const loaded: PriceApprovalDomain[] = []
+    for (const id of [...new Set(approvalIds)]) {
       const approval = await this.approvals.getById(id)
       if (!approval) throw AppError.notFound(`Solicitud "${id}" no encontrada`)
-      if (approval.status !== 'pending') {
-        throw AppError.badRequest(`No se puede aprobar una solicitud en estado "${approval.status}"`)
+      if (approval.status !== status) {
+        throw AppError.badRequest(`No se puede ${action} una solicitud en estado "${approval.status}"`)
       }
+      loaded.push(approval)
+    }
+    return loaded
+  }
+
+  async approve(approvalIds: string[], userId: string) {
+    const results = []
+    for (const approval of await this.loadAll(approvalIds, 'pending', 'aprobar')) {
+      const id = approval.id
       const updated = await this.approvals.update(id, approvePriceApprovalPatch(userId))
       if (updated) {
         results.push(updated)
@@ -72,12 +85,8 @@ export class PriceApprovalService {
 
   async reject(approvalIds: string[], reason: string, userId: string) {
     const results = []
-    for (const id of approvalIds) {
-      const approval = await this.approvals.getById(id)
-      if (!approval) throw AppError.notFound(`Solicitud "${id}" no encontrada`)
-      if (approval.status !== 'pending') {
-        throw AppError.badRequest(`No se puede rechazar una solicitud en estado "${approval.status}"`)
-      }
+    for (const approval of await this.loadAll(approvalIds, 'pending', 'rechazar')) {
+      const id = approval.id
       const updated = await this.approvals.update(id, rejectPriceApprovalPatch(userId, reason))
       if (updated) {
         results.push(updated)
@@ -95,14 +104,48 @@ export class PriceApprovalService {
     return { data: results }
   }
 
+  /**
+   * Comprobaciones de publicación (todas antes de escribir):
+   * - la solicitud debe tener el precio final con IVA (`priceBasis: 'tax_included'`): las anteriores
+   *   guardaban el precio sin IVA y publicarlo dejaría la variante por debajo de lo calculado;
+   * - el precio actual de la variante debe ser el que tenía al crear la solicitud (si alguien lo
+   *   cambió, publicar lo sobrescribiría sin aviso);
+   * - el IVA del producto debe seguir siendo el usado en la solicitud;
+   * - el precio a publicar debe ser mayor que 0.
+   */
+  private async assertPublishable(approval: PriceApprovalDomain): Promise<void> {
+    const label = `${approval.productName ?? approval.productSlug} (${approval.variantSku})`
+    if (approval.priceBasis !== 'tax_included') {
+      throw AppError.conflict(
+        `${label}: la solicitud se creó con la regla anterior (precio sin IVA). Recházala y vuelve a enviar el producto a aprobación.`,
+      )
+    }
+    if (!(approval.suggestedPrice > 0)) {
+      throw AppError.conflict(`${label}: el precio sugerido no es válido.`)
+    }
+    const variant = await this.products.getVariantRaw(approval.productSlug, approval.variantSku)
+    if (!variant) throw AppError.conflict(`${label}: la variante ya no existe.`)
+    if (variant.price !== approval.previousPrice) {
+      throw AppError.conflict(
+        `${label}: el precio cambió (${approval.previousPrice} → ${variant.price}) desde que se creó la solicitud. Recházala y vuelve a enviar el producto.`,
+      )
+    }
+    const product = await this.products.findBySlugOrId(approval.productSlug)
+    const currentTaxRate = product?.taxRate ?? null
+    if (currentTaxRate !== (approval.taxRate ?? null)) {
+      throw AppError.conflict(
+        `${label}: el IVA del producto cambió (${approval.taxRate ?? '—'} % → ${currentTaxRate ?? '—'} %) desde que se creó la solicitud. Vuelve a enviar el producto.`,
+      )
+    }
+  }
+
   async publish(approvalIds: string[], userId: string) {
+    const approvals = await this.loadAll(approvalIds, 'approved', 'publicar')
+    for (const approval of approvals) await this.assertPublishable(approval)
+
     const results = []
-    for (const id of approvalIds) {
-      const approval = await this.approvals.getById(id)
-      if (!approval) throw AppError.notFound(`Solicitud "${id}" no encontrada`)
-      if (approval.status !== 'approved') {
-        throw AppError.badRequest(`No se puede publicar una solicitud en estado "${approval.status}"`)
-      }
+    for (const approval of approvals) {
+      const id = approval.id
       await this.products.updateVariantPrice(approval.variantSku, approval.suggestedPrice)
       const updated = await this.approvals.update(id, publishPriceApprovalPatch(userId))
       if (updated) {
@@ -116,6 +159,9 @@ export class PriceApprovalService {
             variantSku: approval.variantSku,
             previousPrice: approval.previousPrice,
             newPrice: approval.suggestedPrice,
+            newPriceNet: approval.suggestedPriceNet,
+            taxRate: approval.taxRate,
+            priceBasis: approval.priceBasis,
           },
           previous_value: approval.previousPrice,
           new_value: approval.suggestedPrice,

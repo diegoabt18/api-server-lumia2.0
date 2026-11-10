@@ -27,6 +27,7 @@ import { ManualPaymentService } from './modules/payments/services/manual-payment
 import { MaterialSupplierRepository } from './modules/production/infrastructure/material-supplier.repository.js'
 import { MaterialSupplierService } from './modules/production/services/material-supplier.service.js'
 import { OrderStockService } from './modules/sales/services/order-stock.service.js'
+import { OrderPaymentService } from './modules/sales/services/order-payment.service.js'
 import { OrderFinancialEvents } from './modules/sales/services/order-financial-events.service.js'
 import { OnlinePaymentService } from './modules/payments/services/online-payment.service.js'
 import { createMercadoPagoClient } from './modules/payments/infrastructure/mercadopago.client.js'
@@ -188,6 +189,7 @@ export interface AppContext {
     adminDashboard: DashboardService
     adminProducts: AdminProductService
     adminOrders: AdminOrderService
+    orderPayments: OrderPaymentService
     adminCategories: AdminCategoryService
     adminStore: AdminStoreService
     adminPromotions: AdminPromotionService
@@ -404,12 +406,13 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   const adminProducts = new AdminProductService(products, categories, catalogOptions)
   const orderStock = new OrderStockService(inventory, orders)
   const orderFinancialEvents = new OrderFinancialEvents(financialOutbox)
+  const orderPayments = new OrderPaymentService(orders, payments, orderStock)
   const adminOrders = new AdminOrderService(orders, users, orderStock, orderFinancialEvents)
   const adminCategories = new AdminCategoryService(categories)
   const adminStore = new AdminStoreService(storeSettings)
   const adminPromotions = new AdminPromotionService(promotions)
   const adminBanners = new AdminBannerService(storeBanners)
-  const adminInventory = new AdminInventoryService(inventory)
+  const adminInventory = new AdminInventoryService(inventory, productionAuditRepo)
   const adminStaff = new AdminStaffService(users)
   const registry = new RegistryRepository(identityDb)
   const adminRegistry = new AdminRegistryService(registry)
@@ -422,7 +425,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   const adminAudit = new AdminAuditService(authAudit)
   const adminMeta = new AdminMetaService(env)
   const adminPricing = new AdminPricingService(productionConfigRepo)
-  const pos = new PosSaleService(orders, products, inventory, promotions, users, payments, storeSettings, posCustomers, financialOutbox)
+  const pos = new PosSaleService(orders, products, inventory, promotions, users, payments, storeSettings, posCustomers, financialOutbox, orderPayments)
 
   const productionUnitConversion = new UnitConversionService(productionUnitsRepo, productionEquivalencesRepo)
   const productionCosting = new CostingService(
@@ -561,7 +564,8 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       permissionCache,
       products: new ProductService(products, promotions),
       categories: new CategoryService(categories),
-      orders: new OrderService(orders, carts, inventory, manualPayments, mail, push, products),
+      orders: new OrderService(orders, carts, inventory, manualPayments, mail, push, products, productionCostSheetsRepo, logger),
+      orderPayments,
       cart: new CartService(carts, products),
       favorites: new FavoritesService(favorites),
       feedback: feedbackService,

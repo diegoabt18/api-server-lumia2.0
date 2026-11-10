@@ -59,6 +59,7 @@ describe('POS customer search', () => {
       {} as never,
       { findOrCreate: async (input: { name?: string }) => ({ id: 'pc-1', name: input.name || 'Consumidor final', email: null, phone: null }), findById: async () => null, search: async () => [] } as never,
       { enqueue: async () => true } as never,
+      { registerPayment: async () => ({}) } as never,
     )
     await service.searchCustomers('  Diego  ', 10)
     expect(listAll).toHaveBeenCalledWith(0, 10, { type: 'all', search: 'Diego' })
@@ -121,6 +122,7 @@ describe('POS counter customers', () => {
       storeSettings as never,
       { findOrCreate, findById: async () => null, search: async () => [] } as never,
       { enqueue: async () => true } as never,
+      { registerPayment: async () => ({}) } as never,
     )
     await service.createSale(
       {
@@ -161,6 +163,7 @@ describe('POS counter customers', () => {
       { getPaymentSettings: async () => ({ methods: [{ methodId: 'cash', isActive: true }], bankTransferDetails: null }) } as never,
       { findOrCreate, findById: async () => null, search: async () => [] } as never,
       { enqueue: async () => true } as never,
+      { registerPayment: async () => ({}) } as never,
     )
     await service.createSale(
       {

@@ -3,7 +3,10 @@ import {
   isStoreBannerPosition,
   type StoreBannerPosition,
 } from '../../catalog/domain/store-banner.entity.js'
-import type { StoreSettingsRepository } from '../infrastructure/store-settings.repository.js'
+import {
+  DEFAULT_PROMOTION_TOOLTIP_DELAY_MS,
+  type StoreSettingsRepository,
+} from '../infrastructure/store-settings.repository.js'
 
 export class StoreService {
   constructor(
@@ -43,6 +46,7 @@ export class StoreService {
         policiesUrl: s.policiesUrl ?? '',
         termsContent: s.termsContent ?? '',
         termsUrl: s.termsUrl ?? '',
+        promotionTooltipDelayMs: s.promotionTooltipDelayMs ?? DEFAULT_PROMOTION_TOOLTIP_DELAY_MS,
         updatedAt: s.updatedAt instanceof Date ? s.updatedAt.toISOString() : undefined,
       },
     }

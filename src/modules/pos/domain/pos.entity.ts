@@ -1,3 +1,4 @@
+import { nextRequiredPayment } from '../../sales/domain/order-payment-ledger.js'
 import type {
   OrderChannel,
   OrderEntity,
@@ -70,6 +71,12 @@ export interface PosSaleView {
   paymentStatus: string
   fulfillmentStatus: string
   paymentMethod: string
+  /** Pago inicial, pagado y saldo (G3). */
+  initialPaymentRequired?: number
+  paidAmount?: number
+  balanceDue?: number
+  /** Importe exacto que debe cobrarse ahora (anticipo pendiente o saldo completo). */
+  nextPaymentRequired?: number
   cashReceived?: number | null
   changeGiven?: number | null
   transferReference?: string | null
@@ -168,6 +175,13 @@ export function toPosSaleView(order: OrderEntity): PosSaleView {
     paymentStatus: order.paymentStatus ?? 'unpaid',
     fulfillmentStatus: order.fulfillmentStatus ?? 'unfulfilled',
     paymentMethod: order.paymentMethod ?? 'manual',
+    initialPaymentRequired: order.initialPaymentRequired ?? order.total,
+    paidAmount: order.paidAmount ?? (order.paymentStatus === 'paid' ? order.total : 0),
+    balanceDue: order.balanceDue ?? (order.paymentStatus === 'paid' ? 0 : order.total),
+    nextPaymentRequired: nextRequiredPayment({
+      balanceDue: order.balanceDue ?? (order.paymentStatus === 'paid' ? 0 : order.total),
+      initialRemaining: Math.max(0, (order.initialPaymentRequired ?? order.total) - (order.paidAmount ?? (order.paymentStatus === 'paid' ? order.total : 0))),
+    }),
     cashReceived: order.cashReceived ?? null,
     changeGiven: order.changeGiven ?? null,
     transferReference: order.transferReference ?? null,
