@@ -2,10 +2,11 @@ import { ObjectId, type Db } from 'mongodb'
 import { BaseRepository, getCollection } from '../../../database/repositories/base.repository.js'
 import type { UserRoleAssignment } from '../domain/role.entity.js'
 
+/** Referencias guardadas como ObjectId, igual que users._id y roles._id. */
 interface UserRoleDocument {
   _id: ObjectId
-  userId: string
-  roleId: string
+  userId: ObjectId
+  roleId: ObjectId
   assignedAt?: Date
   assignedBy?: string | null
 }
@@ -13,11 +14,16 @@ interface UserRoleDocument {
 function toEntity(doc: UserRoleDocument): UserRoleAssignment {
   return {
     _id: doc._id.toString(),
-    userId: doc.userId,
-    roleId: doc.roleId,
+    userId: String(doc.userId),
+    roleId: String(doc.roleId),
     assignedAt: doc.assignedAt,
     assignedBy: doc.assignedBy ?? null,
   }
+}
+
+/** Convierte un id recibido (string) a ObjectId; null si no es un id válido. */
+function toObjectId(id: string): ObjectId | null {
+  return ObjectId.isValid(id) ? new ObjectId(id) : null
 }
 
 export class UserRoleRepository extends BaseRepository<UserRoleDocument> {
@@ -34,18 +40,23 @@ export class UserRoleRepository extends BaseRepository<UserRoleDocument> {
   }
 
   async findByUserId(userId: string): Promise<UserRoleAssignment[]> {
-    const docs = await this.findMany({ userId } as never, { sort: { assignedAt: -1 } })
+    const uid = toObjectId(userId)
+    if (!uid) return []
+    const docs = await this.findMany({ userId: uid } as never, { sort: { assignedAt: -1 } })
     return docs.map((d) => toEntity(d))
   }
 
   async assign(userId: string, roleId: string, assignedBy?: string): Promise<UserRoleAssignment> {
     const now = new Date()
-    const existing = await this.findOne({ userId, roleId } as never)
+    const uid = toObjectId(userId)
+    const rid = toObjectId(roleId)
+    if (!uid || !rid) throw new Error(`IDs inválidos para asignar rol: ${userId} / ${roleId}`)
+    const existing = await this.findOne({ userId: uid, roleId: rid } as never)
     if (existing) return toEntity(existing)
 
     const id = await this.insertOne({
-      userId,
-      roleId,
+      userId: uid,
+      roleId: rid,
       assignedAt: now,
       assignedBy: assignedBy ?? null,
     } as UserRoleDocument)
@@ -54,16 +65,23 @@ export class UserRoleRepository extends BaseRepository<UserRoleDocument> {
   }
 
   async remove(userId: string, roleId: string): Promise<boolean> {
-    const result = await this.collection.deleteOne({ userId, roleId } as never)
+    const uid = toObjectId(userId)
+    const rid = toObjectId(roleId)
+    if (!uid || !rid) return false
+    const result = await this.collection.deleteOne({ userId: uid, roleId: rid } as never)
     return result.deletedCount > 0
   }
 
   async removeAllForUser(userId: string): Promise<number> {
-    const result = await this.collection.deleteMany({ userId } as never)
+    const uid = toObjectId(userId)
+    if (!uid) return 0
+    const result = await this.collection.deleteMany({ userId: uid } as never)
     return result.deletedCount
   }
 
   async countAssignmentsForRole(roleId: string): Promise<number> {
-    return this.collection.countDocuments({ roleId } as never)
+    const rid = toObjectId(roleId)
+    if (!rid) return 0
+    return this.collection.countDocuments({ roleId: rid } as never)
   }
 }
