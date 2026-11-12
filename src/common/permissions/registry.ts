@@ -58,6 +58,8 @@ export const PERMISSION_REGISTRY = {
   EQUIVALENCES_CREATE: 'equivalences.create',
   EQUIVALENCES_UPDATE: 'equivalences.update',
   EQUIVALENCES_DELETE: 'equivalences.delete',
+  /** Usar el asistente Lumi (ia-asistente) desde el panel administrativo. */
+  LUMI_USE: 'lumi.use',
 } as const
 
 export type PermissionId = (typeof PERMISSION_REGISTRY)[keyof typeof PERMISSION_REGISTRY]

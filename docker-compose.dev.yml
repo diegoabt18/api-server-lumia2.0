@@ -62,7 +62,7 @@ services:
   redis:
     profiles: [local, atlas, prod]
     ports:
-      - '6379:6379'
+      - '127.0.0.1:6379:6379'
 
   api:
     <<: *api-dev

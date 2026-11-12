@@ -115,6 +115,12 @@ const envSchema = z.object({
   FCM_PRIVATE_KEY: z.string().optional(),
   /** Clave compartida app ↔ API para registrar tokens FCM */
   LUMICHAT_DEVICE_KEY: z.string().min(16).optional(),
+
+  // Asistente Lumi (ia-asistente). Sin URL, las rutas /admin/lumi responden 503.
+  LUMI_ASSISTANT_URL: z.string().url().optional(),
+  /** Clave de servicio servidor ↔ ia-asistente (X-API-Key). Nunca se expone al navegador. */
+  LUMI_ASSISTANT_API_KEY: z.string().min(16).optional(),
+  LUMI_ASSISTANT_TIMEOUT_MS: z.coerce.number().int().min(1000).default(120000),
 })
 
 export type Env = z.infer<typeof envSchema>
