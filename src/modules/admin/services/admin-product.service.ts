@@ -2,10 +2,19 @@ import { AppError } from '../../../common/errors/app.error.js'
 import { buildPaginationMeta, resolvePagingQuery } from '../../../common/utils/pagination.js'
 import type { ProductRepository } from '../../catalog/infrastructure/product.repository.js'
 import type { CategoryRepository } from '../../catalog/infrastructure/category.repository.js'
+import type { SubcategoryRepository } from '../../catalog/infrastructure/subcategory.repository.js'
 import type { CatalogOptionRepository } from '../../catalog/infrastructure/catalog-option.repository.js'
+import { resolveProductHierarchyFilter } from '../../catalog/services/catalog-hierarchy.js'
 import type { ProductDomain, VariantDomain } from '../../catalog/domain/catalog.entity.js'
 
-function serializeProduct(p: ProductDomain) {
+/** Nombres derivados de la jerarquía, para mostrar en la administración (nunca se guardan en el producto). */
+export interface ProductHierarchyLabels {
+  categoryId?: string | null
+  categoryName?: string | null
+  subcategoryName?: string | null
+}
+
+function serializeProduct(p: ProductDomain, labels: ProductHierarchyLabels = {}) {
   return {
     id: p.id,
     name: p.name,
@@ -13,11 +22,30 @@ function serializeProduct(p: ProductDomain) {
     taxRate: p.taxRate ?? null,
     description: p.description ?? null,
     categorySlug: p.categorySlug ?? null,
+    categoryId: labels.categoryId ?? null,
+    categoryName: labels.categoryName ?? null,
+    subcategoryId: p.subcategoryId ?? null,
+    subcategoryName: labels.subcategoryName ?? null,
     brand: p.brand ?? null,
     status: p.status ?? 'active',
     createdAt: p.createdAt ?? null,
     updatedAt: p.updatedAt ?? null,
     imagePath: p.imagePath ?? null,
+  }
+}
+
+function labelsFor(
+  subcategoryId: string | null | undefined,
+  subMap: Map<string, { name: string; categoryId: string }>,
+  catMap: Map<string, { name: string }>,
+): ProductHierarchyLabels {
+  if (!subcategoryId) return {}
+  const sub = subMap.get(subcategoryId)
+  if (!sub) return {}
+  return {
+    categoryId: sub.categoryId,
+    categoryName: catMap.get(sub.categoryId)?.name ?? null,
+    subcategoryName: sub.name,
   }
 }
 
@@ -54,18 +82,64 @@ export class AdminProductService {
     private readonly products: ProductRepository,
     private readonly categories: CategoryRepository,
     private readonly catalogOptions: CatalogOptionRepository,
+    private readonly subcategories: SubcategoryRepository,
   ) {}
+
+  /** Índice id → nombre y categoría de todas las subcategorías (para etiquetas de producto). */
+  private async subcategoryLabelIndex() {
+    const subs = await this.subcategories.findAllDomain()
+    return new Map(subs.map((s) => [s.id, { name: s.name, categoryId: s.categoryId }] as const))
+  }
+
+  private async categoryLabelIndex() {
+    const cats = await this.categories.findAll()
+    return new Map(cats.map((c) => [c.id, { name: c.name }] as const))
+  }
+
+  /**
+   * Valida que la subcategoría exista y que su categoría también. Una subcategoría o categoría
+   * inactiva solo se admite si el producto ya la tenía asignada (no bloquea ediciones de otros campos).
+   */
+  private async resolveAssignableSubcategory(
+    subcategoryId: string,
+    currentSubcategoryId?: string | null,
+  ): Promise<{ subcategoryId: string; categorySlug: string }> {
+    const keepsCurrent = currentSubcategoryId === subcategoryId
+    const sub = await this.subcategories.findRawById(subcategoryId)
+    if (!sub) throw AppError.badRequest('La subcategoría seleccionada no existe')
+    if (!keepsCurrent && sub.status === 'inactive') {
+      throw AppError.badRequest('La subcategoría seleccionada está inactiva')
+    }
+    const category = await this.categories.findById(String(sub.category_id))
+    if (!category) throw AppError.badRequest('La categoría de la subcategoría no existe')
+    if (!keepsCurrent && category.status === 'inactive') {
+      throw AppError.badRequest('La categoría de la subcategoría está inactiva')
+    }
+    return { subcategoryId, categorySlug: category.slug }
+  }
 
   async list(query: Record<string, unknown>) {
     const { page, limit, skip, search } = resolvePagingQuery(query, {
       defaultLimit: 20,
       maxLimit: 200,
     })
-    const [list, total] = await Promise.all([
-      this.products.listAdmin(limit, skip, search || undefined),
-      this.products.countAllAdmin(search || undefined),
+    const hierarchy = await resolveProductHierarchyFilter(
+      this.categories,
+      this.subcategories,
+      typeof query.category === 'string' ? query.category : undefined,
+      typeof query.subcategory === 'string' ? query.subcategory : undefined,
+    )
+    if (hierarchy.empty) {
+      return { products: [], items: [], pagination: buildPaginationMeta(0, page, limit) }
+    }
+    const filter = { categorySlug: hierarchy.categorySlug, subcategoryId: hierarchy.subcategoryId }
+    const [list, total, subMap, catMap] = await Promise.all([
+      this.products.listAdmin(limit, skip, search || undefined, filter),
+      this.products.countAllAdmin(search || undefined, filter),
+      this.subcategoryLabelIndex(),
+      this.categoryLabelIndex(),
     ])
-    const serialized = list.map(serializeProduct)
+    const serialized = list.map((p) => serializeProduct(p, labelsFor(p.subcategoryId, subMap, catMap)))
     return {
       products: serialized,
       items: serialized,
@@ -83,9 +157,14 @@ export class AdminProductService {
       : await this.catalogOptions.listLegacyOptionsByProductSlug(product.slug)
     const variants = product.variants.map(serializeAdminVariant)
     const rawAny = raw as Record<string, unknown> | null
+    const labels = labelsFor(
+      product.subcategoryId,
+      await this.subcategoryLabelIndex(),
+      await this.categoryLabelIndex(),
+    )
     return {
       product: {
-        ...serializeProduct(product),
+        ...serializeProduct(product, labels),
         pdpShowSensoryBlock: rawAny?.pdpShowSensoryBlock === true,
         pdpSensoryNotes: Array.isArray(rawAny?.pdpSensoryNotes) ? rawAny.pdpSensoryNotes : [],
         pdpSensoryIntensity: (rawAny?.pdpSensoryIntensity as string | null | undefined) ?? null,
@@ -110,18 +189,19 @@ export class AdminProductService {
     name: string
     slug: string
     description?: string
-    category_slug?: string
+    subcategory_id: string
     brand?: string
     status?: 'active' | 'inactive'
     image_path?: string
     tax_rate?: number | null
   }) {
-    if (data.category_slug) {
-      const cat = await this.categories.findBySlug(data.category_slug)
-      if (!cat) throw AppError.badRequest(`La categoría "${data.category_slug}" no existe`)
-    }
+    const assigned = await this.resolveAssignableSubcategory(data.subcategory_id)
     try {
-      const created = await this.products.createProduct(data)
+      const created = await this.products.createProduct({
+        ...data,
+        subcategory_id: assigned.subcategoryId,
+        category_slug: assigned.categorySlug,
+      })
       return { product: serializeProduct(created) }
     } catch (e: unknown) {
       if ((e as { code?: number }).code === 11000)
@@ -136,7 +216,7 @@ export class AdminProductService {
       name: string
       slug: string
       description?: string | null
-      category_slug?: string | null
+      subcategory_id?: string
       brand?: string | null
       status: 'active' | 'inactive'
       image_path?: string | null
@@ -157,13 +237,15 @@ export class AdminProductService {
     if (patch.name !== undefined) normalized.name = patch.name
     if (patch.slug !== undefined) normalized.slug = patch.slug
     if (patch.description !== undefined) normalized.description = patch.description ?? undefined
-    if (patch.category_slug !== undefined) {
-      const cat = patch.category_slug?.trim()
-      if (cat) {
-        const found = await this.categories.findBySlug(cat)
-        if (!found) throw AppError.badRequest(`La categoría "${cat}" no existe`)
-        normalized.category_slug = cat
-      } else normalized.category_slug = undefined
+    if (patch.subcategory_id !== undefined) {
+      const current = await this.products.findBySlugOrId(id)
+      if (!current) throw AppError.notFound('Producto no encontrado')
+      const assigned = await this.resolveAssignableSubcategory(
+        patch.subcategory_id,
+        current.subcategoryId ?? null,
+      )
+      normalized.subcategory_id = assigned.subcategoryId
+      normalized.category_slug = assigned.categorySlug
     }
     if (patch.brand !== undefined) normalized.brand = patch.brand ?? undefined
     if (patch.status !== undefined) normalized.status = patch.status

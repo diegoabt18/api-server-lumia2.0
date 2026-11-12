@@ -2,6 +2,9 @@ import { getEnv } from '../../../config/env.js'
 import { buildPaginationMeta, resolvePagingQuery } from '../../../common/utils/pagination.js'
 import type { ProductRepository } from '../infrastructure/product.repository.js'
 import type { PromotionRepository } from '../infrastructure/promotion.repository.js'
+import type { CategoryRepository } from '../infrastructure/category.repository.js'
+import type { SubcategoryRepository } from '../infrastructure/subcategory.repository.js'
+import { resolveProductHierarchyFilter } from './catalog-hierarchy.js'
 import {
   applyPromotionToVariants,
   resolveBestPromotionForProductFromEntities,
@@ -11,6 +14,8 @@ export class ProductService {
   constructor(
     private readonly products: ProductRepository,
     private readonly promotions: PromotionRepository,
+    private readonly categories: CategoryRepository,
+    private readonly subcategories: SubcategoryRepository,
   ) {}
 
   private async mapProductWithPromotions(
@@ -54,12 +59,27 @@ export class ProductService {
       maxLimit: 100,
     })
     const categoryRaw = typeof query.category === 'string' ? query.category.trim() : ''
-    const categorySlug = categoryRaw.split(',')[0]?.trim() || undefined
+    const subcategoryRaw = typeof query.subcategory === 'string' ? query.subcategory : undefined
+    const hierarchy = await resolveProductHierarchyFilter(
+      this.categories,
+      this.subcategories,
+      categoryRaw,
+      subcategoryRaw,
+    )
+    if (hierarchy.empty) {
+      return {
+        products: [],
+        items: [],
+        pagination: buildPaginationMeta(0, page, limit),
+      }
+    }
+    const categorySlug = hierarchy.categorySlug
+    const subcategoryId = hierarchy.subcategoryId
 
     const now = new Date()
     const [items, total, topSlugs, promos] = await Promise.all([
-      this.products.findActivePaged(limit, skip, search || undefined, categorySlug),
-      this.products.countActive(search || undefined, categorySlug),
+      this.products.findActivePaged(limit, skip, search || undefined, categorySlug, subcategoryId),
+      this.products.countActive(search || undefined, categorySlug, subcategoryId),
       this.products.findTopSellingSlugs(env.STORE_BESTSELLER_TOP_N),
       this.promotions.findActiveAt(now),
     ])

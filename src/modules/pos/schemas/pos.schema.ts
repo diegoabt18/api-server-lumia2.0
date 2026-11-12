@@ -71,6 +71,9 @@ export const posBarcodeSchema = z.object({
 
 export const posProductSearchQuerySchema = z.object({
   search: z.string().trim().max(120).optional(),
+  /** Filtros opcionales de jerarquía: slug de categoría y slug (o id) de subcategoría. */
+  category: z.string().trim().max(120).optional(),
+  subcategory: z.string().trim().max(120).optional(),
   page: z.coerce.number().int().min(1).max(10_000).default(1),
   pageSize: z.coerce.number().int().refine((n) => [10, 20, 50].includes(n), 'Tamaño de página no válido').default(10),
 })

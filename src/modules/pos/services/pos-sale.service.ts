@@ -174,13 +174,22 @@ export class PosSaleService {
     }
   }
 
+  /**
+   * Búsqueda de productos para el POS. Puede buscar por texto, por jerarquía (categoría/subcategoría)
+   * o por ambas. Sin texto ni filtro no devuelve nada (evita listar todo el catálogo).
+   */
   async searchProducts(
     term: string,
     page: number,
     pageSize: number,
+    hierarchy: { categorySlug?: string; subcategoryId?: string; empty?: boolean } = {},
   ): Promise<{ products: PosProductView[]; total: number; page: number; pageSize: number; totalPages: number }> {
+    const hasFilter = Boolean(hierarchy.categorySlug || hierarchy.subcategoryId)
+    if (hierarchy.empty || (!term.trim() && !hasFilter)) {
+      return { products: [], total: 0, page, pageSize, totalPages: 1 }
+    }
     const [result, promotions] = await Promise.all([
-      this.products.searchForPos(term, page, pageSize),
+      this.products.searchForPos(term, page, pageSize, hierarchy),
       this.promotions.findActiveAt(new Date()),
     ])
     const now = new Date()

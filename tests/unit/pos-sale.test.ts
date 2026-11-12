@@ -310,7 +310,7 @@ describe('POS product search pagination', () => {
       { registerPayment: async () => ({}) } as never,
     )
     const res = await service.searchProducts('vela', 2, 10)
-    expect(searchForPos).toHaveBeenCalledWith('vela', 2, 10)
+    expect(searchForPos).toHaveBeenCalledWith('vela', 2, 10, {})
     expect(res.total).toBe(37)
     expect(res.totalPages).toBe(4)
     expect(res.page).toBe(2)

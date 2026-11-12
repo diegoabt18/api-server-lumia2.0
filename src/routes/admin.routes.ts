@@ -16,6 +16,10 @@ import {
   adminProductCreateSchema,
   adminProductOptionsSchema,
   adminProductPatchSchema,
+  adminCategoryPatchSchema,
+  adminCategoryStatusSchema,
+  adminSubcategorySchema,
+  adminSubcategoryPatchSchema,
   adminPromotionActiveSchema,
   adminRevokeSessionSchema,
   adminVariantCreateSchema,
@@ -188,13 +192,22 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
     async (request) => services.adminCategories.list(request.query as Record<string, unknown>),
   )
 
+  api.get(
+    '/admin/categories/:id',
+    { preHandler: g(PERMISSION_REGISTRY.CATEGORIES_READ) },
+    async (request) => {
+      const { id } = request.params as { id: string }
+      return services.adminCategories.getById(id)
+    },
+  )
+
   api.post(
     '/admin/categories',
     { preHandler: g(PERMISSION_REGISTRY.CATEGORIES_CREATE) },
     async (request) => {
       const parsed = adminCategorySchema.safeParse(request.body)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
-      return services.adminCategories.create(parsed.data.name, parsed.data.slug)
+      return services.adminCategories.create(parsed.data)
     },
   )
 
@@ -203,9 +216,20 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
     { preHandler: g(PERMISSION_REGISTRY.CATEGORIES_UPDATE) },
     async (request) => {
       const { id } = request.params as { id: string }
-      const parsed = adminCategorySchema.partial().safeParse(request.body)
+      const parsed = adminCategoryPatchSchema.safeParse(request.body)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
       return services.adminCategories.update(id, parsed.data)
+    },
+  )
+
+  api.patch(
+    '/admin/categories/:id/status',
+    { preHandler: g(PERMISSION_REGISTRY.CATEGORIES_UPDATE) },
+    async (request) => {
+      const { id } = request.params as { id: string }
+      const parsed = adminCategoryStatusSchema.safeParse(request.body)
+      if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+      return services.adminCategories.setStatus(id, parsed.data.status)
     },
   )
 
@@ -215,6 +239,58 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
     async (request) => {
       const { id } = request.params as { id: string }
       return services.adminCategories.delete(id)
+    },
+  )
+
+  // ─── Subcategories (dentro de una categoría) ───
+  api.get(
+    '/admin/categories/:id/subcategories',
+    { preHandler: g(PERMISSION_REGISTRY.CATEGORIES_READ) },
+    async (request) => {
+      const { id } = request.params as { id: string }
+      return services.adminCategories.listSubcategories(id)
+    },
+  )
+
+  api.post(
+    '/admin/categories/:id/subcategories',
+    { preHandler: g(PERMISSION_REGISTRY.CATEGORIES_CREATE) },
+    async (request) => {
+      const { id } = request.params as { id: string }
+      const parsed = adminSubcategorySchema.safeParse(request.body)
+      if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+      return services.adminCategories.createSubcategory(id, parsed.data)
+    },
+  )
+
+  api.patch(
+    '/admin/subcategories/:id',
+    { preHandler: g(PERMISSION_REGISTRY.CATEGORIES_UPDATE) },
+    async (request) => {
+      const { id } = request.params as { id: string }
+      const parsed = adminSubcategoryPatchSchema.safeParse(request.body)
+      if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+      return services.adminCategories.updateSubcategory(id, parsed.data)
+    },
+  )
+
+  api.patch(
+    '/admin/subcategories/:id/status',
+    { preHandler: g(PERMISSION_REGISTRY.CATEGORIES_UPDATE) },
+    async (request) => {
+      const { id } = request.params as { id: string }
+      const parsed = adminCategoryStatusSchema.safeParse(request.body)
+      if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+      return services.adminCategories.setSubcategoryStatus(id, parsed.data.status)
+    },
+  )
+
+  api.delete(
+    '/admin/subcategories/:id',
+    { preHandler: g(PERMISSION_REGISTRY.CATEGORIES_DELETE) },
+    async (request) => {
+      const { id } = request.params as { id: string }
+      return services.adminCategories.deleteSubcategory(id)
     },
   )
 

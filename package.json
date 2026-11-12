@@ -23,6 +23,7 @@
     "db:sync-from-prod": "tsx scripts/sync-db-from-prod.ts",
     "db:seed-payment-methods": "tsx scripts/seed-payment-methods.ts",
     "db:recalculate-ratings": "tsx scripts/recalculate-product-ratings.ts",
+    "db:catalog-hierarchy": "tsx scripts/catalog-hierarchy-migrate.ts",
     "docker:dev:local": "docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile local up -d --build",
     "docker:dev:atlas": "docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile atlas up -d --build",
     "docker:dev:prod": "docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile prod up -d --build",

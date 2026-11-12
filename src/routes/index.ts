@@ -277,6 +277,15 @@ export async function registerApiRoutes(app: FastifyInstance) {
       return category
     })
 
+    api.get('/categories/:id/subcategories', {
+      schema: { tags: ['categories'], summary: 'List active subcategories of a category' },
+    }, async (request, reply) => {
+      const { id } = request.params as { id: string }
+      const result = await services.categories.listSubcategories(id)
+      if (!result) return reply.status(404).send({ error: true, message: 'Category not found' })
+      return result
+    })
+
     // Orders (alias + get by id)
     api.post('/orders', {
       preHandler: authGuard,

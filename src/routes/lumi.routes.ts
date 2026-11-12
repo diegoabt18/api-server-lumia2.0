@@ -15,6 +15,8 @@ import {
 } from '../modules/lumi/services/lumi-product-assist.js'
 import {
   type LumiContextInput,
+  summarizeAnalyticsContext,
+  summarizeDashboardContext,
   summarizeOrderContext,
   summarizePageContext,
   summarizeProductContext,
@@ -63,8 +65,20 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     input: LumiContextInput | undefined,
   ): Promise<string | undefined> => {
     if (!input) return undefined
-    if (input.kind === 'page') return summarizePageContext(input.page)
     const keys = (request as AuthenticatedRequest).permissionKeys
+    if (input.kind === 'page') {
+      // Sin permiso para el módulo, Lumi solo recibe el nombre de la vista (nunca cifras).
+      if (input.page === 'dashboard' && hasPermission(keys, PERMISSION_REGISTRY.ADMIN_ACCESS)) {
+        return summarizeDashboardContext(await ctx.services.adminDashboard.getStats())
+      }
+      if (input.page === 'analytics' && hasPermission(keys, PERMISSION_REGISTRY.ANALYTICS_READ)) {
+        // Analítica usa 30 días por defecto: el periodo elegido en pantalla todavía no se envía.
+        return summarizeAnalyticsContext(
+          await ctx.services.adminAnalytics.getOverview({ period: '30d' }),
+        )
+      }
+      return summarizePageContext(input.page)
+    }
     if (input.kind === 'product') {
       if (!hasPermission(keys, PERMISSION_REGISTRY.PRODUCTS_READ)) {
         throw AppError.forbidden('Sin permiso para ver este producto')

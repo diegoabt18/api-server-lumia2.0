@@ -8,6 +8,7 @@ import { JwtTokenService } from './modules/identity/infrastructure/jwt.service.j
 import { AuthService } from './modules/identity/services/auth.service.js'
 import { ProductRepository } from './modules/catalog/infrastructure/product.repository.js'
 import { CategoryRepository } from './modules/catalog/infrastructure/category.repository.js'
+import { SubcategoryRepository } from './modules/catalog/infrastructure/subcategory.repository.js'
 import { ProductService } from './modules/catalog/services/product.service.js'
 import { CategoryService } from './modules/catalog/services/category.service.js'
 import { OrderRepository } from './modules/sales/infrastructure/order.repository.js'
@@ -125,6 +126,7 @@ export interface AppContext {
     sessions: SessionRepository
     products: ProductRepository
     categories: CategoryRepository
+    subcategories: SubcategoryRepository
     orders: OrderRepository
     carts: CartRepository
     favorites: FavoritesRepository
@@ -250,6 +252,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   const sessions = new SessionRepository(identityDb)
   const products = new ProductRepository(catalogDb)
   const categories = new CategoryRepository(catalogDb)
+  const subcategories = new SubcategoryRepository(catalogDb)
   const orders = new OrderRepository(salesDb)
   const carts = new CartRepository(salesDb)
   const favorites = new FavoritesRepository(salesDb)
@@ -316,6 +319,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     posCustomers.ensureIndexes().catch((err) => logger.warn({ err }, 'pos_customers indexes skipped')),
     financialOutbox.ensureIndexes().catch((err) => logger.warn({ err }, 'financial_outbox indexes skipped')),
     categories.ensureIndexes().catch((err) => logger.warn({ err }, 'categories indexes skipped')),
+    subcategories.ensureIndexes().catch((err) => logger.warn({ err }, 'subcategories indexes skipped')),
     orders.ensureIndexes().catch((err) => logger.warn({ err }, 'orders indexes skipped')),
     carts.ensureIndexes().catch((err) => logger.warn({ err }, 'carts indexes skipped')),
     favorites.ensureIndexes().catch((err) => logger.warn({ err }, 'favorites indexes skipped')),
@@ -403,12 +407,12 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   )
   const store = new StoreService(storeSettings, storeBanners)
   const adminDashboard = new DashboardService(users, sessions, products, orders, promotions, favorites)
-  const adminProducts = new AdminProductService(products, categories, catalogOptions)
+  const adminProducts = new AdminProductService(products, categories, catalogOptions, subcategories)
   const orderStock = new OrderStockService(inventory, orders)
   const orderFinancialEvents = new OrderFinancialEvents(financialOutbox)
   const orderPayments = new OrderPaymentService(orders, payments, orderStock)
   const adminOrders = new AdminOrderService(orders, users, orderStock, orderFinancialEvents)
-  const adminCategories = new AdminCategoryService(categories)
+  const adminCategories = new AdminCategoryService(categories, subcategories)
   const adminStore = new AdminStoreService(storeSettings)
   const adminPromotions = new AdminPromotionService(promotions)
   const adminBanners = new AdminBannerService(storeBanners)
@@ -514,6 +518,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       sessions,
       products,
       categories,
+      subcategories,
       orders,
       carts,
       favorites,
@@ -562,8 +567,8 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       securityAdmin,
       securityEnterprise,
       permissionCache,
-      products: new ProductService(products, promotions),
-      categories: new CategoryService(categories),
+      products: new ProductService(products, promotions, categories, subcategories),
+      categories: new CategoryService(categories, subcategories),
       orders: new OrderService(orders, carts, inventory, manualPayments, mail, push, products, productionCostSheetsRepo, logger),
       orderPayments,
       cart: new CartService(carts, products),

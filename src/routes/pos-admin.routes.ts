@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { AppContext } from '../app.context.js'
 import { AppError } from '../common/errors/app.error.js'
+import { resolveProductHierarchyFilter } from '../modules/catalog/services/catalog-hierarchy.js'
 import { PERMISSION_REGISTRY } from '../common/permissions/registry.js'
 import { adminGuard } from '../modules/admin/middleware/admin-guard.js'
 import type { AuthenticatedRequest } from '../modules/identity/middleware/auth.middleware.js'
@@ -30,7 +31,18 @@ export async function registerPosAdminRoutes(api: FastifyInstance, ctx: AppConte
   api.get('/admin/pos/products', { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_READ) }, async (request) => {
     const parsed = posProductSearchQuerySchema.safeParse(request.query)
     if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
-    return ctx.services.pos.searchProducts(parsed.data.search ?? '', parsed.data.page, parsed.data.pageSize)
+    const hierarchy = await resolveProductHierarchyFilter(
+      ctx.repos.categories,
+      ctx.repos.subcategories,
+      parsed.data.category,
+      parsed.data.subcategory,
+    )
+    return ctx.services.pos.searchProducts(
+      parsed.data.search ?? '',
+      parsed.data.page,
+      parsed.data.pageSize,
+      hierarchy,
+    )
   })
 
   api.get('/admin/pos/customers', { preHandler: g(PERMISSION_REGISTRY.ORDERS_READ) }, async (request) => {

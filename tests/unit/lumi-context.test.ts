@@ -2,12 +2,68 @@ import { describe, expect, it } from 'vitest'
 import {
   LUMI_CONTEXT_MAX_CHARS,
   lumiContextInputSchema,
+  summarizeAnalyticsContext,
+  summarizeDashboardContext,
   summarizeOrderContext,
   summarizePageContext,
   summarizeProductContext,
 } from '../../src/modules/lumi/services/lumi-context.js'
 
 const OBJECT_ID = '65f1c0ffee0000000000abcd'
+
+describe('dashboard and analytics summaries', () => {
+  it('summarizes dashboard totals and alert counts without customer data', () => {
+    const text = summarizeDashboardContext({
+      productCount: 40,
+      activeProductCount: 35,
+      orderCount: 120,
+      totalSales: 1500.4,
+      activePromotions: 2,
+      top: { selling: [{ name: 'Vela baby shower' }, { name: null }] },
+      alerts: {
+        promotionsExpiringSoon: [{}],
+        outOfStockProducts: [{}, {}, {}],
+        emptyCategories: [],
+      },
+    })
+    expect(text).toContain('Vista actual: Dashboard.')
+    expect(text).toContain('Productos: 40 (activos 35).')
+    expect(text).toContain('Ventas pagadas: 1500.')
+    expect(text).toContain('sin stock 3, promociones por vencer 1, categorías vacías 0')
+    expect(text).toContain('1. Vela baby shower')
+    expect(text).not.toMatch(/@|email/i)
+  })
+
+  it('summarizes analytics with growth vs the previous period', () => {
+    const text = summarizeAnalyticsContext({
+      period: { label: '30d' },
+      revenue: { current: 900, growth: 12 },
+      orders: { current: 30, growth: -5 },
+      aov: { current: 30, growth: null },
+      newCustomers: { current: 4, growth: 0 },
+      topProducts: [{ name: 'Camiseta estampada', units: 7, revenue: 350 }],
+    })
+    expect(text).toContain('Vista actual: Analítica (últimos 30 días).')
+    expect(text).toContain('Ingresos: 900 (+12% vs periodo anterior).')
+    expect(text).toContain('Pedidos: 30 (-5% vs periodo anterior).')
+    expect(text).toContain('sin base de comparación')
+    expect(text).toContain('1. Camiseta estampada: 7 uds, 350')
+  })
+
+  it('keeps summaries within the context limit', () => {
+    const long = 'x'.repeat(500)
+    const text = summarizeDashboardContext({
+      productCount: 1,
+      activeProductCount: 1,
+      orderCount: 1,
+      totalSales: 1,
+      activePromotions: 0,
+      top: { selling: Array.from({ length: 5 }, () => ({ name: long })) },
+      alerts: { promotionsExpiringSoon: [], outOfStockProducts: [], emptyCategories: [] },
+    })
+    expect(text.length).toBeLessThanOrEqual(LUMI_CONTEXT_MAX_CHARS)
+  })
+})
 
 describe('lumiContextInputSchema', () => {
   it('accepts a product, an order or a known page', () => {

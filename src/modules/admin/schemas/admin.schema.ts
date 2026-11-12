@@ -14,7 +14,8 @@ export const adminProductCreateSchema = z.object({
     .max(120)
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
   description: z.string().max(8000).optional(),
-  category_slug: z.string().max(120).optional(),
+  /** Obligatoria: la categoría se deriva de la subcategoría en el servidor. */
+  subcategory_id: z.string().regex(/^[a-f0-9]{24}$/i, 'subcategory_id inválido'),
   brand: z.string().max(120).optional(),
   status: z.enum(['active', 'inactive']).optional(),
   image_path: z.string().max(500).optional(),
@@ -32,7 +33,8 @@ export const adminProductPatchSchema = z
       .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
       .optional(),
     description: z.string().max(8000).optional().nullable(),
-    category_slug: z.string().max(120).optional().nullable(),
+    /** null no es válido: todo producto con subcategoría asignada debe mantenerla. */
+    subcategory_id: z.string().regex(/^[a-f0-9]{24}$/i, 'subcategory_id inválido').optional(),
     brand: z.string().max(120).optional().nullable(),
     status: z.enum(['active', 'inactive']).optional(),
     image_path: z.string().max(500).optional().nullable(),
@@ -63,15 +65,38 @@ export const adminProductPatchSchema = z
   })
   .refine((o) => Object.keys(o).length > 0, { message: 'Vacío' })
 
+const catalogSlugSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(120)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+
+const catalogStatusSchema = z.enum(['active', 'inactive'])
+
 export const adminCategorySchema = z.object({
   name: z.string().trim().min(1).max(120),
-  slug: z
-    .string()
-    .trim()
-    .min(1)
-    .max(120)
-    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  slug: catalogSlugSchema,
+  description: z.string().trim().max(2000).nullable().optional(),
+  image_path: z.string().trim().max(500).nullable().optional(),
+  status: catalogStatusSchema.optional(),
+  sort_order: z.number().int().min(0).max(100000).optional(),
 })
+
+export const adminCategoryPatchSchema = adminCategorySchema.partial()
+
+export const adminCategoryStatusSchema = z.object({ status: catalogStatusSchema })
+
+export const adminSubcategorySchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  slug: catalogSlugSchema,
+  description: z.string().trim().max(2000).nullable().optional(),
+  image_path: z.string().trim().max(500).nullable().optional(),
+  status: catalogStatusSchema.optional(),
+  sort_order: z.number().int().min(0).max(100000).optional(),
+})
+
+export const adminSubcategoryPatchSchema = adminSubcategorySchema.partial()
 
 export const adminOrderPatchSchema = z
   .object({

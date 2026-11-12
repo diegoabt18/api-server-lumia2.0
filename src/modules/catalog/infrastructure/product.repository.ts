@@ -1,4 +1,4 @@
-import type { Db } from 'mongodb'
+import { ObjectId, type Db } from 'mongodb'
 import { BaseRepository, getCollection } from '../../../database/repositories/base.repository.js'
 import {
   toProductDomain,
@@ -51,6 +51,7 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     await super.ensureIndexes([
       { key: { slug: 1 }, unique: true },
       { key: { category_slug: 1 } },
+      { key: { subcategory_id: 1 } },
       { key: { status: 1 } },
       { key: { sales_total_units: -1 } },
     ])
@@ -64,13 +65,20 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     ])
   }
 
-  private buildActiveFilter(search?: string, categorySlug?: string): Record<string, unknown> {
+  private buildActiveFilter(
+    search?: string,
+    categorySlug?: string,
+    subcategoryId?: string,
+  ): Record<string, unknown> {
     const clauses: Record<string, unknown>[] = [
       { $or: [{ status: 'active' }, { status: { $exists: false } }] },
     ]
 
     if (categorySlug) {
       clauses.push({ category_slug: categorySlug })
+    }
+    if (subcategoryId && ObjectId.isValid(subcategoryId)) {
+      clauses.push({ subcategory_id: new ObjectId(subcategoryId) })
     }
 
     const searchClause = search?.trim() ? buildProductSearchClause(search) : null
@@ -84,8 +92,9 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     skip: number,
     search?: string,
     categorySlug?: string,
+    subcategoryId?: string,
   ): Promise<ProductDomain[]> {
-    const filter = this.buildActiveFilter(search, categorySlug)
+    const filter = this.buildActiveFilter(search, categorySlug, subcategoryId)
     const docs = await this.findMany(filter as never, {
       skip,
       limit,
@@ -94,8 +103,8 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     return docs.map(toProductDomain)
   }
 
-  async countActive(search?: string, categorySlug?: string): Promise<number> {
-    const filter = this.buildActiveFilter(search, categorySlug)
+  async countActive(search?: string, categorySlug?: string, subcategoryId?: string): Promise<number> {
+    const filter = this.buildActiveFilter(search, categorySlug, subcategoryId)
     return this.count(filter as never)
   }
 
@@ -199,8 +208,29 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     }
   }
 
-  async listAdmin(limit: number, skip: number, search?: string): Promise<ProductDomain[]> {
-    const docs = await this.findMany(this.buildAdminSearchFilter(search) as never, {
+  /** Filtro admin: búsqueda + jerarquía (categoría y/o subcategoría ya resueltas). Históricos incluidos. */
+  private buildAdminFilter(
+    search?: string,
+    hierarchy?: { categorySlug?: string; subcategoryId?: string },
+  ): Record<string, unknown> {
+    const base = this.buildAdminSearchFilter(search) as Record<string, unknown>
+    const clauses: Record<string, unknown>[] = []
+    if (Object.keys(base).length) clauses.push(base)
+    if (hierarchy?.categorySlug) clauses.push({ category_slug: hierarchy.categorySlug })
+    if (hierarchy?.subcategoryId && ObjectId.isValid(hierarchy.subcategoryId)) {
+      clauses.push({ subcategory_id: new ObjectId(hierarchy.subcategoryId) })
+    }
+    if (clauses.length === 0) return {}
+    return clauses.length === 1 ? clauses[0]! : { $and: clauses }
+  }
+
+  async listAdmin(
+    limit: number,
+    skip: number,
+    search?: string,
+    hierarchy?: { categorySlug?: string; subcategoryId?: string },
+  ): Promise<ProductDomain[]> {
+    const docs = await this.findMany(this.buildAdminFilter(search, hierarchy) as never, {
       skip,
       limit,
       sort: { created_at: -1 },
@@ -208,8 +238,11 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     return docs.map(toProductDomain)
   }
 
-  async countAllAdmin(search?: string): Promise<number> {
-    return this.count(this.buildAdminSearchFilter(search) as never)
+  async countAllAdmin(
+    search?: string,
+    hierarchy?: { categorySlug?: string; subcategoryId?: string },
+  ): Promise<number> {
+    return this.count(this.buildAdminFilter(search, hierarchy) as never)
   }
 
   async countActiveAdmin(): Promise<number> {
@@ -221,7 +254,9 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     slug: string
     tax_rate?: number | null
     description?: string
+    /** Derivado de la subcategoría: lo fija el servicio, nunca el cliente. */
     category_slug?: string
+    subcategory_id?: string
     brand?: string
     status?: 'active' | 'inactive'
     image_path?: string
@@ -233,6 +268,7 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
       tax_rate: data.tax_rate ?? null,
       description: data.description,
       category_slug: data.category_slug,
+      subcategory_id: data.subcategory_id ? new ObjectId(data.subcategory_id) : undefined,
       brand: data.brand,
       status: data.status ?? 'active',
       image_path: data.image_path,
@@ -252,15 +288,17 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
       tax_rate: number | null
       description?: string
       category_slug?: string
+      subcategory_id?: string
       brand?: string
       status: 'active' | 'inactive'
       image_path?: string
     }>,
   ): Promise<ProductDomain | null> {
-    const { ObjectId } = await import('mongodb')
     let filter: Record<string, unknown> = { slug: idOrSlug }
     if (ObjectId.isValid(idOrSlug)) filter = { _id: new ObjectId(idOrSlug) }
-    const set = { ...patch, updated_at: new Date() }
+    const { subcategory_id, ...rest } = patch
+    const set: Record<string, unknown> = { ...rest, updated_at: new Date() }
+    if (subcategory_id !== undefined) set.subcategory_id = new ObjectId(subcategory_id)
     const res = await this.collection.updateOne(filter as never, { $set: set })
     if (!res.matchedCount) return null
     const doc = await this.findOne(filter as never)
@@ -374,26 +412,36 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     term: string,
     page: number,
     pageSize: number,
+    hierarchy: { categorySlug?: string; subcategoryId?: string } = {},
   ): Promise<{ items: ProductWithVariants[]; total: number }> {
     const trimmed = term.trim()
-    if (!trimmed) return { items: [], total: 0 }
+    const hierarchyClause: Record<string, unknown> = {}
+    if (hierarchy.categorySlug) hierarchyClause.category_slug = hierarchy.categorySlug
+    if (hierarchy.subcategoryId && ObjectId.isValid(hierarchy.subcategoryId)) {
+      hierarchyClause.subcategory_id = new ObjectId(hierarchy.subcategoryId)
+    }
+    const hasHierarchy = Object.keys(hierarchyClause).length > 0
+    if (!trimmed && !hasHierarchy) return { items: [], total: 0 }
 
-    const rx = new RegExp(escapeRegex(trimmed), 'i')
-    // Distinct slugs keep the match set small: only slugs are transferred, not documents.
-    const [productSlugs, variantSlugs] = await Promise.all([
-      this.collection.distinct('slug', { $or: [{ name: rx }, { slug: rx }, { brand: rx }] } as never),
-      this.variants.distinct('product_slug', {
-        $or: [{ sku: rx }, { barcode: rx }, { description: rx }],
-      } as never),
-    ])
-    const slugs = [...new Set([...productSlugs, ...variantSlugs].map(String))]
-    if (!slugs.length) return { items: [], total: 0 }
-
-    const match = { slug: { $in: slugs } } as never
+    let match: Record<string, unknown> = { ...hierarchyClause }
+    if (trimmed) {
+      const rx = new RegExp(escapeRegex(trimmed), 'i')
+      // Distinct slugs keep the match set small: only slugs are transferred, not documents.
+      const [productSlugs, variantSlugs] = await Promise.all([
+        this.collection.distinct('slug', { $or: [{ name: rx }, { slug: rx }, { brand: rx }] } as never),
+        this.variants.distinct('product_slug', {
+          $or: [{ sku: rx }, { barcode: rx }, { description: rx }],
+        } as never),
+      ])
+      const slugs = [...new Set([...productSlugs, ...variantSlugs].map(String))]
+      if (!slugs.length) return { items: [], total: 0 }
+      match = { ...match, slug: { $in: slugs } }
+    }
+    const matchFilter = match as never
     const [total, pageDocs] = await Promise.all([
-      this.collection.countDocuments(match),
+      this.collection.countDocuments(matchFilter),
       this.collection
-        .find(match)
+        .find(matchFilter)
         .project({ slug: 1, name: 1 })
         .sort({ name: 1, slug: 1 })
         .skip((page - 1) * pageSize)

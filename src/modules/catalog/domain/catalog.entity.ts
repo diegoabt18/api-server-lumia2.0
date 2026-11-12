@@ -7,7 +7,10 @@ export interface ProductEntity {
   /** Tasa de IVA en porcentaje (0-100). null = no configurada; nunca se asume un valor. */
   tax_rate?: number | null
   description?: string
+  /** Derivado de la subcategoría (ver ProductService). No se escribe libremente. */
   category_slug?: string
+  /** Subcategoría obligatoria para productos nuevos. Ausente = producto pendiente de clasificar (legacy). */
+  subcategory_id?: unknown
   brand?: string
   status?: 'active' | 'inactive'
   created_at?: Date
@@ -57,11 +60,32 @@ export interface InventoryItemEntity {
   updated_at?: Date
 }
 
+export type CatalogStatus = 'active' | 'inactive'
+
 export interface CategoryEntity {
   _id?: unknown
   name: string
   slug: string
+  description?: string | null
+  image_path?: string | null
+  /** Ausente en documentos legacy = activo. */
+  status?: CatalogStatus
+  sort_order?: number
   createdAt?: Date
+  updatedAt?: Date
+}
+
+export interface SubcategoryEntity {
+  _id?: unknown
+  category_id: unknown
+  name: string
+  slug: string
+  description?: string | null
+  image_path?: string | null
+  status?: CatalogStatus
+  sort_order?: number
+  created_at?: Date
+  updated_at?: Date
 }
 
 export interface ProductDomain {
@@ -71,6 +95,7 @@ export interface ProductDomain {
   taxRate?: number | null
   description?: string
   categorySlug?: string
+  subcategoryId?: string | null
   brand?: string
   status?: 'active' | 'inactive'
   createdAt?: string
@@ -124,7 +149,25 @@ export interface CategoryDomain {
   id: string
   name: string
   slug: string
+  description: string | null
+  imagePath: string | null
+  status: CatalogStatus
+  sortOrder: number
   createdAt: string
+  updatedAt: string | null
+}
+
+export interface SubcategoryDomain {
+  id: string
+  categoryId: string
+  name: string
+  slug: string
+  description: string | null
+  imagePath: string | null
+  status: CatalogStatus
+  sortOrder: number
+  createdAt: string
+  updatedAt: string | null
 }
 
 function parseDate(v: unknown): Date | undefined {
@@ -144,6 +187,7 @@ export function toProductDomain(e: ProductEntity): ProductDomain {
     taxRate: e.tax_rate ?? null,
     description: e.description,
     categorySlug: e.category_slug,
+    subcategoryId: e.subcategory_id != null ? String(e.subcategory_id) : null,
     brand: e.brand,
     status: e.status,
     createdAt: created?.toISOString(),
@@ -161,10 +205,33 @@ export function toProductDomain(e: ProductEntity): ProductDomain {
 
 export function toCategoryDomain(e: CategoryEntity): CategoryDomain {
   const created = parseDate(e.createdAt) ?? new Date()
+  const updated = parseDate(e.updatedAt)
   return {
     id: String(e._id),
     name: e.name,
     slug: e.slug,
+    description: e.description ?? null,
+    imagePath: e.image_path ?? null,
+    status: e.status === 'inactive' ? 'inactive' : 'active',
+    sortOrder: typeof e.sort_order === 'number' ? e.sort_order : 0,
     createdAt: created.toISOString(),
+    updatedAt: updated?.toISOString() ?? null,
+  }
+}
+
+export function toSubcategoryDomain(e: SubcategoryEntity): SubcategoryDomain {
+  const created = parseDate(e.created_at) ?? new Date()
+  const updated = parseDate(e.updated_at)
+  return {
+    id: String(e._id),
+    categoryId: String(e.category_id),
+    name: e.name,
+    slug: e.slug,
+    description: e.description ?? null,
+    imagePath: e.image_path ?? null,
+    status: e.status === 'inactive' ? 'inactive' : 'active',
+    sortOrder: typeof e.sort_order === 'number' ? e.sort_order : 0,
+    createdAt: created.toISOString(),
+    updatedAt: updated?.toISOString() ?? null,
   }
 }

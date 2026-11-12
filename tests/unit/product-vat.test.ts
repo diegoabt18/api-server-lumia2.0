@@ -11,27 +11,52 @@ function service(productOverrides: Record<string, unknown> = {}) {
     updateProduct: vi.fn(async (..._a: unknown[]) => domain(19)),
     ...productOverrides,
   }
-  const categories = { findBySlug: vi.fn(async (..._a: unknown[]) => ({ slug: 'velas' })) }
-  return { svc: new AdminProductService(products as never, categories as never, {} as never), products }
+  const categories = {
+    findById: vi.fn(async (..._a: unknown[]) => ({ _id: 'c1', slug: 'velas', status: 'active' })),
+  }
+  const subcategories = {
+    findRawById: vi.fn(async (..._a: unknown[]) => ({ _id: 's1', category_id: 'c1', status: 'active' })),
+  }
+  const svc = new AdminProductService(products as never, categories as never, {} as never, subcategories as never)
+  return { svc, products, categories, subcategories }
 }
+
+const SUB_ID = '65a000000000000000000001'
 
 describe('product VAT: create', () => {
   it('persists a configured VAT rate on create', async () => {
     const { svc, products } = service()
-    const res = await svc.create({ name: 'Vela', slug: 'vela', tax_rate: 19 })
+    const res = await svc.create({ name: 'Vela', slug: 'vela', tax_rate: 19, subcategory_id: SUB_ID })
     expect(products.createProduct.mock.calls[0][0]).toMatchObject({ tax_rate: 19 })
     expect(res.product.taxRate).toBe(19)
   })
 
   it('leaves VAT out when not provided, so the stored value defaults to null', async () => {
     const { svc, products } = service()
-    await svc.create({ name: 'Vela', slug: 'vela' })
+    await svc.create({ name: 'Vela', slug: 'vela', subcategory_id: SUB_ID })
     expect(products.createProduct.mock.calls[0][0]).not.toHaveProperty('tax_rate')
   })
 
+  it('derives category_slug from the subcategory instead of trusting the client', async () => {
+    const { svc, products } = service()
+    await svc.create({ name: 'Vela', slug: 'vela', subcategory_id: SUB_ID })
+    expect(products.createProduct.mock.calls[0][0]).toMatchObject({
+      subcategory_id: SUB_ID,
+      category_slug: 'velas',
+    })
+  })
+
+  it('rejects an inactive subcategory for a new assignment', async () => {
+    const { svc, subcategories } = service()
+    subcategories.findRawById.mockResolvedValueOnce({ _id: 's1', category_id: 'c1', status: 'inactive' } as never)
+    await expect(svc.create({ name: 'Vela', slug: 'vela', subcategory_id: SUB_ID })).rejects.toThrow(/inactiva/)
+  })
+
   it('rejects out-of-range rates at the schema', () => {
-    expect(adminProductCreateSchema.safeParse({ name: 'V', slug: 'v', tax_rate: 150 }).success).toBe(false)
-    expect(adminProductCreateSchema.safeParse({ name: 'V', slug: 'v', tax_rate: 5 }).success).toBe(true)
+    const base = { name: 'V', slug: 'v', subcategory_id: SUB_ID }
+    expect(adminProductCreateSchema.safeParse({ ...base, tax_rate: 150 }).success).toBe(false)
+    expect(adminProductCreateSchema.safeParse({ ...base, tax_rate: 5 }).success).toBe(true)
+    expect(adminProductCreateSchema.safeParse({ name: 'V', slug: 'v' }).success).toBe(false)
   })
 })
 

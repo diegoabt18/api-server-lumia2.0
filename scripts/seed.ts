@@ -18,7 +18,6 @@ async function seed() {
   const catalogDb = client.db(MONGO_DB_NAMES.catalog)
 
   const users = identityDb.collection('users')
-  const categories = catalogDb.collection('categories')
   const products = catalogDb.collection('products')
   const variants = catalogDb.collection('variants')
   const inventory = catalogDb.collection('inventory_items')
@@ -49,15 +48,8 @@ async function seed() {
     logger.info({ email: adminEmail }, 'Admin user seeded (password: Admin123!)')
   }
 
-  const catSlug = 'velas'
-  await categories.updateOne(
-    { slug: catSlug },
-    {
-      $set: { name: 'Velas', slug: catSlug, createdAt: new Date() },
-    },
-    { upsert: true },
-  )
-
+  // Sin categorías de ejemplo: el catálogo real se crea desde lumia-admin (Catálogo → Categorías).
+  // El producto demo queda sin subcategoría (pendiente de clasificar) hasta que se asigne una.
   const productSlug = 'vela-lavanda-demo'
   await products.updateOne(
     { slug: productSlug },
@@ -66,7 +58,6 @@ async function seed() {
         name: 'Vela Lavanda Demo',
         slug: productSlug,
         description: 'Vela aromática de lavanda — producto de demostración',
-        category_slug: catSlug,
         status: 'active',
         image_path: '/products/vela-lavanda-demo',
         sales_total_units: 10,

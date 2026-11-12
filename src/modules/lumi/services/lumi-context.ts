@@ -121,3 +121,69 @@ export function summarizeOrderContext(source: OrderContextSource): string {
   ]
   return limit(lines.join('\n'))
 }
+
+/** Cifras agregadas del Dashboard (mismo origen que /admin/dashboard/stats). Sin datos de clientes. */
+export interface DashboardContextSource {
+  productCount: number
+  activeProductCount: number
+  orderCount: number
+  totalSales: number
+  activePromotions: number
+  top: { selling: ReadonlyArray<{ name?: string | null }> }
+  alerts: {
+    promotionsExpiringSoon: ReadonlyArray<unknown>
+    outOfStockProducts: ReadonlyArray<unknown>
+    emptyCategories: ReadonlyArray<unknown>
+  }
+}
+
+export function summarizeDashboardContext(source: DashboardContextSource): string {
+  const lines = [
+    `Vista actual: ${LUMI_PAGE_LABELS.dashboard}.`,
+    `Productos: ${source.productCount} (activos ${source.activeProductCount}).`,
+    `Pedidos: ${source.orderCount}. Ventas pagadas: ${Math.round(source.totalSales)}.`,
+    `Promociones activas: ${source.activePromotions}.`,
+    `Alertas (listas de hasta 8): sin stock ${source.alerts.outOfStockProducts.length}, promociones por vencer ${source.alerts.promotionsExpiringSoon.length}, categorías vacías ${source.alerts.emptyCategories.length}.`,
+    'Más vendidos:',
+    ...source.top.selling.slice(0, 5).map((p, i) => `${i + 1}. ${clip(p.name ?? null, 120)}`),
+  ]
+  return limit(lines.join('\n'))
+}
+
+/** Resumen de Analítica: cifras del periodo y comparación con el anterior. Sin datos de clientes. */
+export interface AnalyticsContextSource {
+  period: { label: string }
+  revenue: { current: number; growth: number | null }
+  orders: { current: number; growth: number | null }
+  aov: { current: number; growth: number | null }
+  newCustomers: { current: number; growth: number | null }
+  topProducts: ReadonlyArray<{ name: string; units: number; revenue: number }>
+}
+
+const ANALYTICS_PERIOD_LABELS: Record<string, string> = {
+  '7d': 'últimos 7 días',
+  '30d': 'últimos 30 días',
+  '90d': 'últimos 90 días',
+  '1y': 'último año',
+}
+
+function growthText(growth: number | null): string {
+  if (growth === null) return 'sin base de comparación'
+  return `${growth >= 0 ? '+' : ''}${growth}% vs periodo anterior`
+}
+
+export function summarizeAnalyticsContext(source: AnalyticsContextSource): string {
+  const period = ANALYTICS_PERIOD_LABELS[source.period.label] ?? clip(source.period.label, 40)
+  const lines = [
+    `Vista actual: ${LUMI_PAGE_LABELS.analytics} (${period}). Importes en la moneda de la tienda.`,
+    `Ingresos: ${source.revenue.current} (${growthText(source.revenue.growth)}).`,
+    `Pedidos: ${source.orders.current} (${growthText(source.orders.growth)}).`,
+    `Ticket promedio: ${source.aov.current} (${growthText(source.aov.growth)}).`,
+    `Clientes nuevos: ${source.newCustomers.current} (${growthText(source.newCustomers.growth)}).`,
+    'Productos con más ingresos:',
+    ...source.topProducts
+      .slice(0, 5)
+      .map((p, i) => `${i + 1}. ${clip(p.name, 120)}: ${p.units} uds, ${p.revenue}`),
+  ]
+  return limit(lines.join('\n'))
+}
