@@ -1,14 +1,18 @@
+import type { AuthorizationService } from '../../security/services/authorization.service.js'
+import type { RoleRepository } from '../../security/infrastructure/role.repository.js'
+import type { UserRoleRepository } from '../../security/infrastructure/user-role.repository.js'
 import { AppError } from '../../../common/errors/app.error.js'
 import { buildPaginationMeta, resolvePagingQuery } from '../../../common/utils/pagination.js'
-import {
-  buildAuthzSnapshot,
-  resolvePermissionsForRole,
-} from '../../../common/permissions/registry.js'
+import { buildAuthzSnapshot } from '../../../common/permissions/registry.js'
 import type { UserRepository } from '../../identity/infrastructure/user.repository.js'
-import type { UserRole } from '../../../common/permissions/registry.js'
 
 export class AdminStaffService {
-  constructor(private readonly users: UserRepository) {}
+  constructor(
+    private readonly users: UserRepository,
+    private readonly authorization: AuthorizationService,
+    private readonly roles: RoleRepository,
+    private readonly userRoles: UserRoleRepository,
+  ) {}
 
   async list(query: Record<string, unknown>) {
     const qParam = typeof query.q === 'string' ? query.q : ''
@@ -23,7 +27,6 @@ export class AdminStaffService {
       id: u._id,
       email: u.email,
       name: u.name ?? null,
-      role: u.role,
       isStaff: !!u.isStaff,
       permissionsVersion: u.permissionsVersion ?? 1,
       permissionUpdatedAt: u.permissionUpdatedAt?.toISOString?.() ?? null,
@@ -35,43 +38,23 @@ export class AdminStaffService {
   async get(id: string) {
     const user = await this.users.findStaffById(id)
     if (!user) throw AppError.notFound('Usuario staff no encontrado')
-    const snap = buildAuthzSnapshot(user.role)
+    const snap = buildAuthzSnapshot(await this.authorization.resolveEffectivePermissions(user._id!))
+    // Roles RBAC reales (user_roles).
+    const assignments = await this.userRoles.findByUserId(user._id!)
+    const roleDocs = await this.roles.findByIds(assignments.map((a) => a.roleId))
     return {
       user: {
         id: user._id,
         email: user.email,
         name: user.name ?? null,
-        role: user.role,
         isStaff: !!user.isStaff,
         permissionsVersion: user.permissionsVersion ?? 1,
         permissionUpdatedAt: user.permissionUpdatedAt?.toISOString?.() ?? null,
         createdAt: user.createdAt?.toISOString?.() ?? null,
       },
-      roles: [{ id: user.role, name: user.role, key: user.role }],
+      roles: roleDocs.map((r) => ({ id: r._id, name: r.name, key: r.key })),
       effectivePermissionKeys: snap.permissionKeys,
       permHash: snap.permHash,
     }
-  }
-
-  async updateRole(id: string, role: UserRole) {
-    const allowed: UserRole[] = ['admin', 'moderator', 'user']
-    if (!allowed.includes(role)) throw AppError.badRequest('Rol no válido')
-    const updated = await this.users.updateStaffRole(id, role)
-    if (!updated) throw AppError.notFound('Usuario staff no encontrado')
-    const snap = buildAuthzSnapshot(updated.role)
-    return {
-      ok: true,
-      user: {
-        id: updated._id,
-        email: updated.email,
-        role: updated.role,
-        effectivePermissionKeys: resolvePermissionsForRole(updated.role),
-        permHash: snap.permHash,
-      },
-    }
-  }
-
-  async removeRole(id: string) {
-    return this.updateRole(id, 'user')
   }
 }

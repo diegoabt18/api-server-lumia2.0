@@ -16,7 +16,9 @@ function dedupeEntries(entries: Array<{ product_slug: string; percent_off: numbe
   return [...m.values()]
 }
 
-function validatePromotionBusinessRules(data: PromotionUpsertInput): { ok: true } | { ok: false; message: string } {
+function validatePromotionBusinessRules(
+  data: PromotionUpsertInput,
+): { ok: true } | { ok: false; message: string } {
   const categories = [...new Set((data.category_slugs ?? []).map((s) => s.trim()).filter(Boolean))]
   const entries = dedupeEntries(data.product_entries ?? [])
   if (categories.length === 0 && entries.length === 0) {
@@ -34,13 +36,20 @@ function validatePromotionBusinessRules(data: PromotionUpsertInput): { ok: true 
       }
     }
     if (!entries.length || entries.some((e) => e.percent_off === null)) {
-      return { ok: false, message: 'Sin descuento general, cada producto debe tener un porcentaje individual' }
+      return {
+        ok: false,
+        message: 'Sin descuento general, cada producto debe tener un porcentaje individual',
+      }
     }
   }
   return { ok: true }
 }
 
-function buildEntityFromUpsert(data: PromotionUpsertInput, now: Date, existing?: PromotionEntity | null) {
+function buildEntityFromUpsert(
+  data: PromotionUpsertInput,
+  now: Date,
+  existing?: PromotionEntity | null,
+) {
   const categories = [...new Set((data.category_slugs ?? []).map((s) => s.trim()).filter(Boolean))]
   const entries = dedupeEntries(data.product_entries ?? [])
   const doc: Omit<PromotionEntity, '_id'> = {
@@ -53,7 +62,10 @@ function buildEntityFromUpsert(data: PromotionUpsertInput, now: Date, existing?:
     priority: data.priority ?? 100,
     apply_general_discount: data.apply_general_discount,
     category_slugs: categories,
-    product_entries: entries.map((e) => ({ product_slug: e.product_slug, percent_off: e.percent_off })),
+    product_entries: entries.map((e) => ({
+      product_slug: e.product_slug,
+      percent_off: e.percent_off,
+    })),
     created_at: existing?.created_at ?? now,
     updated_at: now,
   }
@@ -62,8 +74,10 @@ function buildEntityFromUpsert(data: PromotionUpsertInput, now: Date, existing?:
   }
   const color = normalizePromotionColor(data.color)
   if (color) doc.color = color
-  if (data.notification_image_slug?.trim()) doc.notification_image_slug = data.notification_image_slug.trim()
-  if (data.notification_image_path?.trim()) doc.notification_image_path = data.notification_image_path.trim()
+  if (data.notification_image_slug?.trim())
+    doc.notification_image_slug = data.notification_image_slug.trim()
+  if (data.notification_image_path?.trim())
+    doc.notification_image_path = data.notification_image_path.trim()
   return doc
 }
 
@@ -71,14 +85,20 @@ export class AdminPromotionService {
   constructor(private readonly promotions: PromotionRepository) {}
 
   async list(query: Record<string, unknown>) {
-    const { page, limit, skip, search } = resolvePagingQuery(query, { defaultLimit: 20, maxLimit: 100 })
+    const { page, limit, skip, search } = resolvePagingQuery(query, {
+      defaultLimit: 20,
+      maxLimit: 100,
+    })
     const lifecycle = typeof query.lifecycle === 'string' ? query.lifecycle : undefined
     const activeRaw = typeof query.activeOnly === 'string' ? query.activeOnly : undefined
     const activeOnly = activeRaw === '1' || activeRaw === 'true'
     const now = new Date()
     const filters = {
       search: search || undefined,
-      lifecycle: lifecycle === 'all' ? undefined : (lifecycle as 'pendiente' | 'activa' | 'finalizada' | undefined),
+      lifecycle:
+        lifecycle === 'all'
+          ? undefined
+          : (lifecycle as 'pendiente' | 'activa' | 'finalizada' | undefined),
       activeOnly: activeOnly || undefined,
     }
     const [total, raw] = await Promise.all([

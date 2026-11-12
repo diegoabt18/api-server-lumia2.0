@@ -36,3 +36,6 @@ docker/data/
 
 # Binarios locales
 tools/cloudflared.exe
+
+# Scripts manuales de respaldo/recuperación (contienen datos sensibles)
+ops-local/

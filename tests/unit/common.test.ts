@@ -1,16 +1,31 @@
 import { describe, it, expect } from 'vitest'
 import {
+  ALL_PERMISSION_IDS,
   generatePermissionHash,
-  resolvePermissionsForRole,
   hasPermission,
   PERMISSION_REGISTRY,
+  type PermissionId,
 } from '../../src/common/permissions/registry.js'
+
+// Conjuntos de permisos de ejemplo. En producción vienen de los roles RBAC guardados en identity_db.
+const CUSTOMER_KEYS = [
+  'account.read',
+  'page.cart',
+  'cart.read',
+  'cart.write',
+  'orders.read',
+  'orders.create',
+  'products.read',
+  'categories.read',
+  'payments.create',
+] as const
+
 import { buildPaginationMeta, resolvePagingQuery } from '../../src/common/utils/pagination.js'
 import { AppError, isAppError } from '../../src/common/errors/app.error.js'
 
 describe('permissions registry', () => {
   it('generates stable permission hash', () => {
-    const keys = resolvePermissionsForRole('user')
+    const keys = CUSTOMER_KEYS as unknown as PermissionId[]
     const h1 = generatePermissionHash(keys)
     const h2 = generatePermissionHash(keys)
     expect(h1).toBe(h2)
@@ -18,13 +33,13 @@ describe('permissions registry', () => {
   })
 
   it('admin has all permissions', () => {
-    const keys = resolvePermissionsForRole('admin')
+    const keys = ALL_PERMISSION_IDS
     expect(hasPermission(keys, PERMISSION_REGISTRY.ADMIN_ACCESS)).toBe(true)
     expect(hasPermission(keys, PERMISSION_REGISTRY.PRODUCTS_DELETE)).toBe(true)
   })
 
   it('user cannot delete products', () => {
-    const keys = resolvePermissionsForRole('user')
+    const keys = CUSTOMER_KEYS as unknown as PermissionId[]
     expect(hasPermission(keys, PERMISSION_REGISTRY.PRODUCTS_READ)).toBe(true)
     expect(hasPermission(keys, PERMISSION_REGISTRY.PRODUCTS_DELETE)).toBe(false)
   })

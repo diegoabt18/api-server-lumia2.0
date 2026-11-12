@@ -1,9 +1,7 @@
 import {
   expandPermissions,
   generatePermissionHash,
-  resolvePermissionsForRole,
   type PermissionId,
-  type UserRole,
 } from '../../../common/permissions/registry.js'
 import type { RoleRepository } from '../infrastructure/role.repository.js'
 import type { UserRoleRepository } from '../infrastructure/user-role.repository.js'
@@ -12,10 +10,7 @@ import type { UserPermissionOverrideRepository } from '../infrastructure/user-pe
 import type { RoleDelegationRepository } from '../infrastructure/role-delegation.repository.js'
 import type { ConditionalPermissionRepository } from '../infrastructure/conditional-permission.repository.js'
 import type { PermissionCacheService } from './permission-cache.service.js'
-import {
-  ConditionEvaluationEngine,
-  type ConditionContext,
-} from './conditional-evaluation.js'
+import { ConditionEvaluationEngine, type ConditionContext } from './conditional-evaluation.js'
 
 export type PermissionResolverContext = Partial<ConditionContext>
 
@@ -32,13 +27,12 @@ export class AuthorizationService {
 
   async resolveEffectivePermissions(
     userId: string,
-    fallbackRole: UserRole,
     ctx?: PermissionResolverContext,
   ): Promise<PermissionId[]> {
     const cached = this.permCache ? await this.permCache.get(userId) : null
     if (cached) return expandPermissions(cached)
 
-    const base = await this.resolveRoleBasedPermissions(userId, fallbackRole)
+    const base = await this.resolveRoleBasedPermissions(userId)
     const extra = await this.resolveExtraPermissions(userId, ctx)
     const merged = new Set<PermissionId>([...base, ...extra])
     const result = [...merged]
@@ -47,13 +41,17 @@ export class AuthorizationService {
     return result
   }
 
-  private async resolveRoleBasedPermissions(userId: string, fallbackRole: UserRole): Promise<PermissionId[]> {
+  /**
+   * Los permisos salen solo de los roles RBAC asignados (user_roles). Sin roles o sin permisos
+   * efectivos no hay acceso: el rol base de users.role NO concede permisos.
+   */
+  private async resolveRoleBasedPermissions(userId: string): Promise<PermissionId[]> {
     const assignments = await this.userRoles.findByUserId(userId)
-    if (!assignments.length) return resolvePermissionsForRole(fallbackRole)
+    if (!assignments.length) return []
 
     const roleIds = assignments.map((a) => a.roleId)
     const roleDocs = await this.roles.findByIds(roleIds)
-    if (!roleDocs.length) return resolvePermissionsForRole(fallbackRole)
+    if (!roleDocs.length) return []
 
     const allow = new Set<PermissionId>()
     const deny = new Set<PermissionId>()
@@ -70,7 +68,7 @@ export class AuthorizationService {
     }
 
     for (const d of deny) allow.delete(d)
-    if (allow.size === 0) return resolvePermissionsForRole(fallbackRole)
+    if (allow.size === 0) return []
     return [...allow]
   }
 
@@ -88,7 +86,9 @@ export class AuthorizationService {
       if (!parent || parent.isArchived) continue
       keys.push(...expandPermissions(parent.permissionKeys))
       if (parent.inheritRoleIds?.length) {
-        keys.push(...(await this.resolveInheritedPermissions(parentId, parent.inheritRoleIds, visited)))
+        keys.push(
+          ...(await this.resolveInheritedPermissions(parentId, parent.inheritRoleIds, visited)),
+        )
       }
     }
     return keys
@@ -106,7 +106,9 @@ export class AuthorizationService {
         for (const p of await this.temporal.findActiveByUserId(userId)) {
           for (const k of p.permissionKeys) merged.add(k)
         }
-      } catch { /* non-critical */ }
+      } catch {
+        /* non-critical */
+      }
     }
 
     if (this.delegations) {
@@ -118,7 +120,9 @@ export class AuthorizationService {
             for (const k of expandPermissions(role.permissionKeys)) merged.add(k)
           }
         }
-      } catch { /* non-critical */ }
+      } catch {
+        /* non-critical */
+      }
     }
 
     if (this.overrides) {
@@ -139,14 +143,20 @@ export class AuthorizationService {
         for (const k of ConditionEvaluationEngine.evaluate(active, context)) {
           merged.add(k as PermissionId)
         }
-      } catch { /* non-critical */ }
+      } catch {
+        /* non-critical */
+      }
     }
 
     return [...merged]
   }
 
-  async buildAuthzSnapshot(userId: string, role: UserRole, permissionsVersion = 1, ctx?: PermissionResolverContext) {
-    const permissionKeys = await this.resolveEffectivePermissions(userId, role, ctx)
+  async buildAuthzSnapshot(
+    userId: string,
+    permissionsVersion = 1,
+    ctx?: PermissionResolverContext,
+  ) {
+    const permissionKeys = await this.resolveEffectivePermissions(userId, ctx)
     return {
       permissionKeys,
       permHash: generatePermissionHash(permissionKeys),
@@ -155,8 +165,8 @@ export class AuthorizationService {
     }
   }
 
-  async explainPermissions(userId: string, fallbackRole: UserRole) {
-    const roleBased = await this.resolveRoleBasedPermissions(userId, fallbackRole)
+  async explainPermissions(userId: string) {
+    const roleBased = await this.resolveRoleBasedPermissions(userId)
     const temporal = this.temporal
       ? (await this.temporal.findActiveByUserId(userId)).flatMap((p) => p.permissionKeys)
       : []
@@ -167,11 +177,15 @@ export class AuthorizationService {
       ? await Promise.all(
           (await this.delegations.findActiveByUserId(userId)).map(async (d) => {
             const role = await this.roles.findByIdSafe(d.roleId)
-            return { delegationId: d._id, roleId: d.roleId, keys: role ? expandPermissions(role.permissionKeys) : [] }
+            return {
+              delegationId: d._id,
+              roleId: d.roleId,
+              keys: role ? expandPermissions(role.permissionKeys) : [],
+            }
           }),
         )
       : []
-    const effective = await this.resolveEffectivePermissions(userId, fallbackRole)
+    const effective = await this.resolveEffectivePermissions(userId)
     return {
       userId,
       sources: {

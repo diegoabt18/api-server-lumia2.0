@@ -1,6 +1,9 @@
 import type { Env } from '../../../config/env.js'
 
-function inferDatabaseTier(mongoUri: string, nodeEnv: string): 'production' | 'staging' | 'development' {
+function inferDatabaseTier(
+  mongoUri: string,
+  nodeEnv: string,
+): 'production' | 'staging' | 'development' {
   if (nodeEnv === 'development') return 'development'
   const lower = mongoUri.toLowerCase()
   if (lower.includes('localhost') || lower.includes('127.0.0.1')) return 'development'

@@ -13,9 +13,7 @@ export interface TwoFactorTempPayload {
   purpose: '2fa_login'
 }
 
-export function signTwoFactorTempToken(
-  payload: Omit<TwoFactorTempPayload, 'purpose'>,
-): string {
+export function signTwoFactorTempToken(payload: Omit<TwoFactorTempPayload, 'purpose'>): string {
   const env = getEnv()
   return jwt.sign({ ...payload, purpose: '2fa_login' }, env.JWT_SECRET, {
     expiresIn: TWO_FA_TEMP_TOKEN_TTL,

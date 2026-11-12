@@ -14,10 +14,7 @@ import {
 } from '../../identity/infrastructure/jwt-2fa.js'
 import type { AuthService } from '../../identity/services/auth.service.js'
 import type { AuthAuditRepository } from '../infrastructure/auth-audit.repository.js'
-import {
-  generateBackupCodes,
-  hashBackupCode,
-} from '../utils/backup-codes.utils.js'
+import { generateBackupCodes, hashBackupCode } from '../utils/backup-codes.utils.js'
 
 export class TwoFactorService {
   constructor(
@@ -30,9 +27,6 @@ export class TwoFactorService {
   async setup(userId: string) {
     const user = await this.users.findByIdSafe(userId)
     if (!user) throw AppError.notFound('User not found')
-    if (user.role !== 'admin') {
-      throw AppError.forbidden('2FA setup is only available for admin accounts')
-    }
 
     const secret = generateSecret()
     const secretEnc = encryptTwoFactorSecret(secret)
@@ -83,12 +77,7 @@ export class TwoFactorService {
     return { ok: true, enabled: false }
   }
 
-  async verifyLogin(params: {
-    tempToken: string
-    code: string
-    ip?: string
-    userAgent?: string
-  }) {
+  async verifyLogin(params: { tempToken: string; code: string; ip?: string; userAgent?: string }) {
     const payload = verifyTwoFactorTempToken(params.tempToken)
     if (!payload) throw AppError.unauthorized('Token 2FA inválido o expirado')
 

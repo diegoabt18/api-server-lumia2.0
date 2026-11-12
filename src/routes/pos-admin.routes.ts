@@ -23,7 +23,7 @@ export async function registerPosAdminRoutes(api: FastifyInstance, ctx: AppConte
   const g = (permission: (typeof PERMISSION_REGISTRY)[keyof typeof PERMISSION_REGISTRY]) =>
     adminGuard(ctx.repos.sessions, permission, ctx.services.authorization)
 
-  api.get('/admin/pos/payment-methods', { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) }, async () =>
+  api.get('/admin/pos/payment-methods', { preHandler: g(PERMISSION_REGISTRY.ORDERS_CREATE) }, async () =>
     ctx.services.pos.getPaymentConfig(),
   )
 

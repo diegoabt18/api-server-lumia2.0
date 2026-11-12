@@ -113,7 +113,10 @@ export class PosCustomerRepository {
       updatedAt: now,
     }
     try {
-      const result = await this.collection().insertOne({ ...doc, _id: new ObjectId() } as PosCustomerDocument)
+      const result = await this.collection().insertOne({
+        ...doc,
+        _id: new ObjectId(),
+      } as PosCustomerDocument)
       return toRecord({ ...doc, _id: result.insertedId } as PosCustomerDocument)
     } catch (error) {
       // Otro registro con el mismo teléfono/email se creó en paralelo: reutilizarlo.

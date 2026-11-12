@@ -58,9 +58,16 @@ export class AdminAnalyticsService {
     }
 
     const slugs = [...productRevenueMap.keys()]
-    const nameMap = slugs.length ? await this.products.findNamesBySlugs(slugs) : new Map<string, string>()
+    const nameMap = slugs.length
+      ? await this.products.findNamesBySlugs(slugs)
+      : new Map<string, string>()
     const topProducts = [...productRevenueMap.values()]
-      .map((d) => ({ slug: d.slug, name: nameMap.get(d.slug) || d.slug, revenue: d.revenue, units: d.units }))
+      .map((d) => ({
+        slug: d.slug,
+        name: nameMap.get(d.slug) || d.slug,
+        revenue: d.revenue,
+        units: d.units,
+      }))
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 10)
 
@@ -71,7 +78,8 @@ export class AdminAnalyticsService {
     }
     for (const order of current.orderDocs) {
       if (!['paid', 'shipped', 'delivered'].includes(order.status)) continue
-      const key = order.createdAt instanceof Date ? order.createdAt.toISOString().slice(0, 10) : null
+      const key =
+        order.createdAt instanceof Date ? order.createdAt.toISOString().slice(0, 10) : null
       if (!key || !dayMap.has(key)) continue
       const entry = dayMap.get(key)!
       entry.revenue += order.total || 0
@@ -80,10 +88,26 @@ export class AdminAnalyticsService {
 
     return {
       period: { from: currentFrom.toISOString(), to: now.toISOString(), label: period },
-      previous: { from: previousFrom.toISOString(), to: currentFrom.toISOString(), label: 'Período anterior' },
-      revenue: { current: Math.round(current.revenue), previous: Math.round(previous.revenue), growth: growth(current.revenue, previous.revenue) },
-      orders: { current: current.orders, previous: previous.orders, growth: growth(current.orders, previous.orders) },
-      aov: { current: current.aov, previous: previous.aov, growth: growth(current.aov, previous.aov) },
+      previous: {
+        from: previousFrom.toISOString(),
+        to: currentFrom.toISOString(),
+        label: 'Período anterior',
+      },
+      revenue: {
+        current: Math.round(current.revenue),
+        previous: Math.round(previous.revenue),
+        growth: growth(current.revenue, previous.revenue),
+      },
+      orders: {
+        current: current.orders,
+        previous: previous.orders,
+        growth: growth(current.orders, previous.orders),
+      },
+      aov: {
+        current: current.aov,
+        previous: previous.aov,
+        growth: growth(current.aov, previous.aov),
+      },
       newCustomers: {
         current: newCustomersCurrent,
         previous: newCustomersPrevious,
@@ -131,7 +155,10 @@ export class AdminAnalyticsService {
         averageFulfillmentTime: null,
       },
       aov: { overall: totalOrders > 0 ? Math.round(totalRevenue / totalOrders) : 0, byMonth: [] },
-      refunds: { total: Math.round(refundTotal), rate: totalRevenue > 0 ? Math.round((refundTotal / totalRevenue) * 100) : 0 },
+      refunds: {
+        total: Math.round(refundTotal),
+        rate: totalRevenue > 0 ? Math.round((refundTotal / totalRevenue) * 100) : 0,
+      },
     }
   }
 }

@@ -30,7 +30,6 @@ export interface SessionEntity {
 
 export interface AccessTokenPayload {
   userId: string
-  role: string
   sessionId: string
   permHash: string
   permissionsVersion: number

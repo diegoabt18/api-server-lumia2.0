@@ -94,7 +94,10 @@ export class ConditionEvaluationEngine {
     return config.days.includes(ctx.currentTime.getDay())
   }
 
-  private static evaluateUserAttribute(config: UserAttributeConfig, ctx: ConditionContext): boolean {
+  private static evaluateUserAttribute(
+    config: UserAttributeConfig,
+    ctx: ConditionContext,
+  ): boolean {
     const val = ctx.userAttributes[config.attribute] ?? ''
     switch (config.operator) {
       case 'eq':

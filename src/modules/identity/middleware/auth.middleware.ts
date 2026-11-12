@@ -1,11 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { AppError } from '../../../common/errors/app.error.js'
-import {
-  hasPermission,
-  resolvePermissionsForRole,
-  type PermissionId,
-  type UserRole,
-} from '../../../common/permissions/registry.js'
+import { hasPermission, type PermissionId } from '../../../common/permissions/registry.js'
 import type { AccessTokenPayload } from '../domain/session.entity.js'
 import { JwtTokenService } from '../infrastructure/jwt.service.js'
 import { SessionRepository } from '../infrastructure/session.repository.js'
@@ -50,9 +45,10 @@ export async function resolveAuth(
     throw AppError.unauthorized('Stale authorization', 'STALE_AUTHORIZATION')
   }
 
+  // Sin servicio de autorización no hay permisos: el rol base no concede acceso por sí solo.
   const permissionKeys = authorization
-    ? await authorization.resolveEffectivePermissions(payload.userId, payload.role as UserRole)
-    : resolvePermissionsForRole(payload.role as UserRole)
+    ? await authorization.resolveEffectivePermissions(payload.userId)
+    : []
 
   const LAST_USED_THROTTLE_MS = 5 * 60 * 1000
   if (Date.now() - session.lastUsedAt.getTime() > LAST_USED_THROTTLE_MS) {

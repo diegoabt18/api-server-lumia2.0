@@ -1,12 +1,20 @@
 import { buildPaginationMeta, resolvePagingQuery } from '../../../common/utils/pagination.js'
-import type { AuthAuditEvent, AuthAuditRepository } from '../../identity/infrastructure/auth-audit.repository.js'
+import type {
+  AuthAuditEvent,
+  AuthAuditRepository,
+} from '../../identity/infrastructure/auth-audit.repository.js'
 
 export class AdminAuditService {
   constructor(private readonly authAudit: AuthAuditRepository) {}
 
   async list(query: Record<string, unknown>) {
     const routeQuery = query
-    const { page, limit, skip, search: pagingSearch } = resolvePagingQuery(routeQuery, {
+    const {
+      page,
+      limit,
+      skip,
+      search: pagingSearch,
+    } = resolvePagingQuery(routeQuery, {
       defaultLimit: 50,
       maxLimit: 200,
     })

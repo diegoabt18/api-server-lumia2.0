@@ -1,11 +1,13 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { AppContext } from '../app.context.js'
 import { AppError } from '../common/errors/app.error.js'
+import { PERMISSION_REGISTRY, hasPermission } from '../common/permissions/registry.js'
+import { ensureGuestCartKey, getGuestCartKey } from '../common/utils/guest-cart.utils.js'
 import {
-  ensureGuestCartKey,
-  getGuestCartKey,
-} from '../common/utils/guest-cart.utils.js'
-import { addCartItemSchema, removeCartItemSchema, updateCartItemSchema } from '../modules/sales/schemas/cart.schema.js'
+  addCartItemSchema,
+  removeCartItemSchema,
+  updateCartItemSchema,
+} from '../modules/sales/schemas/cart.schema.js'
 import { checkoutShippingSchema } from '../modules/sales/schemas/checkout.schema.js'
 import {
   answerWriteSchema,
@@ -31,7 +33,9 @@ function resolveCartKey(auth?: AuthenticatedRequest['auth'], guestKey?: string):
 
 export async function registerStoreRoutes(api: FastifyInstance, ctx: AppContext) {
   const { services, repos } = ctx
-  const { requireAuth, optionalAuth } = await import('../modules/identity/middleware/auth.middleware.js')
+  const { requireAuth, optionalAuth } = await import(
+    '../modules/identity/middleware/auth.middleware.js'
+  )
   const authGuard = requireAuth(repos.sessions, services.authorization)
   const optionalAuthGuard = optionalAuth(repos.sessions, services.authorization)
 
@@ -66,7 +70,12 @@ export async function registerStoreRoutes(api: FastifyInstance, ctx: AppContext)
     if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
     const auth = (request as AuthenticatedRequest).auth
     const cartKey = auth?.userId ?? ensureGuestCartKey(request, reply)
-    return services.cart.updateQuantity(cartKey, parsed.data.sku, parsed.data.quantity, auth?.userId ?? null)
+    return services.cart.updateQuantity(
+      cartKey,
+      parsed.data.sku,
+      parsed.data.quantity,
+      auth?.userId ?? null,
+    )
   })
 
   api.delete('/cart/items', { preHandler: optionalAuthGuard }, async (request, reply) => {
@@ -200,49 +209,71 @@ export async function registerStoreRoutes(api: FastifyInstance, ctx: AppContext)
   api.post('/products/:slug/feedback', { preHandler: authGuard, ...writeLimit(5) }, submitReview)
   api.post('/products/:slug/reviews', { preHandler: authGuard, ...writeLimit(5) }, submitReview)
 
-  api.post('/products/:slug/reviews/:reviewId/reaction', { preHandler: authGuard, ...writeLimit(40) }, async (request) => {
-    const { slug, reviewId } = request.params as { slug: string; reviewId: string }
-    const parsed = reactionSchema.safeParse(request.body)
-    if (!parsed.success) throw AppError.badRequest('Reacción inválida', parsed.error.flatten())
-    const auth = (request as AuthenticatedRequest).auth
-    return services.feedback.reactToReview(slug, reviewId, auth.userId, parsed.data.reaction)
-  })
+  api.post(
+    '/products/:slug/reviews/:reviewId/reaction',
+    { preHandler: authGuard, ...writeLimit(40) },
+    async (request) => {
+      const { slug, reviewId } = request.params as { slug: string; reviewId: string }
+      const parsed = reactionSchema.safeParse(request.body)
+      if (!parsed.success) throw AppError.badRequest('Reacción inválida', parsed.error.flatten())
+      const auth = (request as AuthenticatedRequest).auth
+      return services.feedback.reactToReview(slug, reviewId, auth.userId, parsed.data.reaction)
+    },
+  )
 
-  api.post('/products/:slug/questions', { preHandler: authGuard, ...writeLimit(8) }, async (request) => {
-    const { slug } = request.params as { slug: string }
-    const parsed = questionWriteSchema.safeParse(request.body)
-    if (!parsed.success) throw AppError.badRequest('Pregunta inválida', parsed.error.flatten())
-    return services.feedback.createQuestion(slug, await feedbackAuthor(request), parsed.data.body)
-  })
+  api.post(
+    '/products/:slug/questions',
+    { preHandler: authGuard, ...writeLimit(8) },
+    async (request) => {
+      const { slug } = request.params as { slug: string }
+      const parsed = questionWriteSchema.safeParse(request.body)
+      if (!parsed.success) throw AppError.badRequest('Pregunta inválida', parsed.error.flatten())
+      return services.feedback.createQuestion(slug, await feedbackAuthor(request), parsed.data.body)
+    },
+  )
 
-  api.post('/products/:slug/questions/:questionId/answers', { preHandler: authGuard, ...writeLimit(12) }, async (request) => {
-    const { slug, questionId } = request.params as { slug: string; questionId: string }
-    const parsed = answerWriteSchema.safeParse(request.body)
-    if (!parsed.success) throw AppError.badRequest('Respuesta inválida', parsed.error.flatten())
-    const auth = (request as AuthenticatedRequest).auth
-    return services.feedback.answerQuestion(
-      slug,
-      questionId,
-      await feedbackAuthor(request),
-      parsed.data.body,
-      auth.role === 'admin',
-    )
-  })
+  api.post(
+    '/products/:slug/questions/:questionId/answers',
+    { preHandler: authGuard, ...writeLimit(12) },
+    async (request) => {
+      const { slug, questionId } = request.params as { slug: string; questionId: string }
+      const parsed = answerWriteSchema.safeParse(request.body)
+      if (!parsed.success) throw AppError.badRequest('Respuesta inválida', parsed.error.flatten())
+      return services.feedback.answerQuestion(
+        slug,
+        questionId,
+        await feedbackAuthor(request),
+        parsed.data.body,
+        hasPermission(
+          (request as AuthenticatedRequest).permissionKeys,
+          PERMISSION_REGISTRY.ADMIN_ACCESS,
+        ),
+      )
+    },
+  )
 
-  api.post('/products/:slug/questions/:questionId/reaction', { preHandler: authGuard, ...writeLimit(40) }, async (request) => {
-    const { slug, questionId } = request.params as { slug: string; questionId: string }
-    const parsed = reactionSchema.safeParse(request.body)
-    if (!parsed.success) throw AppError.badRequest('Reacción inválida', parsed.error.flatten())
-    const auth = (request as AuthenticatedRequest).auth
-    return services.feedback.reactToQuestion(slug, questionId, auth.userId, parsed.data.reaction)
-  })
+  api.post(
+    '/products/:slug/questions/:questionId/reaction',
+    { preHandler: authGuard, ...writeLimit(40) },
+    async (request) => {
+      const { slug, questionId } = request.params as { slug: string; questionId: string }
+      const parsed = reactionSchema.safeParse(request.body)
+      if (!parsed.success) throw AppError.badRequest('Reacción inválida', parsed.error.flatten())
+      const auth = (request as AuthenticatedRequest).auth
+      return services.feedback.reactToQuestion(slug, questionId, auth.userId, parsed.data.reaction)
+    },
+  )
 
-  api.post('/products/:slug/report', { preHandler: authGuard, ...writeLimit(10) }, async (request) => {
-    const parsed = reportWriteSchema.safeParse(request.body)
-    if (!parsed.success) throw AppError.badRequest('Reporte inválido', parsed.error.flatten())
-    const auth = (request as AuthenticatedRequest).auth
-    return services.feedback.report(auth.userId, parsed.data)
-  })
+  api.post(
+    '/products/:slug/report',
+    { preHandler: authGuard, ...writeLimit(10) },
+    async (request) => {
+      const parsed = reportWriteSchema.safeParse(request.body)
+      if (!parsed.success) throw AppError.badRequest('Reporte inválido', parsed.error.flatten())
+      const auth = (request as AuthenticatedRequest).auth
+      return services.feedback.report(auth.userId, parsed.data)
+    },
+  )
 
   api.post('/newsletter/subscribe', async (request) => {
     const parsed = newsletterSubscribeSchema.safeParse(request.body)

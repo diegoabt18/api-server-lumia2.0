@@ -6,7 +6,10 @@ export class AdminCategoryService {
   constructor(private readonly categories: CategoryRepository) {}
 
   async list(query: Record<string, unknown>) {
-    const { page, limit, skip, search } = resolvePagingQuery(query, { defaultLimit: 50, maxLimit: 200 })
+    const { page, limit, skip, search } = resolvePagingQuery(query, {
+      defaultLimit: 50,
+      maxLimit: 200,
+    })
     const [items, total, productCounts] = await Promise.all([
       this.categories.findPaged(skip, limit, search || undefined),
       this.categories.countAll(search || undefined),
@@ -24,7 +27,8 @@ export class AdminCategoryService {
       const category = await this.categories.createCategory(name, slug)
       return { category }
     } catch (e: unknown) {
-      if ((e as { code?: number }).code === 11000) throw AppError.conflict('Ya existe una categoría con ese slug')
+      if ((e as { code?: number }).code === 11000)
+        throw AppError.conflict('Ya existe una categoría con ese slug')
       throw e
     }
   }
@@ -35,7 +39,8 @@ export class AdminCategoryService {
       if (!updated) throw AppError.notFound('Categoría no encontrada')
       return { category: updated }
     } catch (e: unknown) {
-      if ((e as { code?: number }).code === 11000) throw AppError.conflict('Ya existe una categoría con ese slug')
+      if ((e as { code?: number }).code === 11000)
+        throw AppError.conflict('Ya existe una categoría con ese slug')
       throw e
     }
   }

@@ -1,6 +1,9 @@
 import { ObjectId } from 'mongodb'
 import { AppError } from '../../../common/errors/app.error.js'
-import { calculateProfit, calculatePrice } from '../../production/domain/value-objects/cost-breakdown.vo.js'
+import {
+  calculateProfit,
+  calculatePrice,
+} from '../../production/domain/value-objects/cost-breakdown.vo.js'
 import type { ProductRepository } from '../../catalog/infrastructure/product.repository.js'
 import type { RecipeRepository } from '../../production/infrastructure/recipe.repository.js'
 import type { ProductionConfigRepository } from '../../production/infrastructure/production-config.repository.js'
@@ -13,7 +16,11 @@ function resolveRecipeId(
   const variantRecipe = variant.production_recipe_id
   if (variantRecipe) {
     if (typeof variantRecipe === 'string') return variantRecipe
-    if (typeof variantRecipe === 'object' && variantRecipe !== null && 'toString' in variantRecipe) {
+    if (
+      typeof variantRecipe === 'object' &&
+      variantRecipe !== null &&
+      'toString' in variantRecipe
+    ) {
       return (variantRecipe as { toString(): string }).toString()
     }
   }
@@ -143,12 +150,14 @@ export class AdminCostSummaryService {
     const variants = await this.products.listVariantsByProductSlug(product.slug)
     const latestSnapshots = await this.products.getLatestSnapshotsByProduct(String(product._id))
     const snapshotMap = new Map(
-      latestSnapshots.map((s: {
-        _id: string
-        suggested_price?: number
-        margin_percentage?: number
-        calculated_at?: Date
-      }) => [String(s._id), s]),
+      latestSnapshots.map(
+        (s: {
+          _id: string
+          suggested_price?: number
+          margin_percentage?: number
+          calculated_at?: Date
+        }) => [String(s._id), s],
+      ),
     )
 
     const items = variants.map((v) => {
@@ -183,7 +192,12 @@ export class AdminCostSummaryService {
     }
   }
 
-  async calculateVariantCost(productId: string, sku: string, body: Record<string, unknown>, userId: string) {
+  async calculateVariantCost(
+    productId: string,
+    sku: string,
+    body: Record<string, unknown>,
+    userId: string,
+  ) {
     const product = await this.requireProduct(productId)
     const decodedSku = decodeURIComponent(sku)
     const variant = await this.products.getVariantRaw(product.slug, decodedSku)
@@ -198,22 +212,17 @@ export class AdminCostSummaryService {
 
     const costResult = await this.costing.calculateRecipeCost(recipeId, userId)
     const breakdown = costResult.data
-    const pricing = calculatePrice(
-      breakdown.totalCost,
-      breakdown.totalCost,
-      margin,
-      {
-        currency: productionConfig.currency,
-        priceRounding: productionConfig.priceRounding,
-        psychologicalRounding: productionConfig.psychologicalRounding,
-        taxPercentage: productionConfig.taxPercentage,
-        minimumProfitPercentage: productionConfig.minimumProfitPercentage,
-        suggestedProfitPercentage: productionConfig.suggestedProfitPercentage,
-        premiumProfitPercentage: productionConfig.premiumProfitPercentage,
-        wholesaleProfitPercentage: productionConfig.wholesaleProfitPercentage,
-        distributorProfitPercentage: productionConfig.distributorProfitPercentage,
-      },
-    )
+    const pricing = calculatePrice(breakdown.totalCost, breakdown.totalCost, margin, {
+      currency: productionConfig.currency,
+      priceRounding: productionConfig.priceRounding,
+      psychologicalRounding: productionConfig.psychologicalRounding,
+      taxPercentage: productionConfig.taxPercentage,
+      minimumProfitPercentage: productionConfig.minimumProfitPercentage,
+      suggestedProfitPercentage: productionConfig.suggestedProfitPercentage,
+      premiumProfitPercentage: productionConfig.premiumProfitPercentage,
+      wholesaleProfitPercentage: productionConfig.wholesaleProfitPercentage,
+      distributorProfitPercentage: productionConfig.distributorProfitPercentage,
+    })
 
     return {
       data: {
@@ -266,7 +275,11 @@ export class AdminCostSummaryService {
       profit_amount: calc.data.cost.suggestedPrice - calc.data.cost.totalCost,
       profit_percent:
         calc.data.cost.totalCost > 0
-          ? Math.round(((calc.data.cost.suggestedPrice - calc.data.cost.totalCost) / calc.data.cost.totalCost) * 10000) / 100
+          ? Math.round(
+              ((calc.data.cost.suggestedPrice - calc.data.cost.totalCost) /
+                calc.data.cost.totalCost) *
+                10000,
+            ) / 100
           : 0,
       currency: calc.data.currency,
       breakdown: {
@@ -274,7 +287,11 @@ export class AdminCostSummaryService {
         packaging: { label: 'Empaque', amount: 0, details: [] },
         labor: { label: 'Mano de obra', amount: 0, details: [] },
         services: { label: 'Servicios', amount: 0, details: [] },
-        indirect_costs: { label: 'Indirectos', amount: calc.data.cost.indirectCostTotal, details: [] },
+        indirect_costs: {
+          label: 'Indirectos',
+          amount: calc.data.cost.indirectCostTotal,
+          details: [],
+        },
         waste: { label: 'Merma', amount: 0, details: [] },
       },
       calculated_by: userId,
@@ -301,7 +318,12 @@ export class AdminCostSummaryService {
     }
   }
 
-  async saveSnapshot(productId: string, sku: string, body: Record<string, unknown>, userId: string) {
+  async saveSnapshot(
+    productId: string,
+    sku: string,
+    body: Record<string, unknown>,
+    userId: string,
+  ) {
     const product = await this.requireProduct(productId)
     const decodedSku = decodeURIComponent(sku)
     const variant = await this.products.getVariantRaw(product.slug, decodedSku)
@@ -324,7 +346,10 @@ export class AdminCostSummaryService {
       throw AppError.badRequest('Datos de snapshot inválidos')
     }
 
-    const breakdown = (body.breakdown ?? {}) as Record<string, { label?: string; amount?: number; details?: unknown[] }>
+    const breakdown = (body.breakdown ?? {}) as Record<
+      string,
+      { label?: string; amount?: number; details?: unknown[] }
+    >
     const profitAmount = suggestedPrice - totalCost
     const profitPercent = totalCost > 0 ? Math.round((profitAmount / totalCost) * 10000) / 100 : 0
 
@@ -346,7 +371,11 @@ export class AdminCostSummaryService {
         packaging: breakdown.packaging ?? { label: 'Empaque', amount: 0, details: [] },
         labor: breakdown.labor ?? { label: 'Mano de obra', amount: 0, details: [] },
         services: breakdown.services ?? { label: 'Servicios externos', amount: 0, details: [] },
-        indirect_costs: breakdown.indirectCosts ?? { label: 'Costos indirectos', amount: 0, details: [] },
+        indirect_costs: breakdown.indirectCosts ?? {
+          label: 'Costos indirectos',
+          amount: 0,
+          details: [],
+        },
         waste: breakdown.waste ?? { label: 'Desperdicio / Merma', amount: 0, details: [] },
       },
       calculated_by: userId,
@@ -391,12 +420,36 @@ export class AdminCostSummaryService {
         profitPercent: row.profit_percent ?? null,
         currency: row.currency ?? 'COP',
         breakdown: {
-          materials: (row.breakdown as Record<string, unknown>)?.materials ?? { label: 'Materiales directos', amount: 0, details: [] },
-          packaging: (row.breakdown as Record<string, unknown>)?.packaging ?? { label: 'Empaque', amount: 0, details: [] },
-          labor: (row.breakdown as Record<string, unknown>)?.labor ?? { label: 'Mano de obra', amount: 0, details: [] },
-          services: (row.breakdown as Record<string, unknown>)?.services ?? { label: 'Servicios externos', amount: 0, details: [] },
-          indirectCosts: (row.breakdown as Record<string, unknown>)?.indirect_costs ?? { label: 'Costos indirectos', amount: 0, details: [] },
-          waste: (row.breakdown as Record<string, unknown>)?.waste ?? { label: 'Desperdicio / Merma', amount: 0, details: [] },
+          materials: (row.breakdown as Record<string, unknown>)?.materials ?? {
+            label: 'Materiales directos',
+            amount: 0,
+            details: [],
+          },
+          packaging: (row.breakdown as Record<string, unknown>)?.packaging ?? {
+            label: 'Empaque',
+            amount: 0,
+            details: [],
+          },
+          labor: (row.breakdown as Record<string, unknown>)?.labor ?? {
+            label: 'Mano de obra',
+            amount: 0,
+            details: [],
+          },
+          services: (row.breakdown as Record<string, unknown>)?.services ?? {
+            label: 'Servicios externos',
+            amount: 0,
+            details: [],
+          },
+          indirectCosts: (row.breakdown as Record<string, unknown>)?.indirect_costs ?? {
+            label: 'Costos indirectos',
+            amount: 0,
+            details: [],
+          },
+          waste: (row.breakdown as Record<string, unknown>)?.waste ?? {
+            label: 'Desperdicio / Merma',
+            amount: 0,
+            details: [],
+          },
         },
         calculatedBy: row.calculated_by != null ? String(row.calculated_by) : '',
         calculatedAt:

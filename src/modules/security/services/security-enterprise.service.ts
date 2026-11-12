@@ -1,8 +1,5 @@
 import { AppError } from '../../../common/errors/app.error.js'
-import {
-  expandPermissions,
-  type UserRole,
-} from '../../../common/permissions/registry.js'
+import { expandPermissions } from '../../../common/permissions/registry.js'
 import { buildPaginationMeta, resolvePagingQuery } from '../../../common/utils/pagination.js'
 import type { RegistryRepository } from '../../admin/infrastructure/registry.repository.js'
 import type { AuthAuditRepository } from '../../identity/infrastructure/auth-audit.repository.js'
@@ -22,7 +19,11 @@ import type { UserPermissionOverrideRepository } from '../infrastructure/user-pe
 import type { UserRoleRepository } from '../infrastructure/user-role.repository.js'
 import type { AuthorizationService } from './authorization.service.js'
 import type { PermissionCacheService } from './permission-cache.service.js'
-import { ConditionEvaluationEngine, type ConditionClause, type ConditionContext } from './conditional-evaluation.js'
+import {
+  ConditionEvaluationEngine,
+  type ConditionClause,
+  type ConditionContext,
+} from './conditional-evaluation.js'
 
 function mapEntity<T extends { _id?: string }>(item: T) {
   const { _id, ...rest } = item
@@ -98,7 +99,11 @@ export class SecurityEnterpriseService {
       status: typeof query.status === 'string' ? query.status : undefined,
       search: typeof query.search === 'string' ? query.search : undefined,
     })
-    return { items: items.map(mapEntity), total, pagination: buildPaginationMeta(total, page, limit) }
+    return {
+      items: items.map(mapEntity),
+      total,
+      pagination: buildPaginationMeta(total, page, limit),
+    }
   }
 
   async getTemporal(id: string) {
@@ -118,7 +123,12 @@ export class SecurityEnterpriseService {
   }
 
   // ─── User overrides ───
-  async grantOverride(body: { userId: string; permissionKeys: string[]; reason: string; grantedBy: string }) {
+  async grantOverride(body: {
+    userId: string
+    permissionKeys: string[]
+    reason: string
+    grantedBy: string
+  }) {
     const item = await this.overrides.create(body)
     await this.authorization.invalidateUserCache(body.userId)
     return { item: mapEntity(item) }
@@ -141,7 +151,11 @@ export class SecurityEnterpriseService {
       status: typeof query.status === 'string' ? query.status : undefined,
       search: typeof query.search === 'string' ? query.search : undefined,
     })
-    return { items: items.map(mapEntity), total, pagination: buildPaginationMeta(total, page, limit) }
+    return {
+      items: items.map(mapEntity),
+      total,
+      pagination: buildPaginationMeta(total, page, limit),
+    }
   }
 
   async getOverride(id: string) {
@@ -194,7 +208,11 @@ export class SecurityEnterpriseService {
       roleId: typeof query.roleId === 'string' ? query.roleId : undefined,
       search: typeof query.search === 'string' ? query.search : undefined,
     })
-    return { items: items.map(mapEntity), total, pagination: buildPaginationMeta(total, page, limit) }
+    return {
+      items: items.map(mapEntity),
+      total,
+      pagination: buildPaginationMeta(total, page, limit),
+    }
   }
 
   async getDelegation(id: string) {
@@ -242,7 +260,11 @@ export class SecurityEnterpriseService {
       category: typeof query.category === 'string' ? query.category : undefined,
       search: typeof query.search === 'string' ? query.search : undefined,
     })
-    return { items: items.map(mapEntity), total, pagination: buildPaginationMeta(total, page, limit) }
+    return {
+      items: items.map(mapEntity),
+      total,
+      pagination: buildPaginationMeta(total, page, limit),
+    }
   }
 
   async listActiveTemplates() {
@@ -315,7 +337,11 @@ export class SecurityEnterpriseService {
       status: query.status as 'active' | 'inactive' | undefined,
       search: typeof query.search === 'string' ? query.search : undefined,
     })
-    return { items: items.map(mapEntity), total, pagination: buildPaginationMeta(total, page, limit) }
+    return {
+      items: items.map(mapEntity),
+      total,
+      pagination: buildPaginationMeta(total, page, limit),
+    }
   }
 
   async getConditional(id: string) {
@@ -325,7 +351,8 @@ export class SecurityEnterpriseService {
   }
 
   async toggleConditional(id: string, status: 'active' | 'inactive') {
-    if (!(await this.conditional.setStatus(id, status))) throw AppError.notFound('Regla no encontrada')
+    if (!(await this.conditional.setStatus(id, status)))
+      throw AppError.notFound('Regla no encontrada')
     return { ok: true, status }
   }
 
@@ -356,7 +383,11 @@ export class SecurityEnterpriseService {
       action: query.action as never,
       search: typeof query.search === 'string' ? query.search : undefined,
     })
-    return { items: items.map(mapEntity), total, pagination: buildPaginationMeta(total, page, limit) }
+    return {
+      items: items.map(mapEntity),
+      total,
+      pagination: buildPaginationMeta(total, page, limit),
+    }
   }
 
   async getApproval(id: string) {
@@ -370,12 +401,14 @@ export class SecurityEnterpriseService {
   }
 
   async approveRequest(id: string, reviewedBy: string) {
-    if (!(await this.approvals.approve(id, reviewedBy))) throw AppError.badRequest('No se pudo aprobar')
+    if (!(await this.approvals.approve(id, reviewedBy)))
+      throw AppError.badRequest('No se pudo aprobar')
     return { ok: true }
   }
 
   async rejectRequest(id: string, reviewedBy: string, reason?: string) {
-    if (!(await this.approvals.reject(id, reviewedBy, reason))) throw AppError.badRequest('No se pudo rechazar')
+    if (!(await this.approvals.reject(id, reviewedBy, reason)))
+      throw AppError.badRequest('No se pudo rechazar')
     return { ok: true }
   }
 
@@ -413,7 +446,11 @@ export class SecurityEnterpriseService {
       status: query.status as never,
       search: typeof query.search === 'string' ? query.search : undefined,
     })
-    return { items: items.map(mapEntity), total, pagination: buildPaginationMeta(total, page, limit) }
+    return {
+      items: items.map(mapEntity),
+      total,
+      pagination: buildPaginationMeta(total, page, limit),
+    }
   }
 
   async getScheduled(id: string) {
@@ -494,7 +531,11 @@ export class SecurityEnterpriseService {
       dateFrom: typeof query.dateFrom === 'string' ? query.dateFrom : undefined,
       dateTo: typeof query.dateTo === 'string' ? query.dateTo : undefined,
     })
-    return { items: items.map(mapEntity), total, pagination: buildPaginationMeta(total, page, limit) }
+    return {
+      items: items.map(mapEntity),
+      total,
+      pagination: buildPaginationMeta(total, page, limit),
+    }
   }
 
   async getPermissionAudit(id: string) {
@@ -511,7 +552,10 @@ export class SecurityEnterpriseService {
   async listSecuritySessionsDashboard(query: Record<string, unknown>) {
     const WINDOW_MS = 24 * 60 * 60 * 1000
     const SESSIONS_SCAN_CAP = 500
-    const { page, limit, skip, search } = resolvePagingQuery(query, { defaultLimit: 20, maxLimit: 80 })
+    const { page, limit, skip, search } = resolvePagingQuery(query, {
+      defaultLimit: 20,
+      maxLimit: 80,
+    })
 
     const since = new Date(Date.now() - WINDOW_MS)
     const s = search?.trim().toLowerCase()
@@ -618,14 +662,15 @@ export class SecurityEnterpriseService {
 
   // ─── Dashboards ───
   async rbacDashboard() {
-    const [roles, templates, temporal, overrides, delegations, pendingApprovals] = await Promise.all([
-      this.roles.list(),
-      this.templates.listActive(),
-      this.temporal.list({ limit: 5, page: 1 }),
-      this.overrides.list({ limit: 5, page: 1 }),
-      this.delegations.list({ limit: 5, page: 1 }),
-      this.approvals.countPending(),
-    ])
+    const [roles, templates, temporal, overrides, delegations, pendingApprovals] =
+      await Promise.all([
+        this.roles.list(),
+        this.templates.listActive(),
+        this.temporal.list({ limit: 5, page: 1 }),
+        this.overrides.list({ limit: 5, page: 1 }),
+        this.delegations.list({ limit: 5, page: 1 }),
+        this.approvals.countPending(),
+      ])
     return {
       counts: {
         roles: roles.length,
@@ -692,7 +737,7 @@ export class SecurityEnterpriseService {
     const staffWithoutRoles = []
     for (const u of users.items) {
       const assignments = await this.userRoles.findByUserId(u._id!)
-      if (!assignments.length && u.role !== 'admin') {
+      if (!assignments.length) {
         staffWithoutRoles.push({ userId: u._id, email: u.email })
       }
     }
@@ -726,7 +771,10 @@ export class SecurityEnterpriseService {
     }
   }
 
-  async importTransfer(data: { roles?: Array<{ key: string; name: string; permissionKeys?: string[] }> }, performedBy: string) {
+  async importTransfer(
+    data: { roles?: Array<{ key: string; name: string; permissionKeys?: string[] }> },
+    performedBy: string,
+  ) {
     let created = 0
     let updated = 0
     for (const r of data.roles ?? []) {
@@ -830,13 +878,13 @@ export class SecurityEnterpriseService {
   async debugPermissions(userId: string) {
     const user = await this.users.findByIdSafe(userId)
     if (!user) throw AppError.notFound('Usuario no encontrado')
-    const keys = await this.authorization.resolveEffectivePermissions(userId, user.role as UserRole)
+    const keys = await this.authorization.resolveEffectivePermissions(userId)
     return { userId, permissionKeys: keys, count: keys.length }
   }
 
   async explainPermissions(userId: string) {
     const user = await this.users.findByIdSafe(userId)
     if (!user) throw AppError.notFound('Usuario no encontrado')
-    return this.authorization.explainPermissions(userId, user.role as UserRole)
+    return this.authorization.explainPermissions(userId)
   }
 }

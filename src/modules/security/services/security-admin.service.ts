@@ -4,7 +4,6 @@ import {
   expandPermissions,
   PERMISSION_REGISTRY,
   type PermissionId,
-  type UserRole,
 } from '../../../common/permissions/registry.js'
 import { buildPaginationMeta, resolvePagingQuery } from '../../../common/utils/pagination.js'
 import type { RegistryRepository } from '../../admin/infrastructure/registry.repository.js'
@@ -24,7 +23,10 @@ export class SecurityAdminService {
   ) {}
 
   async listRoles(query: Record<string, unknown> = {}) {
-    const { page, limit, skip, search } = resolvePagingQuery(query, { defaultLimit: 20, maxLimit: 100 })
+    const { page, limit, skip, search } = resolvePagingQuery(query, {
+      defaultLimit: 20,
+      maxLimit: 100,
+    })
     const list = await this.roles.list()
     const withCounts = await Promise.all(
       list.map(async (r) => {
@@ -109,7 +111,10 @@ export class SecurityAdminService {
   }
 
   async listPermissions(query: Record<string, unknown> = {}) {
-    const { page, limit, skip, search } = resolvePagingQuery(query, { defaultLimit: 30, maxLimit: 200 })
+    const { page, limit, skip, search } = resolvePagingQuery(query, {
+      defaultLimit: 30,
+      maxLimit: 200,
+    })
     const dbPermissions = await this.registry.listPermissions()
     const byKey = new Map(dbPermissions.map((p) => [p.key, p]))
 
@@ -163,15 +168,11 @@ export class SecurityAdminService {
       items.map(async (u) => {
         const assignments = await this.userRoles.findByUserId(u._id!)
         const roleDocs = await this.roles.findByIds(assignments.map((a) => a.roleId))
-        const effectiveKeys = await this.authorization.resolveEffectivePermissions(
-          u._id!,
-          u.role as UserRole,
-        )
+        const effectiveKeys = await this.authorization.resolveEffectivePermissions(u._id!)
         return {
           id: u._id,
           email: u.email,
           name: u.name ?? null,
-          role: u.role,
           isStaff: !!u.isStaff,
           twoFactorEnabled: !!u.twoFactor?.enabled,
           assignedRoles: roleDocs.map((r) => this.roles.toDomain(r)),
@@ -191,22 +192,14 @@ export class SecurityAdminService {
 
     const assignments = await this.userRoles.findByUserId(id)
     const roleDocs = await this.roles.findByIds(assignments.map((a) => a.roleId))
-    const effectivePermissionKeys = await this.authorization.resolveEffectivePermissions(
-      id,
-      user.role as UserRole,
-    )
-    const snap = await this.authorization.buildAuthzSnapshot(
-      id,
-      user.role as UserRole,
-      user.permissionsVersion ?? 1,
-    )
+    const effectivePermissionKeys = await this.authorization.resolveEffectivePermissions(id)
+    const snap = await this.authorization.buildAuthzSnapshot(id, user.permissionsVersion ?? 1)
 
     return {
       user: {
         id: user._id,
         email: user.email,
         name: user.name ?? null,
-        role: user.role,
         isStaff: !!user.isStaff,
         twoFactorEnabled: !!user.twoFactor?.enabled,
         permissionsVersion: user.permissionsVersion ?? 1,
@@ -226,10 +219,7 @@ export class SecurityAdminService {
     if (!role) throw AppError.notFound('Rol no encontrado')
 
     const assignment = await this.userRoles.assign(userId, roleId, assignedBy)
-    const effectivePermissionKeys = await this.authorization.resolveEffectivePermissions(
-      userId,
-      user.role as UserRole,
-    )
+    const effectivePermissionKeys = await this.authorization.resolveEffectivePermissions(userId)
 
     return {
       ok: true,
@@ -249,10 +239,7 @@ export class SecurityAdminService {
     const ok = await this.userRoles.remove(userId, roleId)
     if (!ok) throw AppError.notFound('Asignación no encontrada')
 
-    const effectivePermissionKeys = await this.authorization.resolveEffectivePermissions(
-      userId,
-      user.role as UserRole,
-    )
+    const effectivePermissionKeys = await this.authorization.resolveEffectivePermissions(userId)
     return { ok: true, effectivePermissionKeys }
   }
 
@@ -264,9 +251,9 @@ export class SecurityAdminService {
     }
   }
 
-  async importRoles(
-    data: { roles: Array<{ key: string; name: string; description?: string; permissionKeys?: string[] }> },
-  ) {
+  async importRoles(data: {
+    roles: Array<{ key: string; name: string; description?: string; permissionKeys?: string[] }>
+  }) {
     let created = 0
     let updated = 0
     for (const r of data.roles ?? []) {
@@ -293,7 +280,8 @@ export class SecurityAdminService {
   }
 
   async archiveRole(id: string) {
-    if (!(await this.roles.archive(id))) throw AppError.notFound('Rol no encontrado o es de sistema')
+    if (!(await this.roles.archive(id)))
+      throw AppError.notFound('Rol no encontrado o es de sistema')
     return { ok: true }
   }
 
@@ -456,11 +444,7 @@ export class SecurityAdminService {
     }
   }
 
-  async bulkAssignRoles(body: {
-    userIds: string[]
-    roleId: string
-    assignedBy: string
-  }) {
+  async bulkAssignRoles(body: { userIds: string[]; roleId: string; assignedBy: string }) {
     const role = await this.roles.findByIdSafe(body.roleId)
     if (!role) throw AppError.notFound('Rol no encontrado')
     const results = []

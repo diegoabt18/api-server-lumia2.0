@@ -1,11 +1,7 @@
 import bcrypt from 'bcryptjs'
 import { randomUUID } from 'node:crypto'
 import { AppError } from '../../../common/errors/app.error.js'
-import {
-  buildAuthzSnapshot,
-  resolvePermissionsForRole,
-  type UserRole,
-} from '../../../common/permissions/registry.js'
+import { buildAuthzSnapshot } from '../../../common/permissions/registry.js'
 import {
   buildDeviceId,
   generateRefreshToken,
@@ -119,7 +115,10 @@ export class AuthService {
     return tokens
   }
 
-  async refresh(refreshToken: string, _meta: { ip?: string; userAgent?: string; country?: string | null }) {
+  async refresh(
+    refreshToken: string,
+    _meta: { ip?: string; userAgent?: string; country?: string | null },
+  ) {
     const hash = hashRefreshToken(refreshToken)
     const session = await this.sessions.findByRefreshHash(hash)
 
@@ -137,10 +136,9 @@ export class AuthService {
       throw AppError.unauthorized('Invalid refresh token')
     }
 
-    const role = (user.role ?? 'user') as UserRole
     const authz = this.authorization
-      ? await this.authorization.buildAuthzSnapshot(user._id!, role, user.permissionsVersion ?? 1)
-      : buildAuthzSnapshot(role)
+      ? await this.authorization.buildAuthzSnapshot(user._id!, user.permissionsVersion ?? 1)
+      : buildAuthzSnapshot([])
     const env = getEnv()
     const refreshTtlMs = parseDurationMs(env.JWT_REFRESH_EXPIRES_IN, 7 * 86400000)
 
@@ -153,7 +151,6 @@ export class AuthService {
     const accessToken = this.jwt.signAccess(
       this.jwt.buildAccessPayload({
         userId: user._id!,
-        role,
         sessionId: session._id!,
         permHash: authz.permHash,
         permissionsVersion: authz.permissionsVersion,
@@ -171,7 +168,10 @@ export class AuthService {
     }
   }
 
-  async logout(refreshToken?: string, meta?: { ip?: string; userAgent?: string; userId?: string; email?: string }): Promise<void> {
+  async logout(
+    refreshToken?: string,
+    meta?: { ip?: string; userAgent?: string; userId?: string; email?: string },
+  ): Promise<void> {
     if (!refreshToken) return
     const hash = hashRefreshToken(refreshToken)
     const session = await this.sessions.findByRefreshHash(hash)
@@ -205,7 +205,9 @@ export class AuthService {
   }) {
     const env = getEnv()
     if (!env.AUTH_LOCAL_ENABLED) {
-      throw AppError.forbidden('El registro con email no está disponible. Usa Continuar con Google.')
+      throw AppError.forbidden(
+        'El registro con email no está disponible. Usa Continuar con Google.',
+      )
     }
 
     const existing = await this.users.findByEmail(params.email)
@@ -271,7 +273,9 @@ export class AuthService {
     if (patch.nickname !== undefined) {
       const nickname = sanitizeNickname(patch.nickname)
       if (!isNicknameValid(nickname)) {
-        throw AppError.badRequest('Nickname inválido. Usa 3-24 caracteres: letras, números o underscore.')
+        throw AppError.badRequest(
+          'Nickname inválido. Usa 3-24 caracteres: letras, números o underscore.',
+        )
       }
       const exists = await this.users.findByNickname(nickname)
       if (exists && exists._id !== userId) {
@@ -291,7 +295,8 @@ export class AuthService {
       const raw = patch.avatar.trim()
       if (!raw) update.avatar = ''
       else if (raw.length > 2048) throw AppError.badRequest('URL de imagen demasiado larga.')
-      else if (!/^https:\/\//i.test(raw)) throw AppError.badRequest('La foto debe ser una URL https válida.')
+      else if (!/^https:\/\//i.test(raw))
+        throw AppError.badRequest('La foto debe ser una URL https válida.')
       else update.avatar = raw
     }
 
@@ -366,24 +371,25 @@ export class AuthService {
     return { ok: true }
   }
 
-  getPermissions(auth: { permHash: string; permissionsVersion: number; role: string }) {
+  getPermissions(auth: { permHash: string; permissionsVersion: number }) {
     return {
-      permissions: resolvePermissionsForRole(auth.role as UserRole),
+      permissions: [],
       permHash: auth.permHash,
       permissionsVersion: auth.permissionsVersion,
     }
   }
 
-  async getPermissionsForUser(userId: string, role: UserRole, permHash: string, permissionsVersion: number) {
+  async getPermissionsForUser(userId: string, permHash: string, permissionsVersion: number) {
+    // Sin servicio de autorización no hay permisos (el rol base no concede acceso por sí solo).
     const permissions = this.authorization
-      ? await this.authorization.resolveEffectivePermissions(userId, role)
-      : resolvePermissionsForRole(role)
+      ? await this.authorization.resolveEffectivePermissions(userId)
+      : []
     return { permissions, permHash, permissionsVersion }
   }
 
   /** Expuesto para Google OAuth */
   async issueTokensForGoogleUser(
-    user: { _id?: string; role?: UserRole; email: string; nickname?: string },
+    user: { _id?: string; email: string; nickname?: string },
     meta: {
       userAgent?: string
       ip?: string
@@ -395,7 +401,7 @@ export class AuthService {
 
   /** Expuesto para Google OAuth y 2FA verify */
   async issueTokensForUser(
-    user: { _id?: string; role?: UserRole; email: string; nickname?: string },
+    user: { _id?: string; email: string; nickname?: string },
     meta: {
       rememberMe?: boolean
       userAgent?: string
@@ -405,13 +411,13 @@ export class AuthService {
     },
   ) {
     const env = getEnv()
-    const role = (user.role ?? 'user') as UserRole
-    const permissionsVersion = 'permissionsVersion' in user && typeof user.permissionsVersion === 'number'
-      ? user.permissionsVersion
-      : 1
+    const permissionsVersion =
+      'permissionsVersion' in user && typeof user.permissionsVersion === 'number'
+        ? user.permissionsVersion
+        : 1
     const authz = this.authorization
-      ? await this.authorization.buildAuthzSnapshot(user._id!, role, permissionsVersion)
-      : buildAuthzSnapshot(role)
+      ? await this.authorization.buildAuthzSnapshot(user._id!, permissionsVersion)
+      : buildAuthzSnapshot([])
     const refreshTtlMs = meta.rememberMe
       ? parseDurationMs(env.JWT_REFRESH_REMEMBER_EXPIRES_IN, 30 * 86400000)
       : parseDurationMs(env.JWT_REFRESH_EXPIRES_IN, 7 * 86400000)
@@ -447,7 +453,6 @@ export class AuthService {
     const accessToken = this.jwt.signAccess(
       this.jwt.buildAccessPayload({
         userId: user._id!,
-        role,
         sessionId,
         permHash: authz.permHash,
         permissionsVersion: authz.permissionsVersion,
@@ -458,7 +463,7 @@ export class AuthService {
       accessToken,
       refreshToken: plainRefresh,
       accessExpiresAtMs: this.jwt.getAccessExpiresAtMs(accessToken) ?? Date.now() + 600000,
-      user: toUserDomain({ ...user, _id: user._id!, role } as UserEntity),
+      user: toUserDomain({ ...user, _id: user._id! } as UserEntity),
       permHash: authz.permHash,
       permissionsVersion: authz.permissionsVersion,
       permissionKeys: authz.permissionKeys,

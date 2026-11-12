@@ -1,3 +1,4 @@
+import type { AuthorizationService } from '../../security/services/authorization.service.js'
 import { ObjectId } from 'mongodb'
 import { AppError } from '../../../common/errors/app.error.js'
 import { buildAuthzSnapshot } from '../../../common/permissions/registry.js'
@@ -13,6 +14,7 @@ export class AdminUsersService {
     private readonly orders: OrderRepository,
     private readonly roles: RoleRepository,
     private readonly userRoles: UserRoleRepository,
+    private readonly authorization: AuthorizationService,
   ) {}
 
   async list(query: Record<string, unknown>) {
@@ -25,13 +27,15 @@ export class AdminUsersService {
       { ...query, search: combinedSearch || undefined },
       { defaultLimit: 30, maxLimit: 100 },
     )
-    const { items, total } = await this.users.listAll(skip, limit, { type, search: search || undefined })
+    const { items, total } = await this.users.listAll(skip, limit, {
+      type,
+      search: search || undefined,
+    })
     const mapped = items.map((u) => ({
       id: u._id,
       email: u.email,
       name: u.name ?? null,
       nickname: u.nickname ?? null,
-      role: u.role,
       isStaff: !!u.isStaff,
       permissionsVersion: u.permissionsVersion ?? 1,
       permissionUpdatedAt: u.permissionUpdatedAt?.toISOString?.() ?? null,
@@ -50,7 +54,9 @@ export class AdminUsersService {
     const roleDocs = await this.roles.findByIds(roleIds)
     const roles = roleDocs.map((r) => ({ id: r._id, name: r.name, key: r.key }))
 
-    const snap = user.isStaff ? buildAuthzSnapshot(user.role) : { permissionKeys: [] as string[], permHash: '' }
+    const snap = user.isStaff
+      ? buildAuthzSnapshot(await this.authorization.resolveEffectivePermissions(id))
+      : { permissionKeys: [] as string[], permHash: '' }
 
     let orderCount = 0
     let orderTotal = 0
@@ -67,7 +73,6 @@ export class AdminUsersService {
         email: user.email,
         name: user.name ?? null,
         nickname: user.nickname ?? null,
-        role: user.role,
         isStaff: !!user.isStaff,
         provider: user.provider ?? 'local',
         avatar: user.avatar ?? null,

@@ -7,7 +7,9 @@ import {
 } from '../../production/domain/value-objects/cost-breakdown.vo.js'
 import type { ProductionConfigRepository } from '../../production/infrastructure/production-config.repository.js'
 
-function toPricingConfig(config: Awaited<ReturnType<ProductionConfigRepository['get']>>): PricingConfigInput {
+function toPricingConfig(
+  config: Awaited<ReturnType<ProductionConfigRepository['get']>>,
+): PricingConfigInput {
   return {
     currency: config.currency,
     priceRounding: config.priceRounding,
@@ -28,7 +30,11 @@ export class AdminPricingService {
     const costTotal = Number(body.costTotal)
     const costPerUnit = Number(body.costPerUnit)
     const marginPercentage = Number(body.marginPercentage)
-    if (!Number.isFinite(costTotal) || !Number.isFinite(costPerUnit) || !Number.isFinite(marginPercentage)) {
+    if (
+      !Number.isFinite(costTotal) ||
+      !Number.isFinite(costPerUnit) ||
+      !Number.isFinite(marginPercentage)
+    ) {
       throw AppError.badRequest('costTotal, costPerUnit y marginPercentage son requeridos')
     }
     const productionConfig = await this.config.get()

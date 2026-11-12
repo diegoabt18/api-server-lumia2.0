@@ -27,7 +27,12 @@ function policySnapshot(policy: DepositPolicy | null | undefined) {
     type: policy.type,
     value: policy.value,
     ...(policy.authorization
-      ? { authorization: { authorizedBy: policy.authorization.authorizedBy, reason: policy.authorization.reason } }
+      ? {
+          authorization: {
+            authorizedBy: policy.authorization.authorizedBy,
+            reason: policy.authorization.reason,
+          },
+        }
       : {}),
   }
 }
@@ -39,7 +44,10 @@ export class AdminInventoryService {
   ) {}
 
   async list(query: Record<string, unknown>) {
-    const { page, limit, skip, search } = resolvePagingQuery(query, { defaultLimit: 50, maxLimit: 200 })
+    const { page, limit, skip, search } = resolvePagingQuery(query, {
+      defaultLimit: 50,
+      maxLimit: 200,
+    })
     const { items, total } = await this.inventory.listAdmin(skip, limit, search || undefined)
     return { items, pagination: buildPaginationMeta(total, page, limit) }
   }
@@ -60,7 +68,10 @@ export class AdminInventoryService {
       current: policySnapshot(state.policy),
       version: state.version,
       items: items
-        .filter((e) => e.eventType === 'deposit_policy_changed' || e.eventType === 'deposit_policy_removed')
+        .filter(
+          (e) =>
+            e.eventType === 'deposit_policy_changed' || e.eventType === 'deposit_policy_removed',
+        )
         .map((e) => ({
           id: e.id,
           eventType: e.eventType,
@@ -85,7 +96,9 @@ export class AdminInventoryService {
       return { ok: true }
     }
     if (data.expected_version === undefined) {
-      throw AppError.badRequest('Falta la versión de la política (expected_version). Recarga y vuelve a intentar.')
+      throw AppError.badRequest(
+        'Falta la versión de la política (expected_version). Recarga y vuelve a intentar.',
+      )
     }
     const expected = data.expected_version
 
@@ -111,7 +124,9 @@ export class AdminInventoryService {
 
     const swapped = await this.inventory.compareAndSetDepositPolicy(sku, expected, next)
     if (!swapped) {
-      throw AppError.conflict('La política cambió mientras la editabas. Recarga para ver la versión actual.')
+      throw AppError.conflict(
+        'La política cambió mientras la editabas. Recarga para ver la versión actual.',
+      )
     }
 
     // Resto de campos de inventario (sin tocar la política ya guardada).

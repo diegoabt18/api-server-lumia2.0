@@ -3,26 +3,62 @@ import {
   PERMISSION_REGISTRY,
   PERMISSION_WILDCARD,
   hasPermission,
+  ALL_PERMISSION_IDS,
   isPermissionId,
-  resolvePermissionsForRole,
   type PermissionId,
 } from '../../src/common/permissions/registry.js'
+
+// Conjuntos de permisos de ejemplo. En producción vienen de los roles RBAC guardados en identity_db.
+const CUSTOMER_KEYS = [
+  'account.read',
+  'page.cart',
+  'cart.read',
+  'cart.write',
+  'orders.read',
+  'orders.create',
+  'products.read',
+  'categories.read',
+  'payments.create',
+] as const
+const MODERATOR_KEYS = [
+  'products.read',
+  'products.update',
+  'categories.read',
+  'orders.read',
+  'orders.update',
+  'admin.access',
+  'analytics.read',
+] as const
 
 const P = PERMISSION_REGISTRY
 
 /** Conjuntos efectivos típicos. En producción los asigna la base de datos (roles de identity_db). */
 const profiles: Record<string, PermissionId[]> = {
-  cliente: resolvePermissionsForRole('user'),
-  moderador: resolvePermissionsForRole('moderator'),
-  admin: resolvePermissionsForRole('admin'),
+  cliente: CUSTOMER_KEYS as unknown as PermissionId[],
+  moderador: MODERATOR_KEYS as unknown as PermissionId[],
+  admin: ALL_PERMISSION_IDS,
   // Personal de POS: solo ventas y lectura de catálogo.
-  posStaff: [P.ORDERS_CREATE, P.ORDERS_UPDATE, P.ORDERS_READ, P.PAYMENTS_CREATE, P.CART_READ, P.PRODUCTS_READ],
+  posStaff: [
+    P.ORDERS_CREATE,
+    P.ORDERS_UPDATE,
+    P.ORDERS_READ,
+    P.PAYMENTS_CREATE,
+    P.CART_READ,
+    P.PRODUCTS_READ,
+  ],
   // Producción: materiales y costeo, sin acceso a pedidos ni a seguridad.
-  produccion: [P.MATERIALS_UPDATE, P.MATERIALS_READ, P.COSTING_MANAGE, P.PRODUCTS_READ, P.ADMIN_ACCESS],
+  produccion: [
+    P.MATERIALS_UPDATE,
+    P.MATERIALS_READ,
+    P.COSTING_MANAGE,
+    P.PRODUCTS_READ,
+    P.ADMIN_ACCESS,
+  ],
   superadmin: [PERMISSION_WILDCARD as PermissionId],
 }
 
-const can = (profile: string, permission: PermissionId) => hasPermission(profiles[profile]!, permission)
+const can = (profile: string, permission: PermissionId) =>
+  hasPermission(profiles[profile]!, permission)
 
 describe('static role baselines', () => {
   it('cliente cannot enter the administration area', () => {
@@ -58,7 +94,9 @@ describe('fine-grained profiles', () => {
 
   it('superadmin wildcard grants any permission, including ones added later', () => {
     expect(can('superadmin', P.ADMIN_PERMISSIONS_MANAGE)).toBe(true)
-    expect(hasPermission([PERMISSION_WILDCARD as PermissionId], 'permiso.futuro' as PermissionId)).toBe(true)
+    expect(
+      hasPermission([PERMISSION_WILDCARD as PermissionId], 'permiso.futuro' as PermissionId),
+    ).toBe(true)
   })
 })
 
@@ -75,8 +113,15 @@ describe('permission identifiers', () => {
 describe('production unit-conversion routes stay protected', () => {
   it('every unit-conversion route declares an admin guard', async () => {
     const { readFileSync } = await import('node:fs')
-    const src = readFileSync(new URL('../../src/routes/production-public.routes.ts', import.meta.url), 'utf8')
-    const calls = [...src.matchAll(/api\.(get|post)\(\s*'(\/production\/unit-conversion[^']*)'[\s\S]*?\n {2}\}\)/g)]
+    const src = readFileSync(
+      new URL('../../src/routes/production-public.routes.ts', import.meta.url),
+      'utf8',
+    )
+    const calls = [
+      ...src.matchAll(
+        /api\.(get|post)\(\s*'(\/production\/unit-conversion[^']*)'[\s\S]*?\n {2}\}\)/g,
+      ),
+    ]
     expect(calls.length).toBe(4)
     for (const call of calls) expect(call[0]).toMatch(/preHandler: g\(PERMISSION_REGISTRY\./)
   })

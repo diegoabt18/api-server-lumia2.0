@@ -79,7 +79,9 @@ export class SessionRepository extends BaseRepository<SessionDocument> {
     ])
   }
 
-  async create(session: Omit<SessionEntity, '_id' | 'createdAt' | 'lastUsedAt'>): Promise<{ sessionId: string }> {
+  async create(
+    session: Omit<SessionEntity, '_id' | 'createdAt' | 'lastUsedAt'>,
+  ): Promise<{ sessionId: string }> {
     const now = new Date()
     const doc: Omit<SessionDocument, '_id'> = {
       userId: new ObjectId(session.userId),
@@ -141,11 +143,7 @@ export class SessionRepository extends BaseRepository<SessionDocument> {
     )
   }
 
-  async rotateRefresh(
-    sessionId: string,
-    newHash: string,
-    newExpiresAt: Date,
-  ): Promise<void> {
+  async rotateRefresh(sessionId: string, newHash: string, newExpiresAt: Date): Promise<void> {
     const now = new Date()
     await this.collection.updateOne(
       { _id: new ObjectId(sessionId) },
@@ -189,10 +187,9 @@ export class SessionRepository extends BaseRepository<SessionDocument> {
   }
 
   async revokeAllByUserId(userId: string): Promise<void> {
-    await this.collection.updateMany(
-      { userId: new ObjectId(userId), ...activeFilter() } as never,
-      { $set: { revokedAt: new Date(), isActive: false } },
-    )
+    await this.collection.updateMany({ userId: new ObjectId(userId), ...activeFilter() } as never, {
+      $set: { revokedAt: new Date(), isActive: false },
+    })
   }
 
   async revokeAllExcept(userId: string, exceptSessionId: string): Promise<void> {

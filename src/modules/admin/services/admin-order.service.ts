@@ -8,7 +8,10 @@ import type { OrderEntity } from '../../sales/domain/order.entity.js'
 import { renderOrderInvoiceHtml } from '../templates/order-invoice.template.js'
 import { renderPosReceiptHtml } from '../../pos/templates/pos-receipt.template.js'
 
-function serializeOrderListItem(o: OrderEntity, userMap: Map<string, { name: string; email: string }>) {
+function serializeOrderListItem(
+  o: OrderEntity,
+  userMap: Map<string, { name: string; email: string }>,
+) {
   return {
     id: o._id,
     orderNumber: o.orderNumber,
@@ -36,7 +39,8 @@ function serializeOrderListItem(o: OrderEntity, userMap: Map<string, { name: str
 }
 
 const isPaidState = (o: { status?: string; paymentStatus?: string } | null | undefined) =>
-  !!o && (o.status === 'paid' || o.paymentStatus === 'paid' || o.paymentStatus === 'payment_completed')
+  !!o &&
+  (o.status === 'paid' || o.paymentStatus === 'paid' || o.paymentStatus === 'payment_completed')
 
 export class AdminOrderService {
   constructor(
@@ -47,7 +51,10 @@ export class AdminOrderService {
   ) {}
 
   async list(query: Record<string, unknown>) {
-    const { page, limit, skip, search } = resolvePagingQuery(query, { defaultLimit: 20, maxLimit: 100 })
+    const { page, limit, skip, search } = resolvePagingQuery(query, {
+      defaultLimit: 20,
+      maxLimit: 100,
+    })
     const channelRaw = typeof query.channel === 'string' ? query.channel.trim() : ''
     const channel = channelRaw === 'pos' || channelRaw === 'online' ? channelRaw : undefined
     const [orderList, total] = await Promise.all([
@@ -92,7 +99,10 @@ export class AdminOrderService {
         : [
             {
               type: 'order.created',
-              timestamp: order.createdAt instanceof Date ? order.createdAt.toISOString() : String(order.createdAt),
+              timestamp:
+                order.createdAt instanceof Date
+                  ? order.createdAt.toISOString()
+                  : String(order.createdAt),
               source: 'system',
               actorId: null,
               data: null,
@@ -120,7 +130,12 @@ export class AdminOrderService {
         changeGiven: order.changeGiven ?? null,
         transferReference: order.transferReference ?? null,
         paymentConfirmedByUserId: order.paymentConfirmedByUserId ?? null,
-        paymentConfirmedAt: order.paymentConfirmedAt instanceof Date ? order.paymentConfirmedAt.toISOString() : (order.paymentConfirmedAt ? String(order.paymentConfirmedAt) : null),
+        paymentConfirmedAt:
+          order.paymentConfirmedAt instanceof Date
+            ? order.paymentConfirmedAt.toISOString()
+            : order.paymentConfirmedAt
+              ? String(order.paymentConfirmedAt)
+              : null,
         channel: order.channel ?? 'online',
         fulfillment: order.fulfillment ?? 'delivery',
         createdByUserId: order.createdByUserId ?? null,
@@ -139,13 +154,17 @@ export class AdminOrderService {
         address: order.address,
         city: order.city,
         reference: order.reference,
-        createdAt: order.createdAt instanceof Date ? order.createdAt.toISOString() : order.createdAt,
+        createdAt:
+          order.createdAt instanceof Date ? order.createdAt.toISOString() : order.createdAt,
         updatedAt: order.updatedAt instanceof Date ? order.updatedAt.toISOString() : null,
         cancellationReason: order.cancellationReason ?? null,
         cancelledAt: order.cancelledAt instanceof Date ? order.cancelledAt.toISOString() : null,
         cancelledBy: order.cancelledBy ?? null,
         cancellationRequested: order.cancellationRequested ?? false,
-        cancellationRequestedAt: order.cancellationRequestedAt instanceof Date ? order.cancellationRequestedAt.toISOString() : null,
+        cancellationRequestedAt:
+          order.cancellationRequestedAt instanceof Date
+            ? order.cancellationRequestedAt.toISOString()
+            : null,
         cancellationRequestReason: order.cancellationRequestReason ?? null,
         cancellationRequestStatus: order.cancellationRequestStatus ?? null,
         items: order.items,
@@ -153,9 +172,11 @@ export class AdminOrderService {
         userAccount,
         depositPercentage: order.depositPercentage ?? null,
         depositAmount: order.depositAmount ?? null,
-        depositPaidAt: order.depositPaidAt instanceof Date ? order.depositPaidAt.toISOString() : null,
+        depositPaidAt:
+          order.depositPaidAt instanceof Date ? order.depositPaidAt.toISOString() : null,
         finalPaymentAmount: order.finalPaymentAmount ?? null,
-        finalPaymentPaidAt: order.finalPaymentPaidAt instanceof Date ? order.finalPaymentPaidAt.toISOString() : null,
+        finalPaymentPaidAt:
+          order.finalPaymentPaidAt instanceof Date ? order.finalPaymentPaidAt.toISOString() : null,
         paidAt: order.paidAt instanceof Date ? order.paidAt.toISOString() : null,
         deliveredAt: order.deliveredAt instanceof Date ? order.deliveredAt.toISOString() : null,
       },
@@ -182,9 +203,14 @@ export class AdminOrderService {
     const updated = await this.orders.adminPatch(id, patch, actorId)
     if (!updated) throw AppError.notFound('Orden no encontrada')
     if (!isPaidState(before) && isPaidState(updated)) await this.stock.applyOnPaid(updated)
-    if (updated.status === 'cancelled' && before?.status !== 'cancelled') await this.stock.restoreIfDecremented(updated)
+    if (updated.status === 'cancelled' && before?.status !== 'cancelled')
+      await this.stock.restoreIfDecremented(updated)
     if (updated.status === 'delivered' && before?.status !== 'delivered') {
-      await this.deliveryEvents.recordDelivered(updated, actorId, updated.deliveredAt instanceof Date ? updated.deliveredAt : new Date())
+      await this.deliveryEvents.recordDelivered(
+        updated,
+        actorId,
+        updated.deliveredAt instanceof Date ? updated.deliveredAt : new Date(),
+      )
     }
     return {
       order: {
@@ -196,7 +222,10 @@ export class AdminOrderService {
         currency: updated.currency ?? 'COP',
         customerName: updated.customerName,
         notes: updated.notes ?? null,
-        updatedAt: updated.updatedAt instanceof Date ? updated.updatedAt.toISOString() : new Date().toISOString(),
+        updatedAt:
+          updated.updatedAt instanceof Date
+            ? updated.updatedAt.toISOString()
+            : new Date().toISOString(),
       },
     }
   }
@@ -210,7 +239,14 @@ export class AdminOrderService {
     const updated = await this.orders.resolveCancellationRequest(id, resolution, actorId, adminNote)
     if (!updated) throw AppError.notFound('Orden no encontrada')
     if (updated.status === 'cancelled') await this.stock.restoreIfDecremented(updated)
-    return { ok: true, order: { id: updated._id, status: updated.status, cancellationRequestStatus: updated.cancellationRequestStatus } }
+    return {
+      ok: true,
+      order: {
+        id: updated._id,
+        status: updated.status,
+        cancellationRequestStatus: updated.cancellationRequestStatus,
+      },
+    }
   }
 
   /**
@@ -224,12 +260,26 @@ export class AdminOrderService {
     )
   }
 
-  async markDepositPaid(_id: string, _amount: number, _actorId: string, _note?: string): Promise<never> {
-    throw AppError.badRequest('Registra el pago con el libro de pagos del pedido (efectivo o transferencia).')
+  async markDepositPaid(
+    _id: string,
+    _amount: number,
+    _actorId: string,
+    _note?: string,
+  ): Promise<never> {
+    throw AppError.badRequest(
+      'Registra el pago con el libro de pagos del pedido (efectivo o transferencia).',
+    )
   }
 
-  async markFinalPaymentPaid(_id: string, _amount: number, _actorId: string, _note?: string): Promise<never> {
-    throw AppError.badRequest('Registra el pago con el libro de pagos del pedido (efectivo o transferencia).')
+  async markFinalPaymentPaid(
+    _id: string,
+    _amount: number,
+    _actorId: string,
+    _note?: string,
+  ): Promise<never> {
+    throw AppError.badRequest(
+      'Registra el pago con el libro de pagos del pedido (efectivo o transferencia).',
+    )
   }
 
   async renderInvoice(id: string) {

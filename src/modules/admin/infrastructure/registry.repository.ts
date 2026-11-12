@@ -79,13 +79,18 @@ export class RegistryRepository {
     return seed
   }
 
-  async updatePermission(key: string, patch: Partial<PermissionSeed>): Promise<PermissionSeed | null> {
+  async updatePermission(
+    key: string,
+    patch: Partial<PermissionSeed>,
+  ): Promise<PermissionSeed | null> {
     const col = getCollection<PermissionSeed & { key: string }>(this.db, 'permissions')
     await col.updateOne({ key }, { $set: patch })
     return col.findOne({ key })
   }
 
-  async syncPermissions(seeds: PermissionSeed[]): Promise<{ inserted: number; updated: number; unchanged: number }> {
+  async syncPermissions(
+    seeds: PermissionSeed[],
+  ): Promise<{ inserted: number; updated: number; unchanged: number }> {
     let inserted = 0
     let updated = 0
     let unchanged = 0

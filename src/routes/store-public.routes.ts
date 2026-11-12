@@ -9,7 +9,6 @@ import {
   revokeSessionSchema,
 } from '../modules/identity/schemas/account.schema.js'
 import type { AuthenticatedRequest } from '../modules/identity/middleware/auth.middleware.js'
-import type { UserRole } from '../common/permissions/registry.js'
 import {
   setAuthCookies,
   clearAuthCookies,
@@ -123,7 +122,6 @@ export async function registerAuthExtendedRoutes(api: FastifyInstance, ctx: AppC
     const auth = (request as AuthenticatedRequest).auth
     return services.auth.getPermissionsForUser(
       auth.userId,
-      auth.role as UserRole,
       auth.permHash,
       auth.permissionsVersion,
     )

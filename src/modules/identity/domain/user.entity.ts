@@ -53,7 +53,6 @@ export interface UserDomain {
   email: string
   name?: string
   nickname?: string
-  role: UserRole
   isStaff?: boolean
   avatar?: string
   provider?: 'local' | 'google'
@@ -71,7 +70,6 @@ export function toUserDomain(entity: UserEntity): UserDomain {
     email: entity.email,
     name: entity.name,
     nickname: entity.nickname,
-    role: entity.role ?? 'user',
     isStaff: entity.isStaff,
     avatar: entity.avatar,
     provider: entity.provider,

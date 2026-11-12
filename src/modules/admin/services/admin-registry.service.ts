@@ -42,11 +42,15 @@ export class AdminRegistryService {
   }
 
   listModules() {
-    return this.registry.listModules().then(async (rows) => ({ modules: rows.length ? rows : MODULE_SEEDS }))
+    return this.registry
+      .listModules()
+      .then(async (rows) => ({ modules: rows.length ? rows : MODULE_SEEDS }))
   }
 
   listServices() {
-    return this.registry.listServices().then(async (rows) => ({ services: rows.length ? rows : SERVICE_SEEDS }))
+    return this.registry
+      .listServices()
+      .then(async (rows) => ({ services: rows.length ? rows : SERVICE_SEEDS }))
   }
 
   async upsertModule(input: {

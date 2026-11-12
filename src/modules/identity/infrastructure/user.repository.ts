@@ -120,10 +120,14 @@ export class UserRepository extends BaseRepository<UserDocument> {
 
     const byEmail = await this.findByEmail(email)
     if (byEmail?._id) {
-      await this.collection.updateOne(
-        { _id: new ObjectId(byEmail._id) } as never,
-        { $set: { googleId: data.googleId, provider: 'google', nickname: data.nickname, updatedAt: now } },
-      )
+      await this.collection.updateOne({ _id: new ObjectId(byEmail._id) } as never, {
+        $set: {
+          googleId: data.googleId,
+          provider: 'google',
+          nickname: data.nickname,
+          updatedAt: now,
+        },
+      })
       return (await this.findByIdSafe(byEmail._id))!
     }
 
@@ -177,15 +181,19 @@ export class UserRepository extends BaseRepository<UserDocument> {
     patch: Partial<
       Pick<
         UserEntity,
-        'nickname' | 'name' | 'avatar' | 'isFirstLogin' | 'notificationPreferences' | 'shippingAddresses'
+        | 'nickname'
+        | 'name'
+        | 'avatar'
+        | 'isFirstLogin'
+        | 'notificationPreferences'
+        | 'shippingAddresses'
       >
     >,
   ): Promise<UserEntity | null> {
     if (!ObjectId.isValid(id)) return null
-    await this.collection.updateOne(
-      { _id: new ObjectId(id) } as never,
-      { $set: { ...patch, updatedAt: new Date() } },
-    )
+    await this.collection.updateOne({ _id: new ObjectId(id) } as never, {
+      $set: { ...patch, updatedAt: new Date() },
+    })
     return this.findByIdSafe(id)
   }
 
@@ -200,7 +208,11 @@ export class UserRepository extends BaseRepository<UserDocument> {
     return docs.map((d) => toEntity(d))
   }
 
-  async listStaff(skip: number, limit: number, search?: string): Promise<{ items: UserEntity[]; total: number }> {
+  async listStaff(
+    skip: number,
+    limit: number,
+    search?: string,
+  ): Promise<{ items: UserEntity[]; total: number }> {
     const filter: Record<string, unknown> = { isStaff: true }
     if (search?.trim()) {
       const rx = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
@@ -220,22 +232,10 @@ export class UserRepository extends BaseRepository<UserDocument> {
 
   async findStaffById(id: string): Promise<UserEntity | null> {
     if (!ObjectId.isValid(id)) return null
-    const doc = await this.collection.findOne(
-      { _id: new ObjectId(id), isStaff: true } as never,
-      { projection: { passwordHash: 0 } },
-    )
+    const doc = await this.collection.findOne({ _id: new ObjectId(id), isStaff: true } as never, {
+      projection: { passwordHash: 0 },
+    })
     return doc ? toEntity(doc) : null
-  }
-
-  async updateStaffRole(id: string, role: UserRole): Promise<UserEntity | null> {
-    if (!ObjectId.isValid(id)) return null
-    const now = new Date()
-    const res = await this.collection.updateOne(
-      { _id: new ObjectId(id), isStaff: true } as never,
-      { $set: { role, permissionsVersion: 1, permissionUpdatedAt: now, updatedAt: now } },
-    )
-    if (!res.matchedCount) return null
-    return this.findStaffById(id)
   }
 
   async countCreatedBetween(from: Date, to: Date): Promise<number> {

@@ -12,7 +12,13 @@ function formatDate(iso: string | Date | null | undefined): string {
     const d = iso instanceof Date ? iso : new Date(iso)
     return Number.isNaN(d.getTime())
       ? String(iso)
-      : d.toLocaleDateString('es-CO', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      : d.toLocaleDateString('es-CO', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
   } catch {
     return String(iso)
   }

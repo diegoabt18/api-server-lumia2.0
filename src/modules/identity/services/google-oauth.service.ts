@@ -5,10 +5,7 @@ import { AppError } from '../../../common/errors/app.error.js'
 import type { AuthService } from '../services/auth.service.js'
 import type { UserRepository } from '../infrastructure/user.repository.js'
 import type { CartRepository } from '../../sales/infrastructure/cart.repository.js'
-import {
-  clearGuestCartCookie,
-  getGuestCartKey,
-} from '../../../common/utils/guest-cart.utils.js'
+import { clearGuestCartCookie, getGuestCartKey } from '../../../common/utils/guest-cart.utils.js'
 
 const OAUTH_COOKIE_PATH = '/api/auth/google'
 const OAUTH_MAX_AGE = 600

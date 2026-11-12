@@ -1,5 +1,8 @@
 import { z } from 'zod'
-import { isStoreBannerPosition, type StoreBannerPosition } from '../../catalog/domain/store-banner.entity.js'
+import {
+  isStoreBannerPosition,
+  type StoreBannerPosition,
+} from '../../catalog/domain/store-banner.entity.js'
 import { depositPolicySchema } from '../../catalog/domain/deposit-policy.js'
 
 export const adminProductCreateSchema = z.object({
@@ -109,8 +112,14 @@ export const promotionUpsertSchema = z
   .object({
     name: z.string().min(1).max(200),
     description: z.string().max(8000).optional().nullable(),
-    banner_url: z.union([z.string().max(2000), z.literal('')]).optional().nullable(),
-    color: z.union([z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Color HEX inválido (#rrggbb)'), z.literal('')]).optional().nullable(),
+    banner_url: z
+      .union([z.string().max(2000), z.literal('')])
+      .optional()
+      .nullable(),
+    color: z
+      .union([z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Color HEX inválido (#rrggbb)'), z.literal('')])
+      .optional()
+      .nullable(),
     active: z.boolean().optional(),
     starts_at: z.string(),
     ends_at: z.string(),
@@ -119,17 +128,31 @@ export const promotionUpsertSchema = z
     general_percent_off: z.number().min(0).max(100).optional().nullable(),
     category_slugs: z.array(z.string().min(1).max(200)).optional(),
     product_entries: z.array(productEntrySchema).optional(),
-    notification_image_slug: z.union([z.string().max(200), z.literal('')]).optional().nullable(),
-    notification_image_path: z.union([z.string().max(2000), z.literal('')]).optional().nullable(),
+    notification_image_slug: z
+      .union([z.string().max(200), z.literal('')])
+      .optional()
+      .nullable(),
+    notification_image_path: z
+      .union([z.string().max(2000), z.literal('')])
+      .optional()
+      .nullable(),
   })
   .superRefine((data, ctx) => {
     const starts = new Date(data.starts_at)
     const ends = new Date(data.ends_at)
     if (Number.isNaN(starts.getTime())) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'fecha inicio inválida', path: ['starts_at'] })
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'fecha inicio inválida',
+        path: ['starts_at'],
+      })
     }
     if (Number.isNaN(ends.getTime())) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'fecha fin inválida', path: ['ends_at'] })
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'fecha fin inválida',
+        path: ['ends_at'],
+      })
     }
     if (!Number.isNaN(starts.getTime()) && !Number.isNaN(ends.getTime()) && ends <= starts) {
       ctx.addIssue({
@@ -164,10 +187,18 @@ export const storeBannerUpsertSchema = z
     const s = new Date(data.starts_at)
     const e = new Date(data.ends_at)
     if (Number.isNaN(s.getTime())) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'fecha inicio inválida', path: ['starts_at'] })
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'fecha inicio inválida',
+        path: ['starts_at'],
+      })
     }
     if (Number.isNaN(e.getTime())) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'fecha fin inválida', path: ['ends_at'] })
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'fecha fin inválida',
+        path: ['ends_at'],
+      })
     }
     if (!Number.isNaN(s.getTime()) && !Number.isNaN(e.getTime()) && e <= s) {
       ctx.addIssue({
@@ -181,7 +212,11 @@ export const storeBannerUpsertSchema = z
 export type StoreBannerUpsertInput = z.infer<typeof storeBannerUpsertSchema>
 
 export const adminVariantCreateSchema = z.object({
-  sku: z.string().min(1).max(80).regex(/^[A-Za-z0-9._\-]+$/),
+  sku: z
+    .string()
+    .min(1)
+    .max(80)
+    .regex(/^[A-Za-z0-9._\-]+$/),
   barcode: z
     .string()
     .trim()
@@ -232,10 +267,6 @@ export const adminInventoryUpsertSchema = z
     message: 'Falta la versión de la política (expected_version).',
     path: ['expected_version'],
   })
-
-export const adminStaffRoleSchema = z.object({
-  role: z.enum(['admin', 'moderator', 'user']),
-})
 
 export const adminPromotionActiveSchema = z.object({
   active: z.boolean(),

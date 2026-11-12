@@ -68,31 +68,6 @@ export const PERMISSION_WILDCARD = '*' as const
 
 export type UserRole = 'admin' | 'user' | 'moderator'
 
-/** Permisos por rol (simplificado; lumia también los tiene en MongoDB). */
-export const ROLE_PERMISSIONS: Record<UserRole, PermissionId[]> = {
-  admin: ALL_PERMISSION_IDS,
-  moderator: [
-    PERMISSION_REGISTRY.PRODUCTS_READ,
-    PERMISSION_REGISTRY.PRODUCTS_UPDATE,
-    PERMISSION_REGISTRY.CATEGORIES_READ,
-    PERMISSION_REGISTRY.ORDERS_READ,
-    PERMISSION_REGISTRY.ORDERS_UPDATE,
-    PERMISSION_REGISTRY.ADMIN_ACCESS,
-    PERMISSION_REGISTRY.ANALYTICS_READ,
-  ],
-  user: [
-    PERMISSION_REGISTRY.ACCOUNT_READ,
-    PERMISSION_REGISTRY.PAGE_CART,
-    PERMISSION_REGISTRY.CART_READ,
-    PERMISSION_REGISTRY.CART_WRITE,
-    PERMISSION_REGISTRY.ORDERS_READ,
-    PERMISSION_REGISTRY.ORDERS_CREATE,
-    PERMISSION_REGISTRY.PRODUCTS_READ,
-    PERMISSION_REGISTRY.CATEGORIES_READ,
-    PERMISSION_REGISTRY.PAYMENTS_CREATE,
-  ],
-}
-
 export function expandPermissions(keys: string[]): PermissionId[] {
   if (keys.includes(PERMISSION_WILDCARD)) return ALL_PERMISSION_IDS
   return keys.filter((k): k is PermissionId => ALL_PERMISSION_IDS.includes(k as PermissionId))
@@ -110,12 +85,8 @@ export function generatePermissionHash(keys: PermissionId[]): string {
   return `ph_${Math.abs(hash).toString(36)}`
 }
 
-export function resolvePermissionsForRole(role: UserRole): PermissionId[] {
-  return ROLE_PERMISSIONS[role] ?? ROLE_PERMISSIONS.user
-}
-
-export function buildAuthzSnapshot(role: UserRole) {
-  const permissionKeys = resolvePermissionsForRole(role)
+/** Snapshot de autorización a partir de los permisos efectivos (roles RBAC). Sin permisos = []. */
+export function buildAuthzSnapshot(permissionKeys: PermissionId[] = []) {
   return {
     permissionKeys,
     permHash: generatePermissionHash(permissionKeys),

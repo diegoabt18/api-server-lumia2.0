@@ -1,11 +1,7 @@
 import type { Db } from 'mongodb'
 import { BaseRepository, getCollection } from '../../../database/repositories/base.repository.js'
 
-export type AuthAuditEvent =
-  | 'LOGIN_SUCCESS'
-  | 'LOGIN_FAILED'
-  | 'LOGIN_2FA_FAILED'
-  | 'LOGOUT'
+export type AuthAuditEvent = 'LOGIN_SUCCESS' | 'LOGIN_FAILED' | 'LOGIN_2FA_FAILED' | 'LOGOUT'
 
 export interface AuthAuditEntry {
   _id?: string
