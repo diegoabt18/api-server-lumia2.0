@@ -169,6 +169,23 @@ export class CategoryRepository extends BaseRepository<CategoryEntity> {
     return map
   }
 
+  /** Productos con categoría pero sin subcategoría (pendientes de clasificar), por slug. */
+  async unclassifiedProductCountByCategorySlug(): Promise<Map<string, number>> {
+    const rows = await this.db
+      .collection('products')
+      .aggregate([
+        { $match: { subcategory_id: null, category_slug: { $nin: [null, ''] } } },
+        { $group: { _id: '$category_slug', n: { $sum: 1 } } },
+      ])
+      .toArray()
+    const map = new Map<string, number>()
+    for (const r of rows) {
+      const key = r._id != null && r._id !== '' ? String(r._id) : null
+      if (key) map.set(key, typeof r.n === 'number' ? r.n : 0)
+    }
+    return map
+  }
+
   /** Nº de subcategorías por categoría: total y activas. */
   async subcategoryCountsByCategoryId(): Promise<Map<string, { total: number; active: number }>> {
     const rows = await this.db

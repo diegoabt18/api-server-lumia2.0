@@ -16,6 +16,15 @@ type CategoryInput = {
   sort_order?: number
 }
 
+type CategoryCounts = {
+  subcategories: number
+  activeSubcategories: number
+  /** Productos dentro de sus subcategorías (la jerarquía es la fuente de verdad). */
+  products: number
+  /** Productos con categoría pero sin subcategoría: hay que clasificarlos. */
+  unclassifiedProducts: number
+}
+
 const DUPLICATE_CATEGORY_NAME = 'Ya existe una categoría con ese nombre'
 const DUPLICATE_CATEGORY_SLUG = 'Ya existe una categoría con ese slug'
 const DUPLICATE_SUBCATEGORY_NAME = 'Ya existe una subcategoría con ese nombre en esta categoría'
@@ -25,7 +34,7 @@ function isDuplicateKey(e: unknown): boolean {
   return (e as { code?: number }).code === 11000
 }
 
-function serializeCategory(c: CategoryDomain, counts: { subcategories: number; activeSubcategories: number; products: number }) {
+function serializeCategory(c: CategoryDomain, counts: CategoryCounts) {
   return {
     id: c.id,
     name: c.name,
@@ -39,6 +48,7 @@ function serializeCategory(c: CategoryDomain, counts: { subcategories: number; a
     subcategoryCount: counts.subcategories,
     activeSubcategoryCount: counts.activeSubcategories,
     productCount: counts.products,
+    unclassifiedProductCount: counts.unclassifiedProducts,
   }
 }
 
@@ -58,50 +68,76 @@ function serializeSubcategory(s: SubcategoryDomain, productCount: number) {
   }
 }
 
+const EMPTY_COUNTS: CategoryCounts = {
+  subcategories: 0,
+  activeSubcategories: 0,
+  products: 0,
+  unclassifiedProducts: 0,
+}
+
 export class AdminCategoryService {
   constructor(
     private readonly categories: CategoryRepository,
     private readonly subcategories: SubcategoryRepository,
   ) {}
 
+  /**
+   * Productos por categoría = suma de sus subcategorías. Los que solo tienen categoría (sin
+   * subcategoría) se cuentan aparte, para que se vean como pendientes y no como parte de la categoría.
+   */
+  private async productCounts() {
+    const [subs, subProductCounts, unclassifiedBySlug] = await Promise.all([
+      this.subcategories.findAllDomain(),
+      this.subcategories.productCountsBySubcategoryId(),
+      this.categories.unclassifiedProductCountByCategorySlug(),
+    ])
+    const byCategoryId = new Map<string, number>()
+    for (const s of subs) {
+      byCategoryId.set(s.categoryId, (byCategoryId.get(s.categoryId) ?? 0) + (subProductCounts.get(s.id) ?? 0))
+    }
+    return { byCategoryId, unclassifiedBySlug }
+  }
+
+  private countsFor(
+    c: CategoryDomain,
+    subCounts: Map<string, { total: number; active: number }>,
+    products: Awaited<ReturnType<AdminCategoryService['productCounts']>>,
+  ): CategoryCounts {
+    const sub = subCounts.get(c.id) ?? { total: 0, active: 0 }
+    return {
+      subcategories: sub.total,
+      activeSubcategories: sub.active,
+      products: products.byCategoryId.get(c.id) ?? 0,
+      unclassifiedProducts: products.unclassifiedBySlug.get(c.slug) ?? 0,
+    }
+  }
+
   async list(query: Record<string, unknown>) {
     const { page, limit, skip, search } = resolvePagingQuery(query, {
       defaultLimit: 50,
       maxLimit: 200,
     })
-    const [items, total, productCounts, subCounts] = await Promise.all([
+    const [items, total, products, subCounts] = await Promise.all([
       this.categories.findPaged(skip, limit, search || undefined),
       this.categories.countAll(search || undefined),
-      this.categories.productCountByCategorySlug(),
+      this.productCounts(),
       this.categories.subcategoryCountsByCategoryId(),
     ])
-    const categories = items.map((c) => {
-      const sub = subCounts.get(c.id) ?? { total: 0, active: 0 }
-      return serializeCategory(c, {
-        subcategories: sub.total,
-        activeSubcategories: sub.active,
-        products: productCounts.get(c.slug) ?? 0,
-      })
-    })
+    const categories = items.map((c) => serializeCategory(c, this.countsFor(c, subCounts, products)))
     return { categories, items: categories, pagination: buildPaginationMeta(total, page, limit) }
   }
 
   async getById(idOrSlug: string) {
     const category = await this.categories.findBySlugOrId(idOrSlug)
     if (!category) throw AppError.notFound('Categoría no encontrada')
-    const [productCounts, subCounts, subs, subProductCounts] = await Promise.all([
-      this.categories.productCountByCategorySlug(),
+    const [products, subCounts, subs, subProductCounts] = await Promise.all([
+      this.productCounts(),
       this.categories.subcategoryCountsByCategoryId(),
       this.subcategories.findByCategory(category.id),
       this.subcategories.productCountsBySubcategoryId(),
     ])
-    const sub = subCounts.get(category.id) ?? { total: 0, active: 0 }
     return {
-      category: serializeCategory(category, {
-        subcategories: sub.total,
-        activeSubcategories: sub.active,
-        products: productCounts.get(category.slug) ?? 0,
-      }),
+      category: serializeCategory(category, this.countsFor(category, subCounts, products)),
       subcategories: subs.map((s) => serializeSubcategory(s, subProductCounts.get(s.id) ?? 0)),
     }
   }
@@ -115,7 +151,7 @@ export class AdminCategoryService {
     await this.assertCategoryNameFree(input.name)
     try {
       const category = await this.categories.createCategory(input)
-      return { category: serializeCategory(category, { subcategories: 0, activeSubcategories: 0, products: 0 }) }
+      return { category: serializeCategory(category, EMPTY_COUNTS) }
     } catch (e: unknown) {
       if (isDuplicateKey(e)) throw AppError.conflict(DUPLICATE_CATEGORY_SLUG)
       throw e
@@ -168,19 +204,64 @@ export class AdminCategoryService {
   }
 
   private async serializeWithCounts(c: CategoryDomain) {
-    const [productCounts, subCounts] = await Promise.all([
-      this.categories.productCountByCategorySlug(),
+    const [products, subCounts] = await Promise.all([
+      this.productCounts(),
       this.categories.subcategoryCountsByCategoryId(),
     ])
-    const sub = subCounts.get(c.id) ?? { total: 0, active: 0 }
-    return serializeCategory(c, {
-      subcategories: sub.total,
-      activeSubcategories: sub.active,
-      products: productCounts.get(c.slug) ?? 0,
-    })
+    return serializeCategory(c, this.countsFor(c, subCounts, products))
   }
 
   // ─── Subcategorías ───
+
+  /** Listado de todas las subcategorías con su categoría. Filtros: categoría (id o slug) y texto. */
+  async listAllSubcategories(query: Record<string, unknown>) {
+    const { page, limit, skip, search } = resolvePagingQuery(query, {
+      defaultLimit: 50,
+      maxLimit: 200,
+    })
+    const [allCategories, allSubs, subProductCounts] = await Promise.all([
+      this.categories.findPaged(0, 1000),
+      this.subcategories.findAllDomain(),
+      this.subcategories.productCountsBySubcategoryId(),
+    ])
+    const categoryById = new Map(allCategories.map((c) => [c.id, c]))
+
+    let scoped = allSubs
+    const categoryFilter = typeof query.category === 'string' ? query.category.trim() : ''
+    if (categoryFilter) {
+      const category = allCategories.find((c) => c.id === categoryFilter || c.slug === categoryFilter)
+      scoped = category ? scoped.filter((s) => s.categoryId === category.id) : []
+    }
+    const term = typeof search === 'string' ? search.trim().toLowerCase() : ''
+    if (term) {
+      scoped = scoped.filter((s) => s.name.toLowerCase().includes(term) || s.slug.includes(term))
+    }
+
+    scoped = [...scoped].sort((a, b) => {
+      const ca = categoryById.get(a.categoryId)
+      const cb = categoryById.get(b.categoryId)
+      return (
+        (ca?.sortOrder ?? 0) - (cb?.sortOrder ?? 0) ||
+        (ca?.name ?? '').localeCompare(cb?.name ?? '') ||
+        a.sortOrder - b.sortOrder ||
+        a.name.localeCompare(b.name)
+      )
+    })
+
+    const items = scoped.slice(skip, skip + limit).map((s) => {
+      const category = categoryById.get(s.categoryId)
+      return {
+        ...serializeSubcategory(s, subProductCounts.get(s.id) ?? 0),
+        categoryName: category?.name ?? '—',
+        categorySlug: category?.slug ?? null,
+      }
+    })
+    return {
+      subcategories: items,
+      items,
+      pagination: buildPaginationMeta(scoped.length, page, limit),
+    }
+  }
 
   async listSubcategories(categoryIdOrSlug: string) {
     const category = await this.categories.findBySlugOrId(categoryIdOrSlug)

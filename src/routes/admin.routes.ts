@@ -242,7 +242,13 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
     },
   )
 
-  // ─── Subcategories (dentro de una categoría) ───
+  // ─── Subcategories (listado global y dentro de una categoría) ───
+  api.get(
+    '/admin/subcategories',
+    { preHandler: g(PERMISSION_REGISTRY.CATEGORIES_READ) },
+    async (request) => services.adminCategories.listAllSubcategories(request.query as Record<string, unknown>),
+  )
+
   api.get(
     '/admin/categories/:id/subcategories',
     { preHandler: g(PERMISSION_REGISTRY.CATEGORIES_READ) },
