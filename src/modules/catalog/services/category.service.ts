@@ -43,9 +43,26 @@ export class CategoryService {
     }
   }
 
+  /**
+   * Productos por categoría = suma de sus subcategorías activas (lo que el cliente ve en la tienda).
+   * Los productos sin subcategoría no cuentan para la categoría.
+   */
+  private async productCountsByCategory(): Promise<Map<string, number>> {
+    const [subs, subProductCounts] = await Promise.all([
+      this.subcategories.findAllDomain(),
+      this.subcategories.productCountsBySubcategoryId(),
+    ])
+    const map = new Map<string, number>()
+    for (const s of subs) {
+      if (s.status !== 'active') continue
+      map.set(s.categoryId, (map.get(s.categoryId) ?? 0) + (subProductCounts.get(s.id) ?? 0))
+    }
+    return map
+  }
+
   async list(query: Record<string, unknown>) {
     const [productCounts, subCounts] = await Promise.all([
-      this.categories.productCountByCategorySlug(),
+      this.productCountsByCategory(),
       this.categories.subcategoryCountsByCategoryId(),
     ])
 
@@ -58,7 +75,7 @@ export class CategoryService {
       const categories = await this.categories.findAll({ onlyActive: true })
       const mapped = categories.map((c) =>
         this.serialize(c, {
-          products: productCounts.get(c.slug) ?? 0,
+          products: productCounts.get(c.id) ?? 0,
           subcategories: subCounts.get(c.id)?.active ?? 0,
         }),
       )
@@ -80,7 +97,7 @@ export class CategoryService {
     ])
     const mapped = slice.map((c) =>
         this.serialize(c, {
-          products: productCounts.get(c.slug) ?? 0,
+          products: productCounts.get(c.id) ?? 0,
           subcategories: subCounts.get(c.id)?.active ?? 0,
         }),
       )
@@ -96,13 +113,13 @@ export class CategoryService {
     const category = await this.categories.findBySlugOrId(idOrSlug)
     if (!category || category.status !== 'active') return null
     const [productCounts, subs, subProductCounts] = await Promise.all([
-      this.categories.productCountByCategorySlug(),
+      this.productCountsByCategory(),
       this.subcategories.findByCategory(category.id, { onlyActive: true }),
       this.subcategories.productCountsBySubcategoryId(),
     ])
     return {
       ...this.serialize(category, {
-        products: productCounts.get(category.slug) ?? 0,
+        products: productCounts.get(category.id) ?? 0,
         subcategories: subs.length,
       }),
       subcategories: subs.map((s) => this.serializeSub(s, subProductCounts.get(s.id) ?? 0)),
