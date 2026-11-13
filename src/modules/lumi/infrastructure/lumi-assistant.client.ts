@@ -176,13 +176,14 @@ export class LumiAssistantClient {
     message: string,
     conversationId?: string,
     context?: string,
+    useWeb = false,
   ): Promise<LumiChatResult> {
     const body = await this.request(userRef, 'POST', '/chat', {
       message,
       conversation_id: conversationId ?? null,
-      // Lumi no busca en la web: las consultas de administración no deben salir de la red.
-      use_web: false,
-      ...(context ? { context } : {}),
+      // Solo true en modo búsqueda web (lumi.web). En ese modo no se envía contexto.
+      use_web: useWeb,
+      ...(context && !useWeb ? { context } : {}),
     })
     const parsed = chatUpstreamSchema.parse(body)
     return {
@@ -276,6 +277,7 @@ export class LumiAssistantClient {
     conversationId: string | undefined,
     signal: AbortSignal,
     context?: string,
+    useWeb = false,
   ): AsyncGenerator<LumiStreamEvent> {
     if (!USER_REF_PATTERN.test(userRef)) {
       throw AppError.badRequest('Identificador de usuario no válido para el asistente')
@@ -285,8 +287,8 @@ export class LumiAssistantClient {
       {
         message,
         conversation_id: conversationId ?? null,
-        use_web: false,
-        ...(context ? { context } : {}),
+        use_web: useWeb,
+        ...(context && !useWeb ? { context } : {}),
       },
       signal,
     )

@@ -51,6 +51,30 @@ describe('LumiAssistantClient', () => {
     })
   })
 
+  it('enables web search only when asked, and then sends no screen context', async () => {
+    const fetchImpl = vi.fn(async () =>
+      json(200, { conversation_id: 'c-2', model: 'qwen', response: 'Hola', sources: [] }),
+    )
+    const client = clientWith(fetchImpl as unknown as typeof fetch)
+
+    await client.chat(USER, 'noticias de velas', undefined, 'Vista actual: Pedidos.', true)
+    const [, webInit] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(String(webInit.body))).toEqual({
+      message: 'noticias de velas',
+      conversation_id: null,
+      use_web: true,
+    })
+
+    await client.chat(USER, 'hola', undefined, 'Vista actual: Pedidos.')
+    const [, localInit] = fetchImpl.mock.calls[1] as unknown as [string, RequestInit]
+    expect(JSON.parse(String(localInit.body))).toEqual({
+      message: 'hola',
+      conversation_id: null,
+      use_web: false,
+      context: 'Vista actual: Pedidos.',
+    })
+  })
+
   it('refuses an invalid user reference before calling the assistant', async () => {
     const fetchImpl = vi.fn()
     const err = await captureError(

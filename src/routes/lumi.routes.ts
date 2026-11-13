@@ -91,15 +91,32 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     return summarizeOrderContext(await ctx.services.adminOrders.get(input.id))
   }
 
+  /**
+   * Turno de chat. En modo búsqueda web (lumi.web) solo viaja la pregunta: no se lee ningún dato
+   * de la API ni se envía contexto de pantalla, y la búsqueda sale a internet a través de ia-asistente.
+   */
+  const chatTurn = async (
+    request: FastifyRequest,
+    body: { context?: LumiContextInput; webSearch: boolean },
+  ): Promise<{ context: string | undefined; useWeb: boolean }> => {
+    if (!body.webSearch) return { context: await buildContext(request, body.context), useWeb: false }
+    const keys = (request as AuthenticatedRequest).permissionKeys
+    if (!hasPermission(keys, PERMISSION_REGISTRY.LUMI_WEB)) {
+      throw AppError.forbidden('Sin permiso para la búsqueda web de Lumi')
+    }
+    return { context: undefined, useWeb: true }
+  }
+
   api.post('/admin/lumi/chat', { preHandler: g(PERMISSION_REGISTRY.LUMI_USE) }, async (request) => {
     const parsed = lumiChatBodySchema.safeParse(request.body)
     if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
-    const contextText = await buildContext(request, parsed.data.context)
+    const turn = await chatTurn(request, parsed.data)
     const result = await requireClient().chat(
       userIdOf(request),
       parsed.data.message,
       parsed.data.conversationId,
-      contextText,
+      turn.context,
+      turn.useWeb,
     )
     return {
       conversationId: result.conversationId,
@@ -120,6 +137,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       const parsed = lumiChatBodySchema.safeParse(request.body)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
 
+      const turn = await chatTurn(request, parsed.data)
       const controller = new AbortController()
       const events = requireClient()
         .chatStream(
@@ -127,7 +145,8 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
           parsed.data.message,
           parsed.data.conversationId,
           controller.signal,
-          await buildContext(request, parsed.data.context),
+          turn.context,
+          turn.useWeb,
         )
         [Symbol.asyncIterator]()
 

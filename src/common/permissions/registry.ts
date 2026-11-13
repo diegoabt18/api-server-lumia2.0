@@ -60,6 +60,8 @@ export const PERMISSION_REGISTRY = {
   EQUIVALENCES_DELETE: 'equivalences.delete',
   /** Usar el asistente Lumi (ia-asistente) desde el panel administrativo. */
   LUMI_USE: 'lumi.use',
+  /** Lumi con búsqueda web. Solo la pregunta sale a internet, nunca datos de la API ni contexto. */
+  LUMI_WEB: 'lumi.web',
 } as const
 
 export type PermissionId = (typeof PERMISSION_REGISTRY)[keyof typeof PERMISSION_REGISTRY]

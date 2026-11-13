@@ -5,6 +5,8 @@ export const lumiChatBodySchema = z.object({
   message: z.string().trim().min(1).max(4000),
   conversationId: z.string().uuid().optional(),
   context: lumiContextInputSchema.optional(),
+  /** Búsqueda web (requiere lumi.web). En este modo no se envía contexto de la API. */
+  webSearch: z.boolean().optional().default(false),
 })
 
 export const lumiListQuerySchema = z.object({
