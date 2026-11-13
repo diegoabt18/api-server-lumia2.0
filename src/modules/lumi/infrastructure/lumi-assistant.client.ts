@@ -25,6 +25,8 @@ const chatUpstreamSchema = z.object({
   response: z.string(),
 })
 
+const exchangeUpstreamSchema = z.object({ conversation_id: z.string() })
+
 const usageUpstreamSchema = z.object({
   days: z.number(),
   requests: z.number(),
@@ -213,6 +215,22 @@ export class LumiAssistantClient {
       model: parsed.model,
       response: parsed.response,
     }
+  }
+
+  /** Guarda un turno que el backend resolvió sin modelo (p. ej. pedidos recientes). */
+  async recordExchange(
+    userRef: string,
+    message: string,
+    answer: string,
+    conversationId?: string,
+  ): Promise<{ conversationId: string }> {
+    const body = await this.request(userRef, 'POST', '/chat/exchange', {
+      message,
+      answer,
+      conversation_id: conversationId ?? null,
+    })
+    const parsed = exchangeUpstreamSchema.parse(body)
+    return { conversationId: parsed.conversation_id }
   }
 
   async listConversations(

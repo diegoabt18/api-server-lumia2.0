@@ -9,6 +9,11 @@ import {
   type LumiStreamEvent,
 } from '../modules/lumi/infrastructure/lumi-assistant.client.js'
 import {
+  type LumiRoute,
+  routeMessage,
+} from '../modules/lumi/services/lumi-intent-router.js'
+import { formatRecentOrders } from '../modules/lumi/services/lumi-orders-tool.js'
+import {
   buildAssistRequest,
   lumiProductAssistSchema,
   sanitizeSuggestion,
@@ -55,6 +60,41 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
   }
 
   const userIdOf = (request: unknown): string => (request as AuthenticatedRequest).auth.userId
+
+  /**
+   * Pedidos recientes: herramienta de solo lectura. Usa el servicio de administración con el
+   * permiso del usuario y responde con texto determinista. No llama al modelo.
+   */
+  async function* ordersRecentStream(
+    request: FastifyRequest,
+    limit: number,
+    message: string,
+    conversationId: string | undefined,
+  ): AsyncGenerator<LumiStreamEvent> {
+    const keys = (request as AuthenticatedRequest).permissionKeys
+    let answer = 'No tienes permiso para consultar pedidos.'
+    if (hasPermission(keys, PERMISSION_REGISTRY.ORDERS_READ)) {
+      const page = await ctx.services.adminOrders.list({ limit, page: 1 })
+      answer = formatRecentOrders(
+        page.items.map((o) => ({
+          orderNumber: o.orderNumber ?? null,
+          createdAt: typeof o.createdAt === 'string' ? o.createdAt : null,
+          status: o.status ?? null,
+          paymentStatus: o.paymentStatus ?? null,
+          total: typeof o.total === 'number' ? o.total : null,
+        })),
+        limit,
+      )
+    }
+    const saved = await requireClient().recordExchange(
+      userIdOf(request),
+      message,
+      answer,
+      conversationId,
+    )
+    yield { type: 'token', text: answer }
+    yield { type: 'done', conversationId: saved.conversationId }
+  }
 
   /**
    * Resumen del contexto de pantalla. Solo se lee lo que el usuario puede ver: sin el permiso
@@ -140,17 +180,21 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
 
       const turn = await chatTurn(request, parsed.data)
       const controller = new AbortController()
-      const events = requireClient()
-        .chatStream(
-          userIdOf(request),
-          parsed.data.message,
-          parsed.data.conversationId,
-          controller.signal,
-          turn.context,
-          turn.useWeb,
-          { think: parsed.data.think, maxTokens: parsed.data.maxTokens },
-        )
-        [Symbol.asyncIterator]()
+      // Las reglas resuelven lo claro sin modelo. La búsqueda web siempre va a Qwen.
+      const route: LumiRoute = turn.useWeb ? { kind: 'model' } : routeMessage(parsed.data.message)
+      const events = (
+        route.kind === 'orders_recent'
+          ? ordersRecentStream(request, route.limit, parsed.data.message, parsed.data.conversationId)
+          : requireClient().chatStream(
+              userIdOf(request),
+              parsed.data.message,
+              parsed.data.conversationId,
+              controller.signal,
+              turn.context,
+              turn.useWeb,
+              { think: parsed.data.think, maxTokens: parsed.data.maxTokens },
+            )
+      )[Symbol.asyncIterator]()
 
       let current = await events.next()
 
