@@ -88,19 +88,28 @@ export class RegistryRepository {
     return col.findOne({ key })
   }
 
+  /**
+   * Inserta en `permissions` solo los permisos del código que falten. Nunca modifica ni borra
+   * un documento existente: la base manda, y la relación permiso-rol vive en los roles, que
+   * no se tocan aquí.
+   */
+  async insertMissingPermissions(seeds: PermissionSeed[]): Promise<number> {
+    const col = getCollection<PermissionSeed & { key: string }>(this.db, 'permissions')
+    let inserted = 0
+    for (const seed of seeds) {
+      const { key, ...rest } = seed
+      // `key` ya viene del filtro del upsert; solo se fijan los campos al insertar.
+      const res = await col.updateOne({ key }, { $setOnInsert: rest }, { upsert: true })
+      if (res.upsertedCount > 0) inserted++
+    }
+    return inserted
+  }
+
   async syncPermissions(
     seeds: PermissionSeed[],
   ): Promise<{ inserted: number; updated: number; unchanged: number }> {
-    let inserted = 0
-    let updated = 0
-    let unchanged = 0
-    for (const seed of seeds) {
-      const result = await this.upsertPermission(seed)
-      if (result === 'inserted') inserted++
-      else if (result === 'updated') updated++
-      else unchanged++
-    }
-    return { inserted, updated, unchanged }
+    const inserted = await this.insertMissingPermissions(seeds)
+    return { inserted, updated: 0, unchanged: seeds.length - inserted }
   }
 
   async listServices(): Promise<ServiceSeed[]> {

@@ -420,6 +420,10 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   const adminStaff = new AdminStaffService(users, authorization, roles, userRoles)
   const registry = new RegistryRepository(identityDb)
   const adminRegistry = new AdminRegistryService(registry)
+  // Crea en `permissions` los permisos del código que falten. No toca roles ni permisos existentes.
+  adminRegistry
+    .seedMissingPermissions()
+    .catch((err) => logger.warn({ err }, 'permission seed skipped'))
   const adminSession = new AdminSessionService(sessions)
   const adminAnalytics = new AdminAnalyticsService(orders, users, products)
   const feedbackReports = new FeedbackReportRepository(salesDb)

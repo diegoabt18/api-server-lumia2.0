@@ -1,6 +1,5 @@
 import { ObjectId, type Db } from 'mongodb'
 import { BaseRepository, getCollection } from '../../../database/repositories/base.repository.js'
-import type { PermissionId } from '../../../common/permissions/registry.js'
 import { type RoleEntity, toRoleDomain } from '../domain/role.entity.js'
 
 interface RoleDocument {
@@ -8,8 +7,8 @@ interface RoleDocument {
   key: string
   name: string
   description?: string
-  permissionKeys: PermissionId[]
-  denyKeys?: PermissionId[]
+  permissionKeys: string[]
+  denyKeys?: string[]
   inheritRoleIds?: string[]
   isSystem?: boolean
   isArchived?: boolean
@@ -73,8 +72,8 @@ export class RoleRepository extends BaseRepository<RoleDocument> {
     key: string
     name: string
     description?: string
-    permissionKeys: PermissionId[]
-    denyKeys?: PermissionId[]
+    permissionKeys: string[]
+    denyKeys?: string[]
     inheritRoleIds?: string[]
     isSystem?: boolean
   }): Promise<RoleEntity> {

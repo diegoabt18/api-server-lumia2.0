@@ -1,12 +1,11 @@
-import type { PermissionId } from '../../../common/permissions/registry.js'
 
 export interface RoleEntity {
   _id?: string
   key: string
   name: string
   description?: string
-  permissionKeys: PermissionId[]
-  denyKeys?: PermissionId[]
+  permissionKeys: string[]
+  denyKeys?: string[]
   inheritRoleIds?: string[]
   isSystem?: boolean
   isArchived?: boolean
@@ -29,8 +28,8 @@ export interface RoleDomain {
   key: string
   name: string
   description?: string
-  permissionKeys: PermissionId[]
-  denyKeys: PermissionId[]
+  permissionKeys: string[]
+  denyKeys: string[]
   inheritRoleIds: string[]
   isSystem: boolean
   isArchived: boolean

@@ -3,6 +3,7 @@ import {
   ALL_PERMISSION_IDS,
   expandPermissions,
   PERMISSION_REGISTRY,
+  PERMISSION_WILDCARD,
   type PermissionId,
 } from '../../../common/permissions/registry.js'
 import { buildPaginationMeta, resolvePagingQuery } from '../../../common/utils/pagination.js'
@@ -60,6 +61,21 @@ export class SecurityAdminService {
     return { role: this.roles.toDomain(role) }
   }
 
+  /**
+   * Valida que cada clave exista en el catálogo (colección `permissions`). Un rol solo puede
+   * guardar permisos que el catálogo conoce; el comodín `*` sigue siendo válido.
+   */
+  private async assertCatalogKeys(keys: string[]): Promise<string[]> {
+    const catalog = new Set(
+      (await this.registry.listPermissions()).map((p) => p.key).filter((k) => k.length > 0),
+    )
+    const unknown = keys.filter((k) => k !== PERMISSION_WILDCARD && !catalog.has(k))
+    if (unknown.length > 0) {
+      throw AppError.badRequest(`Permisos desconocidos: ${[...new Set(unknown)].join(', ')}`)
+    }
+    return [...new Set(keys)].sort()
+  }
+
   async createRole(body: {
     key: string
     name: string
@@ -71,7 +87,7 @@ export class SecurityAdminService {
     const existing = await this.roles.findByKey(key)
     if (existing) throw AppError.conflict('Ya existe un rol con esa key')
 
-    const permissionKeys = expandPermissions(body.permissionKeys)
+    const permissionKeys = await this.assertCatalogKeys(body.permissionKeys)
     const role = await this.roles.create({
       key,
       name: body.name.trim(),
@@ -89,7 +105,7 @@ export class SecurityAdminService {
     if (patch.name !== undefined) update.name = patch.name.trim()
     if (patch.description !== undefined) update.description = patch.description.trim()
     if (patch.permissionKeys !== undefined) {
-      update.permissionKeys = expandPermissions(patch.permissionKeys)
+      update.permissionKeys = await this.assertCatalogKeys(patch.permissionKeys)
     }
 
     try {
@@ -115,23 +131,29 @@ export class SecurityAdminService {
       defaultLimit: 30,
       maxLimit: 200,
     })
+    // El catálogo es la colección `permissions`: la base manda. Los permisos sin `key` no pueden
+    // asignarse a un rol, así que no se listan.
     const dbPermissions = await this.registry.listPermissions()
-    const byKey = new Map(dbPermissions.map((p) => [p.key, p]))
+    const known = new Set<string>(ALL_PERMISSION_IDS)
 
-    const all = ALL_PERMISSION_IDS.map((key) => {
-      const fromDb = byKey.get(key)
-      const prefix = key.split('.')[0] ?? key
-      return {
-        id: key,
-        key,
-        description: fromDb?.description ?? fromDb?.name ?? `Permiso ${key}`,
-        group: fromDb?.moduleKey ?? prefix,
-        moduleKey: fromDb?.moduleKey ?? null,
-        type: fromDb?.type ?? 'admin',
-        isActive: fromDb?.isActive ?? true,
-        inRegistry: !!fromDb,
-      }
-    })
+    const all = dbPermissions
+      .filter((p) => typeof p.key === 'string' && p.key.length > 0)
+      .map((p) => {
+        const key = p.key
+        const prefix = key.split('.')[0] ?? key
+        return {
+          id: key,
+          key,
+          name: p.name || key,
+          description: p.description || p.name || `Permiso ${key}`,
+          group: p.moduleKey || prefix,
+          moduleKey: p.moduleKey || null,
+          type: p.type || 'admin',
+          isActive: p.isActive ?? true,
+          inRegistry: known.has(key),
+        }
+      })
+      .sort((a, b) => a.key.localeCompare(b.key))
 
     const s = search?.trim().toLowerCase()
     const filtered = s

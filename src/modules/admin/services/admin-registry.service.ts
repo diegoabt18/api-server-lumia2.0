@@ -78,6 +78,11 @@ export class AdminRegistryService {
     return { module }
   }
 
+  /** Semilla de permisos del código, sin sobrescribir la colección. Se llama al arrancar. */
+  seedMissingPermissions() {
+    return this.registry.insertMissingPermissions(PERMISSION_SEEDS)
+  }
+
   async syncFromSeeds() {
     const results = {
       permissionsInserted: 0,
@@ -88,11 +93,8 @@ export class AdminRegistryService {
       servicesUpdated: 0,
     }
 
-    for (const seed of PERMISSION_SEEDS) {
-      const r = await this.registry.upsertPermission(seed)
-      if (r === 'inserted') results.permissionsInserted++
-      if (r === 'updated') results.permissionsUpdated++
-    }
+    // Solo inserta permisos faltantes; no sobrescribe lo que ya editó la base.
+    results.permissionsInserted = await this.registry.insertMissingPermissions(PERMISSION_SEEDS)
     for (const seed of MODULE_SEEDS) {
       const r = await this.registry.upsertModule(seed)
       if (r === 'inserted') results.modulesInserted++
