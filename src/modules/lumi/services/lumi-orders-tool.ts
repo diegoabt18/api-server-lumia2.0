@@ -29,3 +29,17 @@ export function formatRecentOrders(rows: ReadonlyArray<RecentOrderRow>, limit: n
   const heading = rows.length < limit ? `Pedidos (${rows.length}):` : `Últimos ${rows.length} pedidos:`
   return [heading, ...lines].join('\n')
 }
+
+export const NO_ORDERS_PERMISSION_ANSWER = 'No tienes permiso para consultar pedidos.'
+
+/**
+ * Respuesta completa de la herramienta. Sin permiso no se lee nada: `fetchRows` no se llama.
+ */
+export async function answerRecentOrders(
+  canRead: boolean,
+  limit: number,
+  fetchRows: (limit: number) => Promise<RecentOrderRow[]>,
+): Promise<string> {
+  if (!canRead) return NO_ORDERS_PERMISSION_ANSWER
+  return formatRecentOrders(await fetchRows(limit), limit)
+}

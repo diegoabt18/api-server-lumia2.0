@@ -9,10 +9,12 @@ import {
   type LumiStreamEvent,
 } from '../modules/lumi/infrastructure/lumi-assistant.client.js'
 import {
+  type LumiMode,
   type LumiRoute,
+  resolveLumiModes,
   routeMessage,
 } from '../modules/lumi/services/lumi-intent-router.js'
-import { formatRecentOrders } from '../modules/lumi/services/lumi-orders-tool.js'
+import { answerRecentOrders } from '../modules/lumi/services/lumi-orders-tool.js'
 import {
   buildAssistRequest,
   lumiProductAssistSchema,
@@ -72,20 +74,20 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     conversationId: string | undefined,
   ): AsyncGenerator<LumiStreamEvent> {
     const keys = (request as AuthenticatedRequest).permissionKeys
-    let answer = 'No tienes permiso para consultar pedidos.'
-    if (hasPermission(keys, PERMISSION_REGISTRY.ORDERS_READ)) {
-      const page = await ctx.services.adminOrders.list({ limit, page: 1 })
-      answer = formatRecentOrders(
-        page.items.map((o) => ({
+    const answer = await answerRecentOrders(
+      hasPermission(keys, PERMISSION_REGISTRY.ORDERS_READ),
+      limit,
+      async (n) => {
+        const page = await ctx.services.adminOrders.list({ limit: n, page: 1 })
+        return page.items.map((o) => ({
           orderNumber: o.orderNumber ?? null,
           createdAt: typeof o.createdAt === 'string' ? o.createdAt : null,
           status: o.status ?? null,
           paymentStatus: o.paymentStatus ?? null,
           total: typeof o.total === 'number' ? o.total : null,
-        })),
-        limit,
-      )
-    }
+        }))
+      },
+    )
     const saved = await requireClient().recordExchange(
       userIdOf(request),
       message,
@@ -132,32 +134,49 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
   }
 
   /**
-   * Turno de chat. En modo búsqueda web (lumi.web) solo viaja la pregunta: no se lee ningún dato
-   * de la API ni se envía contexto de pantalla, y la búsqueda sale a internet a través de ia-asistente.
+   * Controles del turno (razonamiento y búsqueda web) y contexto de pantalla. En búsqueda web solo
+   * viaja la pregunta: no se lee ningún dato de la API y la búsqueda sale a internet vía ia-asistente.
+   * Los campos antiguos (`think`, `webSearch`) siguen aceptándose si llegan sin los nuevos.
    */
-  const chatTurn = async (
+  const resolveTurn = async (
     request: FastifyRequest,
-    body: { context?: LumiContextInput; webSearch: boolean },
-  ): Promise<{ context: string | undefined; useWeb: boolean }> => {
-    if (!body.webSearch) return { context: await buildContext(request, body.context), useWeb: false }
+    body: {
+      message: string
+      context?: LumiContextInput
+      think?: boolean
+      webSearch?: boolean
+      reasoningMode?: LumiMode
+      webMode?: LumiMode
+    },
+  ): Promise<{ context: string | undefined; webSearch: boolean; reasoning: boolean }> => {
     const keys = (request as AuthenticatedRequest).permissionKeys
-    if (!hasPermission(keys, PERMISSION_REGISTRY.LUMI_WEB)) {
-      throw AppError.forbidden('Sin permiso para la búsqueda web de Lumi')
+    const modes = resolveLumiModes({
+      message: body.message,
+      reasoningMode:
+        body.reasoningMode ?? (body.think === undefined ? 'auto' : body.think ? 'on' : 'off'),
+      webMode: body.webMode ?? (body.webSearch === undefined ? 'auto' : body.webSearch ? 'on' : 'off'),
+      canWeb: hasPermission(keys, PERMISSION_REGISTRY.LUMI_WEB),
+    })
+    if (modes.webDenied) throw AppError.forbidden('Sin permiso para la búsqueda web de Lumi')
+    if (modes.webSearch) return { context: undefined, webSearch: true, reasoning: modes.reasoning }
+    return {
+      context: await buildContext(request, body.context),
+      webSearch: false,
+      reasoning: modes.reasoning,
     }
-    return { context: undefined, useWeb: true }
   }
 
   api.post('/admin/lumi/chat', { preHandler: g(PERMISSION_REGISTRY.LUMI_USE) }, async (request) => {
     const parsed = lumiChatBodySchema.safeParse(request.body)
     if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
-    const turn = await chatTurn(request, parsed.data)
+    const turn = await resolveTurn(request, parsed.data)
     const result = await requireClient().chat(
       userIdOf(request),
       parsed.data.message,
       parsed.data.conversationId,
       turn.context,
-      turn.useWeb,
-      { think: parsed.data.think, maxTokens: parsed.data.maxTokens },
+      turn.webSearch,
+      { think: turn.reasoning, maxTokens: parsed.data.maxTokens },
     )
     return {
       conversationId: result.conversationId,
@@ -178,10 +197,14 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       const parsed = lumiChatBodySchema.safeParse(request.body)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
 
-      const turn = await chatTurn(request, parsed.data)
       const controller = new AbortController()
-      // Las reglas resuelven lo claro sin modelo. La búsqueda web siempre va a Qwen.
-      const route: LumiRoute = turn.useWeb ? { kind: 'model' } : routeMessage(parsed.data.message)
+      // Las reglas resuelven lo claro sin modelo. La búsqueda web no cambia esto: los pedidos son
+      // datos de la tienda, no una consulta a internet.
+      const route: LumiRoute = routeMessage(parsed.data.message)
+      const turn =
+        route.kind === 'model'
+          ? await resolveTurn(request, parsed.data)
+          : { context: undefined, webSearch: false, reasoning: false }
       const events = (
         route.kind === 'orders_recent'
           ? ordersRecentStream(request, route.limit, parsed.data.message, parsed.data.conversationId)
@@ -191,8 +214,8 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
               parsed.data.conversationId,
               controller.signal,
               turn.context,
-              turn.useWeb,
-              { think: parsed.data.think, maxTokens: parsed.data.maxTokens },
+              turn.webSearch,
+              { think: turn.reasoning, maxTokens: parsed.data.maxTokens },
             )
       )[Symbol.asyncIterator]()
 
@@ -212,6 +235,11 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       const write = (event: LumiStreamEvent) => {
         const { type, ...payload } = event
         raw.write(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`)
+      }
+
+      // Informa qué modo se usó, para que el chat lo muestre junto a la respuesta.
+      if (route.kind === 'model') {
+        write({ type: 'mode', webSearch: turn.webSearch, reasoning: turn.reasoning })
       }
 
       try {

@@ -103,6 +103,7 @@ function throwForStatus(res: Response): void {
 
 export type LumiStreamEvent =
   | { type: 'start'; conversationId: string }
+  | { type: 'mode'; webSearch: boolean; reasoning: boolean }
   | { type: 'thinking'; text: string }
   | { type: 'token'; text: string }
   | { type: 'done'; conversationId: string }

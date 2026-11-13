@@ -5,10 +5,13 @@ export const lumiChatBodySchema = z.object({
   message: z.string().trim().min(1).max(4000),
   conversationId: z.string().uuid().optional(),
   context: lumiContextInputSchema.optional(),
-  /** Búsqueda web (requiere lumi.web). En este modo no se envía contexto de la API. */
-  webSearch: z.boolean().optional().default(false),
-  /** Razonamiento del modelo. Consume tokens de maxTokens y tarda más. */
-  think: z.boolean().optional().default(false),
+  /** Búsqueda web (requiere lumi.web). Campo previo; `webMode` lo sustituye. */
+  webSearch: z.boolean().optional(),
+  /** Razonamiento del modelo. Campo previo; `reasoningMode` lo sustituye. */
+  think: z.boolean().optional(),
+  /** Controles del chat: automático (lo decide el servidor), activado o desactivado. */
+  reasoningMode: z.enum(['auto', 'on', 'off']).optional(),
+  webMode: z.enum(['auto', 'on', 'off']).optional(),
   /** Límite de tokens de la respuesta. Si se omite, lo decide ia-asistente. */
   maxTokens: z.number().int().min(128).max(2048).optional(),
 })
