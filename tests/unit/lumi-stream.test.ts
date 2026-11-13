@@ -51,6 +51,10 @@ describe('toLumiStreamEvent', () => {
       conversationId: 'c-1',
     })
     expect(toLumiStreamEvent('token', '{"text":"Hola"}')).toEqual({ type: 'token', text: 'Hola' })
+    expect(toLumiStreamEvent('thinking', '{"text":"Pienso"}')).toEqual({
+      type: 'thinking',
+      text: 'Pienso',
+    })
     expect(toLumiStreamEvent('done', '{"conversation_id":"c-1","sources":[]}')).toEqual({
       type: 'done',
       conversationId: 'c-1',
@@ -59,6 +63,7 @@ describe('toLumiStreamEvent', () => {
 
   it('ignores unknown events and malformed payloads', () => {
     expect(toLumiStreamEvent('sources', '{"sources":[]}')).toBeNull()
+    expect(toLumiStreamEvent('thinking', '{"other":1}')).toBeNull()
     expect(toLumiStreamEvent('token', '{"other":1}')).toBeNull()
     expect(toLumiStreamEvent('token', 'no json')).toBeNull()
   })

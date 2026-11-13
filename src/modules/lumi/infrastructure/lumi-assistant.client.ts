@@ -101,6 +101,7 @@ function throwForStatus(res: Response): void {
 
 export type LumiStreamEvent =
   | { type: 'start'; conversationId: string }
+  | { type: 'thinking'; text: string }
   | { type: 'token'; text: string }
   | { type: 'done'; conversationId: string }
   | { type: 'error'; message: string }
@@ -111,6 +112,7 @@ const generateUpstreamSchema = z.object({ model: z.string(), text: z.string() })
 
 const streamStartSchema = z.object({ conversation_id: z.string() })
 const streamTokenSchema = z.object({ text: z.string() })
+const streamThinkingSchema = z.object({ text: z.string() })
 const streamDoneSchema = z.object({ conversation_id: z.string() })
 
 /** Separa bloques SSE completos (terminados en línea vacía). Lo incompleto queda en `rest`. */
@@ -155,6 +157,10 @@ export function toLumiStreamEvent(event: string, rawData: string): LumiStreamEve
   if (event === 'token') {
     const parsed = streamTokenSchema.safeParse(json)
     return parsed.success ? { type: 'token', text: parsed.data.text } : null
+  }
+  if (event === 'thinking') {
+    const parsed = streamThinkingSchema.safeParse(json)
+    return parsed.success ? { type: 'thinking', text: parsed.data.text } : null
   }
   if (event === 'done') {
     const parsed = streamDoneSchema.safeParse(json)
