@@ -164,6 +164,20 @@ export function toLumiStreamEvent(event: string, rawData: string): LumiStreamEve
   return null
 }
 
+/** Opciones por turno que el administrador elige en el chat. */
+export interface LumiTurnOptions {
+  think?: boolean
+  maxTokens?: number
+}
+
+/** Solo envía lo que se pidió: sin opciones, el cuerpo es el de siempre. */
+function turnOptionsBody(options: LumiTurnOptions): { think?: true; max_tokens?: number } {
+  return {
+    ...(options.think ? { think: true as const } : {}),
+    ...(options.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
+  }
+}
+
 export class LumiAssistantClient {
   private readonly fetchImpl: typeof fetch
 
@@ -177,6 +191,7 @@ export class LumiAssistantClient {
     conversationId?: string,
     context?: string,
     useWeb = false,
+    options: LumiTurnOptions = {},
   ): Promise<LumiChatResult> {
     const body = await this.request(userRef, 'POST', '/chat', {
       message,
@@ -184,6 +199,7 @@ export class LumiAssistantClient {
       // Solo true en modo búsqueda web (lumi.web). En ese modo no se envía contexto.
       use_web: useWeb,
       ...(context && !useWeb ? { context } : {}),
+      ...turnOptionsBody(options),
     })
     const parsed = chatUpstreamSchema.parse(body)
     return {
@@ -278,6 +294,7 @@ export class LumiAssistantClient {
     signal: AbortSignal,
     context?: string,
     useWeb = false,
+    options: LumiTurnOptions = {},
   ): AsyncGenerator<LumiStreamEvent> {
     if (!USER_REF_PATTERN.test(userRef)) {
       throw AppError.badRequest('Identificador de usuario no válido para el asistente')
@@ -289,6 +306,7 @@ export class LumiAssistantClient {
         conversation_id: conversationId ?? null,
         use_web: useWeb,
         ...(context && !useWeb ? { context } : {}),
+        ...turnOptionsBody(options),
       },
       signal,
     )

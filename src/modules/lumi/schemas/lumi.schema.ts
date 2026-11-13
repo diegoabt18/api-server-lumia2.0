@@ -7,6 +7,10 @@ export const lumiChatBodySchema = z.object({
   context: lumiContextInputSchema.optional(),
   /** Búsqueda web (requiere lumi.web). En este modo no se envía contexto de la API. */
   webSearch: z.boolean().optional().default(false),
+  /** Razonamiento del modelo. Consume tokens de maxTokens y tarda más. */
+  think: z.boolean().optional().default(false),
+  /** Límite de tokens de la respuesta. Si se omite, lo decide ia-asistente. */
+  maxTokens: z.number().int().min(128).max(2048).optional(),
 })
 
 export const lumiListQuerySchema = z.object({

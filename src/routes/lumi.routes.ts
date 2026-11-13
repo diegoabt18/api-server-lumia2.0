@@ -117,6 +117,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       parsed.data.conversationId,
       turn.context,
       turn.useWeb,
+      { think: parsed.data.think, maxTokens: parsed.data.maxTokens },
     )
     return {
       conversationId: result.conversationId,
@@ -147,6 +148,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
           controller.signal,
           turn.context,
           turn.useWeb,
+          { think: parsed.data.think, maxTokens: parsed.data.maxTokens },
         )
         [Symbol.asyncIterator]()
 
