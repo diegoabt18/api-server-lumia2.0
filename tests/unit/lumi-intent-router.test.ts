@@ -48,6 +48,11 @@ describe('modo automático', () => {
   it('activates web search only for current-events questions', () => {
     expect(needsWebSearch('¿Quién es actualmente el presidente de Colombia?')).toBe(true)
     expect(needsWebSearch('últimas noticias de la industria')).toBe(true)
+    // Datos del mundo real: clima y divisas, aunque no mencionen actualidad.
+    expect(needsWebSearch('a cuántos grados esta Cúcuta hoy')).toBe(true)
+    expect(needsWebSearch('cuál es el pronóstico del tiempo en Bogotá')).toBe(true)
+    expect(needsWebSearch('¿va a llover mañana en Medellín?')).toBe(true)
+    expect(needsWebSearch('precio del dólar hoy')).toBe(true)
     // Preguntas de la tienda o sencillas no van a internet.
     expect(needsWebSearch('crea una descripción para esta vela')).toBe(false)
     expect(needsWebSearch('hola')).toBe(false)

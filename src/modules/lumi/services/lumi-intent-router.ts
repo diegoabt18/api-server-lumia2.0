@@ -9,11 +9,17 @@ export type LumiRoute = { kind: 'model' } | { kind: 'orders_recent'; limit: numb
 export type LumiMode = 'auto' | 'on' | 'off'
 
 const CURRENT_EVENTS = /(actualidad|actualmente|noticias|quién es (el|la) (actual )?(presidente|presidenta|alcalde|alcaldesa)|últimas? noticias)/i
+/** Datos del mundo real que cambian a diario (clima, divisas). No son datos de la tienda. */
+const LIVE_WORLD_DATA =
+  /(clima|pron[oó]stico|temperatura|cu[aá]ntos grados|grados (hace|hay|est[aá])|llover|llueve|lluvia|qu[eé] tiempo hace|precio del d[oó]lar|d[oó]lar (de )?hoy)/i
 const DEEP_ANALYSIS = /(compara|comparar|comparación|contradic|más confiable|analiza|análisis|investiga)/i
 
-/** Reglas de modo automático para búsqueda web. Solo eventos de actualidad, nada por el volumen de texto. */
+/**
+ * Reglas de modo automático para búsqueda web: actualidad y datos del mundo real que cambian
+ * (clima, divisas). Nunca se activa por el volumen de texto ni por datos de la tienda.
+ */
 export function needsWebSearch(message: string): boolean {
-  return CURRENT_EVENTS.test(message)
+  return CURRENT_EVENTS.test(message) || LIVE_WORLD_DATA.test(message)
 }
 
 /** Reglas de modo automático para razonamiento: comparaciones y análisis, no preguntas sencillas. */
