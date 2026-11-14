@@ -10,6 +10,7 @@ export interface TwoFactorTempPayload {
   ip?: string
   country?: string | null
   acceptLanguage?: string
+  clientApp?: string
   purpose: '2fa_login'
 }
 

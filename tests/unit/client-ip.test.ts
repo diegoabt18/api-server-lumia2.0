@@ -68,3 +68,13 @@ describe('TRUST_PROXY=loopback,uniquelocal (API solo accesible por loopback/Dock
     expect(await ipFor('172.18.0.5', '192.0.2.44')).toBe('192.0.2.44')
   })
 })
+
+describe('device id by client application', async () => {
+  const { buildDeviceId } = await import('../../src/common/utils/crypto.utils.js')
+  it('keeps the previous id for the storefront (no client) and separates the admin', () => {
+    const ua = 'Mozilla/5.0 Test'
+    const store = buildDeviceId(ua, { acceptLanguage: 'es-CO' })
+    expect(buildDeviceId(ua, { acceptLanguage: 'es-CO', clientApp: undefined })).toBe(store)
+    expect(buildDeviceId(ua, { acceptLanguage: 'es-CO', clientApp: 'admin' })).not.toBe(store)
+  })
+})

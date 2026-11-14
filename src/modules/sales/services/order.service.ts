@@ -140,6 +140,28 @@ export class OrderService {
     }
   }
 
+  /**
+   * Precio y producto de cada línea desde el catálogo (por SKU). Una variante inexistente o sin
+   * precio válido bloquea el pedido en lugar de cobrarse a 0.
+   */
+  private async repriceCartItems<T extends Pick<CartItemEntity, 'sku' | 'productName' | 'unitPrice' | 'productSlug'>>(
+    items: T[],
+  ): Promise<T[]> {
+    const repriced: T[] = []
+    for (const item of items) {
+      const variant = await this.products.getVariantBySku(item.sku)
+      if (!variant || !(typeof variant.price === 'number' && variant.price > 0)) {
+        throw new AppError(
+          409,
+          `${item.productName || item.sku} ya no está disponible. Quítalo del carrito para continuar.`,
+          'CART_ITEM_UNAVAILABLE',
+        )
+      }
+      repriced.push({ ...item, unitPrice: variant.price, productSlug: variant.product_slug })
+    }
+    return repriced
+  }
+
   /** Fotografía modalidad y política desde el inventario de Server. Un SKU sin registro es `stock`. */
   private async loadFulfillment(skus: string[]): Promise<Map<string, LineFulfillmentSnapshot>> {
     const snapshots = new Map<string, LineFulfillmentSnapshot>()
@@ -323,8 +345,10 @@ export class OrderService {
     userEmail: string | null,
   ) {
     // Se relee dentro del bloqueo: otro checkout pudo vaciarlo justo antes.
-    const cart = await this.carts.findByKey(cartKey)
-    if (!cart?.items.length) throw AppError.badRequest('El carrito está vacío')
+    const stored = await this.carts.findByKey(cartKey)
+    if (!stored?.items.length) throw AppError.badRequest('El carrito está vacío')
+    // Precios vigentes del catálogo: el precio guardado en el carrito no es autoritativo.
+    const cart = { ...stored, items: await this.repriceCartItems(stored.items) }
 
     await this.validateCartInventory(cart.items)
 
@@ -415,7 +439,7 @@ export class OrderService {
 
     const fulfillment = await this.loadFulfillment(cart.items.map((i) => i.sku))
     const { items, financials } = await this.finalizeItems(
-      mapCartItemsToOrderItems(cart.items, new Map(), fulfillment),
+      mapCartItemsToOrderItems(await this.repriceCartItems(cart.items), new Map(), fulfillment),
       fulfillment,
     )
     return {

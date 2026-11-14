@@ -61,6 +61,7 @@ export class AuthService {
     ip?: string
     country?: string | null
     acceptLanguage?: string
+    clientApp?: string
   }): Promise<LoginResult> {
     const env = getEnv()
     if (!env.AUTH_LOCAL_ENABLED) {
@@ -113,6 +114,7 @@ export class AuthService {
         ip: params.ip,
         country: params.country,
         acceptLanguage: params.acceptLanguage,
+        clientApp: params.clientApp,
       })
       return { requires2fa: true as const, tempToken, userId: user._id! }
     }
@@ -123,6 +125,7 @@ export class AuthService {
       ip: params.ip,
       country: params.country,
       acceptLanguage: params.acceptLanguage,
+      clientApp: params.clientApp,
     })
 
     await this.authAudit?.log({
@@ -429,6 +432,7 @@ export class AuthService {
       ip?: string
       country?: string | null
       acceptLanguage?: string
+      clientApp?: string
     },
   ) {
     const env = getEnv()
@@ -443,7 +447,10 @@ export class AuthService {
       ? parseDurationMs(env.JWT_REFRESH_REMEMBER_EXPIRES_IN, 30 * 86400000)
       : parseDurationMs(env.JWT_REFRESH_EXPIRES_IN, 7 * 86400000)
 
-    const deviceId = buildDeviceId(meta.userAgent, { acceptLanguage: meta.acceptLanguage })
+    const deviceId = buildDeviceId(meta.userAgent, {
+      acceptLanguage: meta.acceptLanguage,
+      clientApp: meta.clientApp,
+    })
     const parsed = parseUserAgent(meta.userAgent)
     const plainRefresh = generateRefreshToken()
     const refreshHash = hashRefreshToken(plainRefresh)

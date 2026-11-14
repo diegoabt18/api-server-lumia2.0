@@ -8,8 +8,16 @@ export function hashRefreshToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
 }
 
-export function buildDeviceId(userAgent?: string, extras?: { acceptLanguage?: string }): string {
-  const raw = [userAgent ?? '', extras?.acceptLanguage ?? ''].join('|')
+/**
+ * Identificador de dispositivo de una sesión. Un nuevo login revoca las sesiones del mismo usuario
+ * en el mismo dispositivo. `clientApp` separa aplicaciones (tienda y Lumia Admin) que comparten
+ * navegador: sin él, entrar en el admin cerraba la sesión de la tienda y al revés.
+ */
+export function buildDeviceId(
+  userAgent?: string,
+  extras?: { acceptLanguage?: string; clientApp?: string },
+): string {
+  const raw = [userAgent ?? '', extras?.acceptLanguage ?? '', ...(extras?.clientApp ? [extras.clientApp] : [])].join('|')
   return createHash('sha256').update(raw).digest('hex').slice(0, 32)
 }
 

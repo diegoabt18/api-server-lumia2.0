@@ -274,7 +274,18 @@ describe('G3 — cotización autoritativa del carrito', () => {
       {} as never,
       {} as never,
       {} as never,
-      { findTaxRatesBySlugs: vi.fn(async () => new Map()) } as never,
+      {
+        findTaxRatesBySlugs: vi.fn(async () => new Map()),
+        getVariantBySku: vi.fn(async (sku: string) => {
+          const prices: Record<string, [number, string]> = {
+            'LAMP-01': [100000, 'lampara'],
+            'MESA-01': [1000000, 'mesa'],
+            'EST-01': [500000, 'estanteria'],
+          }
+          const hit = prices[sku]
+          return hit ? { sku, price: hit[0], product_slug: hit[1] } : null
+        }),
+      } as never,
       undefined,
     )
 

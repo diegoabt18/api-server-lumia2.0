@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { AppContext } from '../app.context.js'
 import { AppError } from '../common/errors/app.error.js'
@@ -62,6 +63,25 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
   }
 
   const userIdOf = (request: unknown): string => (request as AuthenticatedRequest).auth.userId
+
+  /**
+   * Guarda en el historial un turno resuelto por reglas (recordatorios), sin llamar al modelo, y
+   * devuelve el id de la conversación. Sin asistente configurado no hay historial que guardar.
+   */
+  const saveAutomatedTurn = async (
+    request: FastifyRequest,
+    message: string,
+    answer: string,
+    conversationId: string | undefined,
+  ): Promise<string> => {
+    if (!client) return conversationId ?? randomUUID()
+    try {
+      return (await client.recordExchange(userIdOf(request), message, answer, conversationId)).conversationId
+    } catch (err) {
+      request.log.warn({ err }, 'Lumi automated turn not saved')
+      return conversationId ?? randomUUID()
+    }
+  }
 
   /**
    * Pedidos recientes: herramienta de solo lectura. Usa el servicio de administración con el
@@ -173,7 +193,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     const automated = await ctx.services.lumiCommands.handle(userIdOf(request), parsed.data.message)
     if (automated !== null) {
       return {
-        conversationId: parsed.data.conversationId ?? '',
+        conversationId: await saveAutomatedTurn(request, parsed.data.message, automated, parsed.data.conversationId),
         model: 'lumi-automation',
         response: automated,
       }
@@ -224,6 +244,12 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
 
       const automated = await ctx.services.lumiCommands.handle(userIdOf(request), parsed.data.message)
       if (automated !== null) {
+        const conversationId = await saveAutomatedTurn(
+          request,
+          parsed.data.message,
+          automated,
+          parsed.data.conversationId,
+        )
         reply.hijack()
         reply.raw.writeHead(200, {
           'Content-Type': 'text/event-stream; charset=utf-8',
@@ -233,7 +259,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
         })
         reply.raw.write(`event: token\ndata: ${JSON.stringify({ text: automated })}\n\n`)
         reply.raw.write(
-          `event: done\ndata: ${JSON.stringify({ conversationId: parsed.data.conversationId ?? '' })}\n\n`,
+          `event: done\ndata: ${JSON.stringify({ conversationId })}\n\n`,
         )
         reply.raw.end()
         return

@@ -219,3 +219,12 @@ describe('activity audit plugin (Fastify real)', () => {
     await app.close()
   })
 })
+
+describe('unwrap', async () => {
+  const { unwrap } = await import('../../src/modules/admin-activity/activity-audit.plugin.js')
+  it('picks the resource object out of a service response', () => {
+    expect(unwrap({ category: { name: 'A' }, subcategories: [] }, 'category')).toEqual({ name: 'A' })
+    expect(unwrap({ data: { flatRate: 1 } })).toEqual({ flatRate: 1 })
+    expect(unwrap({ a: 1, b: 2 }, 'category')).toEqual({ a: 1, b: 2 })
+  })
+})

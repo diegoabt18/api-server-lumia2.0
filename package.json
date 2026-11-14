@@ -17,6 +17,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run -c vitest.integration.config.ts",
+    "test:e2e": "vitest run -c vitest.e2e.config.ts",
     "test:coverage": "vitest run --coverage",
     "seed": "tsx scripts/seed.ts",
     "backup:mongo": "tsx scripts/backup-mongo.ts",

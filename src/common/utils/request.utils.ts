@@ -38,8 +38,16 @@ export function getClientIp(request: FastifyRequest): string {
   return trustedProxyClientIp(request, getEnv().EDGE_PROXY_SECRET) ?? request.ip
 }
 
+/** Aplicación que inicia la sesión (cabecera X-Lumia-Client: p. ej. "admin"); vacío = tienda. */
+export function clientAppOf(request: FastifyRequest): string | undefined {
+  const raw = request.headers['x-lumia-client']
+  const value = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+  return /^[a-z][a-z0-9-]{0,19}$/.test(value) ? value : undefined
+}
+
 export function getClientContext(request: FastifyRequest) {
   return {
+    clientApp: clientAppOf(request),
     ip: getClientIp(request),
     userAgent: request.headers['user-agent'] ?? '',
     country: (request.headers['cf-ipcountry'] as string | undefined) ?? null,

@@ -149,6 +149,7 @@ export async function registerApiRoutes(app: FastifyInstance) {
         ip: ctx.ip,
         country: ctx.country,
         acceptLanguage: request.headers['accept-language'],
+        clientApp: ctx.clientApp,
       })
 
       if ('requires2fa' in result && result.requires2fa) {

@@ -91,6 +91,14 @@ function setup(
   const products = {
     findTaxRatesBySlugs: vi.fn(async () => new Map<string, number | null>()),
     findBySlugOrId: vi.fn(async (idOrSlug: string) => CATALOG[idOrSlug] ?? null),
+    // Precio autoritativo por SKU (el del carrito no cuenta).
+    getVariantBySku: vi.fn(async (sku: string) => {
+      for (const p of Object.values(CATALOG)) {
+        const v = p.variants.find((x) => x.sku === sku)
+        if (v) return { sku, price: v.price, product_slug: p.slug, currency: 'COP' }
+      }
+      return null
+    }),
   }
   const logger = { error: vi.fn(), info: vi.fn(), warn: vi.fn() }
   const costSheets = {
@@ -129,6 +137,24 @@ const EST_PERCENT: DepositPolicy = { type: 'percent', value: 35 }
 
 describe('checkout desde carrito (ruta principal)', () => {
   beforeEach(() => vi.clearAllMocks())
+
+  it('el precio del carrito no es autoritativo: se cobra el del catálogo', async () => {
+    const { service, orders } = setup(
+      { 'LAMP-01': { isPerOrder: false, available: 10, depositPolicy: null } },
+      // Carrito manipulado: precio 0 y slug falso.
+      [{ ...cartLine('LAMP-01', 'lampara', 0), productSlug: 'otro' }],
+    )
+    await service.createFromCheckout('cart-price', shipping, null, null)
+    const saved = orders.createOrder.mock.calls[0]![0] as Record<string, unknown>
+    expect(saved.total).toBe(100000)
+  })
+
+  it('un SKU que ya no existe bloquea el pedido en lugar de cobrarse a 0', async () => {
+    const { service, orders } = setup({}, [{ ...cartLine('LAMP-01', 'lampara', 100000), sku: 'BORRADO-1' }])
+    const error = await service.createFromCheckout('cart-gone', shipping, null, null).catch((e: unknown) => e)
+    expect(error).toMatchObject({ statusCode: 409, code: 'CART_ITEM_UNAVAILABLE' })
+    expect(orders.createOrder).not.toHaveBeenCalled()
+  })
 
   it('doble envío simultáneo: solo se crea un pedido y el segundo recibe 409', async () => {
     const { service, orders, carts } = setup(

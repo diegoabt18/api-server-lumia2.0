@@ -81,9 +81,15 @@ export function resourceFromRoute(pattern: string, params: Params): ActivityReso
   return { type, id: id ?? null }
 }
 
-/** Una instantánea "{ product: {...} }" o "{ data: {...} }" se reduce al objeto interior. */
-function unwrap(value: unknown): unknown {
+/**
+ * Reduce la respuesta de un servicio al objeto del recurso: "{ category: {...}, subcategories }"
+ * → la categoría; "{ data: {...} }" → su contenido. Así los cambios quedan campo a campo.
+ */
+export function unwrap(value: unknown, type?: string): unknown {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>
+    const own = type ? record[type] : undefined
+    if (own && typeof own === 'object' && !Array.isArray(own)) return own
     const keys = Object.keys(value)
     if (keys.length === 1) {
       const inner = (value as Record<string, unknown>)[keys[0]!]
@@ -101,6 +107,7 @@ export function resultFor(statusCode: number): ActivityResult {
 interface ActivityState {
   pattern: string
   before?: unknown
+  type?: string
   loader?: Loader
   errorCode?: string | null
 }
@@ -137,8 +144,9 @@ export default fp(async (app) => {
     // Sin credenciales la petición será rechazada: no se lee la base por ella.
     if (!request.headers.authorization && !request.cookies?.[ctx.env.COOKIE_ACCESS_NAME]) return
     state.loader = snapshot.load
+    state.type = snapshot.type
     try {
-      state.before = unwrap(sanitize(await snapshot.load(ctx, request.params as Params)))
+      state.before = unwrap(sanitize(await snapshot.load(ctx, request.params as Params)), snapshot.type)
     } catch {
       state.before = null // el recurso no existe o no se pudo leer: el handler decidirá
     }
@@ -170,7 +178,7 @@ export default fp(async (app) => {
     if (result === 'success' && state.loader) {
       let after: unknown = null
       try {
-        after = unwrap(sanitize(await state.loader(ctx, params)))
+        after = unwrap(sanitize(await state.loader(ctx, params)), state.type)
       } catch {
         after = null // eliminado
       }

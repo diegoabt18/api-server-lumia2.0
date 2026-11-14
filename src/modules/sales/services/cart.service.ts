@@ -32,14 +32,20 @@ export class CartService {
   }
 
   async addItem(cartKey: string, dto: AddCartItemDto, userId?: string | null) {
-    const unitPrice = await this.resolveUnitPrice(dto.sku, dto.product?.productSlug)
+    // Precio y producto salen SIEMPRE del catálogo por SKU: lo que envía el navegador es solo para
+    // mostrar. Antes el precio se buscaba con el slug enviado y, si no coincidía, quedaba en 0.
+    const variant = await this.products.getVariantBySku(dto.sku)
+    if (!variant || !(typeof variant.price === 'number' && variant.price > 0)) {
+      throw AppError.notFound('Producto no disponible')
+    }
+    const unitPrice = variant.price
     const cart = await this.carts.findByKey(cartKey)
     const items = [...(cart?.items ?? [])]
     const idx = items.findIndex((i) => i.sku === dto.sku)
 
     const line: CartItemEntity = {
       sku: dto.sku,
-      productSlug: dto.product?.productSlug ?? '',
+      productSlug: variant.product_slug,
       productName: dto.product?.productName ?? dto.sku,
       variantLabel: dto.product?.variantLabel,
       quantity: dto.quantity,
@@ -80,12 +86,4 @@ export class CartService {
     await this.carts.mergeGuestIntoUser(guestKey, userId)
   }
 
-  private async resolveUnitPrice(sku: string, productSlug?: string): Promise<number> {
-    if (productSlug) {
-      const product = await this.products.findBySlugOrId(productSlug)
-      const variant = product?.variants?.find((v) => v.sku === sku)
-      if (variant?.price != null) return variant.price
-    }
-    return 0
-  }
 }

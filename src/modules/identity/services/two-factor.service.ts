@@ -117,6 +117,7 @@ export class TwoFactorService {
       ip: payload.ip ?? params.ip,
       country: payload.country,
       acceptLanguage: payload.acceptLanguage,
+      clientApp: payload.clientApp,
     })
 
     await this.authAudit.log({
@@ -143,6 +144,7 @@ export class TwoFactorService {
       ip?: string
       country?: string | null
       acceptLanguage?: string
+      clientApp?: string
     },
   ) {
     return signTwoFactorTempToken({ userId, ...meta })
