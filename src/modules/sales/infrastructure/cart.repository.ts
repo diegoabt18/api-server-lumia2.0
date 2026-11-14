@@ -23,7 +23,12 @@ interface CartDocument {
   userId?: string | null
   items: LegacyCartItem[]
   updatedAt: Date
+  /** Checkout en curso (evita pedidos duplicados por doble envío). */
+  checkoutLockedAt?: Date | null
 }
+
+/** Un checkout bloqueado más tiempo que esto se considera interrumpido. */
+export const CHECKOUT_LOCK_TTL_MS = 60_000
 
 function mapLegacyItem(item: LegacyCartItem): CartItemEntity {
   return {
@@ -108,6 +113,37 @@ export class CartRepository extends BaseRepository<CartDocument> {
       { upsert: true },
     )
     return { cartKey, userId: userId ?? null, items, updatedAt: now }
+  }
+
+  /**
+   * Reserva el carrito para un checkout (atómico, válido con varias instancias). Devuelve false si
+   * otro checkout del mismo carrito está en curso.
+   */
+  async claimCheckout(cartKey: string, now = new Date()): Promise<boolean> {
+    const staleBefore = new Date(now.getTime() - CHECKOUT_LOCK_TTL_MS)
+    const result = await this.collection.updateOne(
+      {
+        $and: [
+          { $or: [{ cartKey }, { userId: cartKey }] },
+          {
+            $or: [
+              { checkoutLockedAt: { $exists: false } },
+              { checkoutLockedAt: null },
+              { checkoutLockedAt: { $lt: staleBefore } },
+            ],
+          },
+        ],
+      } as never,
+      { $set: { checkoutLockedAt: now } },
+    )
+    return result.matchedCount > 0
+  }
+
+  async releaseCheckout(cartKey: string): Promise<void> {
+    await this.collection.updateOne(
+      { $or: [{ cartKey }, { userId: cartKey }] } as never,
+      { $set: { checkoutLockedAt: null } },
+    )
   }
 
   async clear(cartKey: string): Promise<void> {

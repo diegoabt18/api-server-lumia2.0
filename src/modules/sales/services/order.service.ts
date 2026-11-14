@@ -305,6 +305,27 @@ export class OrderService {
     const cart = await this.carts.findByKey(cartKey)
     if (!cart?.items.length) throw AppError.badRequest('El carrito está vacío')
 
+    // Doble clic o reintento simultáneo: solo un checkout por carrito a la vez.
+    if (!(await this.carts.claimCheckout(cartKey))) {
+      throw new AppError(409, 'Ya estamos procesando tu pedido. Espera un momento.', 'CHECKOUT_IN_PROGRESS')
+    }
+    try {
+      return await this.createFromClaimedCart(cartKey, shipping, userId, userEmail)
+    } finally {
+      await this.carts.releaseCheckout(cartKey).catch(() => undefined)
+    }
+  }
+
+  private async createFromClaimedCart(
+    cartKey: string,
+    shipping: CheckoutShippingDto,
+    userId: string | null,
+    userEmail: string | null,
+  ) {
+    // Se relee dentro del bloqueo: otro checkout pudo vaciarlo justo antes.
+    const cart = await this.carts.findByKey(cartKey)
+    if (!cart?.items.length) throw AppError.badRequest('El carrito está vacío')
+
     await this.validateCartInventory(cart.items)
 
     const taxRates = await this.products.findTaxRatesBySlugs(cart.items.map((i) => i.productSlug))

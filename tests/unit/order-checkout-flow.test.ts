@@ -75,9 +75,18 @@ function setup(
     listPaymentsByOrderId: vi.fn(async () => []),
     savePayment: vi.fn(async (p: { _id?: string }) => p._id ?? 'payment-id'),
   }
+  let checkoutLocked = false
   const carts = {
     findByKey: vi.fn(async () => ({ items: cartItems })),
     clear: vi.fn(async () => undefined),
+    claimCheckout: vi.fn(async () => {
+      if (checkoutLocked) return false
+      checkoutLocked = true
+      return true
+    }),
+    releaseCheckout: vi.fn(async () => {
+      checkoutLocked = false
+    }),
   }
   const products = {
     findTaxRatesBySlugs: vi.fn(async () => new Map<string, number | null>()),
@@ -104,7 +113,7 @@ function setup(
     costSheets as never,
     logger as never,
   )
-  return { service, orders, payments, inventoryState, manualPayments, logger }
+  return { service, orders, payments, inventoryState, manualPayments, logger, carts }
 }
 
 const shipping = {
@@ -120,6 +129,21 @@ const EST_PERCENT: DepositPolicy = { type: 'percent', value: 35 }
 
 describe('checkout desde carrito (ruta principal)', () => {
   beforeEach(() => vi.clearAllMocks())
+
+  it('doble envío simultáneo: solo se crea un pedido y el segundo recibe 409', async () => {
+    const { service, orders, carts } = setup(
+      { 'LAMP-01': { isPerOrder: false, available: 10, depositPolicy: null } },
+      [cartLine('LAMP-01', 'lampara', 100000)],
+    )
+    const [first, second] = await Promise.allSettled([
+      service.createFromCheckout('cart-dup', shipping, null, null),
+      service.createFromCheckout('cart-dup', shipping, null, null),
+    ])
+    expect(first.status).toBe('fulfilled')
+    expect(second).toMatchObject({ status: 'rejected', reason: { code: 'CHECKOUT_IN_PROGRESS' } })
+    expect(orders.createOrder).toHaveBeenCalledTimes(1)
+    expect(carts.releaseCheckout).toHaveBeenCalledTimes(1)
+  })
 
   it('pedido mixto: cobra 100 % del stock y solo el anticipo de cada producto por pedido', async () => {
     const { service, orders, payments } = setup(
