@@ -51,10 +51,21 @@ const envSchema = z.object({
   LOGIN_LOCK_WINDOW_SECONDS: z.coerce.number().int().min(60).default(900),
   /**
    * Proxies de confianza para calcular la IP del cliente (opción trustProxy de Fastify):
-   * 'true' (todos, comportamiento anterior), 'false', un número de saltos o una lista de IP/CIDR
-   * separadas por coma. Con 'true' la IP sale de X-Forwarded-For y el cliente puede falsearla.
+   * 'true', 'false', un número de saltos o una lista de IP/CIDR/nombres de proxy-addr separados
+   * por coma. Por defecto loopback y redes privadas (cloudflared en el host y red Docker). Con
+   * 'true' la IP sale del X-Forwarded-For más a la izquierda y el cliente puede falsearla.
    */
-  TRUST_PROXY: z.string().default('true'),
+  TRUST_PROXY: z.string().default('loopback,uniquelocal'),
+  /**
+   * Secreto compartido con los proxies propios (BFF de Lumia Admin y Worker de Lumia 2.0). Con él,
+   * la cabecera X-Lumia-Client-IP se acepta como IP real del cliente. Mínimo 32 caracteres.
+   */
+  EDGE_PROXY_SECRET: z.string().min(32).optional(),
+  /**
+   * Clave HMAC de la cadena de auditoría administrativa. Sin ella se deriva de JWT_SECRET (rotar
+   * JWT_SECRET invalidaría la verificación de los registros anteriores). Mínimo 32 caracteres.
+   */
+  ADMIN_AUDIT_SIGNING_KEY: z.string().min(32).optional(),
   /** Swagger UI en /docs. Sin valor: activo fuera de producción, desactivado en producción. */
   SWAGGER_ENABLED: z
     .string()

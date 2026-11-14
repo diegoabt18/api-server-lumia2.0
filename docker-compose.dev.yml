@@ -49,7 +49,7 @@ x-api-dev: &api-dev
     - ./tsconfig.json:/app/tsconfig.json
     - ./tsconfig.build.json:/app/tsconfig.build.json
   ports:
-    - '${PORT:-3001}:3001'
+    - '${API_BIND_ADDRESS:-127.0.0.1}:${PORT:-3001}:3001'
   healthcheck:
     disable: true
 
@@ -57,7 +57,7 @@ services:
   mongo:
     profiles: [local]
     ports:
-      - '27017:27017'
+      - '127.0.0.1:27017:27017'
 
   redis:
     profiles: [local, atlas, prod]
@@ -71,10 +71,10 @@ services:
       - .env.development
     environment:
       <<: *api-dev-env
-      MONGO_AUTH_URI: mongodb://lumia:lumia_secret@mongo:27017/?authSource=admin
-      MONGO_CATALOG_URI: mongodb://lumia:lumia_secret@mongo:27017/?authSource=admin
-      MONGO_SALES_URI: mongodb://lumia:lumia_secret@mongo:27017/?authSource=admin
-      MONGO_PRODUCTION_URI: mongodb://lumia:lumia_secret@mongo:27017/?authSource=admin
+      MONGO_AUTH_URI: mongodb://${MONGO_ROOT_USER:-lumia}:${MONGO_ROOT_PASSWORD:-}@mongo:27017/?authSource=admin
+      MONGO_CATALOG_URI: mongodb://${MONGO_ROOT_USER:-lumia}:${MONGO_ROOT_PASSWORD:-}@mongo:27017/?authSource=admin
+      MONGO_SALES_URI: mongodb://${MONGO_ROOT_USER:-lumia}:${MONGO_ROOT_PASSWORD:-}@mongo:27017/?authSource=admin
+      MONGO_PRODUCTION_URI: mongodb://${MONGO_ROOT_USER:-lumia}:${MONGO_ROOT_PASSWORD:-}@mongo:27017/?authSource=admin
 
   api-atlas:
     <<: *api-dev
@@ -105,13 +105,22 @@ services:
     networks:
       - lumia-network
     ports:
-      - '8081:8081'
+      - '127.0.0.1:8081:8081'
+    # Sin credenciales por defecto: definir MONGO_EXPRESS_PASSWORD en server/.env.
+    init: true
+    entrypoint:
+      - sh
+      - -c
+      - '[ -n "$$ME_CONFIG_BASICAUTH_PASSWORD" ] || { echo "MONGO_EXPRESS_PASSWORD no definida (server/.env)" >&2; exit 1; }; exec /docker-entrypoint.sh "$$@"'
+      - mongo-express-entrypoint
+    command: ['mongo-express']
     environment:
       ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USER:-lumia}
-      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD:-lumia_secret}
-      ME_CONFIG_MONGODB_URL: mongodb://${MONGO_ROOT_USER:-lumia}:${MONGO_ROOT_PASSWORD:-lumia_secret}@mongo:27017/
-      ME_CONFIG_BASICAUTH_USERNAME: admin
-      ME_CONFIG_BASICAUTH_PASSWORD: admin
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD:-}
+      ME_CONFIG_MONGODB_URL: mongodb://${MONGO_ROOT_USER:-lumia}:${MONGO_ROOT_PASSWORD:-}@mongo:27017/
+      ME_CONFIG_BASICAUTH: 'true'
+      ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USER:-admin}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASSWORD:-}
     depends_on:
       mongo:
         condition: service_healthy

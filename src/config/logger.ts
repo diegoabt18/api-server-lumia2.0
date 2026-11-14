@@ -30,6 +30,13 @@ export function getFastifyLoggerOptions(env: Env) {
         }
       : {}),
     base: { app: env.APP_NAME, env: env.NODE_ENV },
-    redact: ['req.headers.authorization', 'req.headers.cookie', 'password', 'passwordHash'],
+    redact: [
+      'req.headers.authorization',
+      'req.headers.cookie',
+      'req.headers["x-lumia-proxy-secret"]',
+      'req.headers["x-api-key"]',
+      'password',
+      'passwordHash',
+    ],
   }
 }

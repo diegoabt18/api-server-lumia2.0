@@ -9,8 +9,10 @@ x-api-common: &api-common
   networks:
     - lumia-network
   depends_on:
+    # Producción usa MongoDB Atlas: el Mongo del compose solo existe en el perfil `local`.
     mongo:
       condition: service_healthy
+      required: false
     redis:
       condition: service_healthy
   volumes:
@@ -26,8 +28,10 @@ x-api-common: &api-common
 services:
   api:
     <<: *api-common
+    # Solo loopback por defecto: cloudflared (en el host) llega por localhost y Lumia Admin por la
+    # red Docker. Publicar en otra interfaz (API_BIND_ADDRESS=0.0.0.0) expone la API sin Cloudflare.
     ports:
-      - '${PORT:-3001}:3001'
+      - '${API_BIND_ADDRESS:-127.0.0.1}:${PORT:-3001}:3001'
     env_file:
       - .env.production
     # Linux: permite que el contenedor llegue a Postfix en el host (puerto 25)
@@ -36,12 +40,21 @@ services:
 
   mongo:
     image: mongo:7
+    # Solo desarrollo local (producción usa Atlas). Sin contraseña por defecto: definir
+    # MONGO_ROOT_PASSWORD en server/.env; sin ella el contenedor se niega a arrancar.
+    profiles: [local]
     restart: unless-stopped
     networks:
       - lumia-network
+    entrypoint:
+      - sh
+      - -c
+      - '[ -n "$$MONGO_INITDB_ROOT_PASSWORD" ] || { echo "MONGO_ROOT_PASSWORD no definida (server/.env)" >&2; exit 1; }; exec docker-entrypoint.sh "$$@"'
+      - mongo-entrypoint
+    command: ['mongod']
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-lumia}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-lumia_secret}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-}
     volumes:
       - mongo-data:/data/db
       - ./docker/mongo/init-databases.js:/docker-entrypoint-initdb.d/init-databases.js:ro
@@ -57,11 +70,18 @@ services:
     restart: unless-stopped
     networks:
       - lumia-network
-    command: redis-server --appendonly yes
+    # REDIS_PASSWORD (opcional) activa requirepass. Si se define, REDIS_URL de la API y
+    # REDIS_PASSWORD del asistente deben incluirla.
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    command:
+      - sh
+      - -c
+      - 'if [ -n "$$REDIS_PASSWORD" ]; then exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"; else exec redis-server --appendonly yes; fi'
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
+      test: ['CMD-SHELL', 'if [ -n "$$REDIS_PASSWORD" ]; then export REDISCLI_AUTH="$$REDIS_PASSWORD"; fi; redis-cli ping | grep -q PONG']
       interval: 10s
       timeout: 5s
       retries: 5

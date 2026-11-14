@@ -93,6 +93,8 @@ import { VariantPriceRepostService } from './modules/production/services/variant
 import { UnitService } from './modules/production/services/unit.service.js'
 import { ProductionConfigService } from './modules/production/services/production-config.service.js'
 import { ProductionAuditService, ProductionDashboardService } from './modules/production/services/dashboard.service.js'
+import { ActivityAuditRepository } from './modules/admin-activity/infrastructure/activity-audit.repository.js'
+import { activityAuditKey } from './modules/admin-activity/domain/signing-key.js'
 import { AuthAuditRepository } from './modules/identity/infrastructure/auth-audit.repository.js'
 import { TwoFactorRepository } from './modules/identity/infrastructure/two-factor.repository.js'
 import { PosCustomerRepository } from './modules/identity/infrastructure/pos-customer.repository.js'
@@ -145,6 +147,8 @@ export interface AppContext {
   /** Scheduler único del motor de automatización de Lumi. Se arranca desde server.ts. */
   automation: AutomationScheduler
   initiatives: InitiativeScheduler
+  /** Registro de actividad administrativa (solo inserción, HMAC encadenado). */
+  activityAudit: ActivityAuditRepository
   repos: {
     users: UserRepository
     sessions: SessionRepository
@@ -312,6 +316,10 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   const productionRecipeVersionsRepo = new RecipeVersionRepository(productionDb)
   const productionCostSheetsRepo = new CostSheetRepository(productionDb)
   const authAudit = new AuthAuditRepository(identityDb)
+  const activityAudit = new ActivityAuditRepository(identityDb, activityAuditKey(env))
+  await activityAudit
+    .ensureIndexes()
+    .catch((err) => logger.warn({ err }, 'admin activity audit indexes skipped'))
   const twoFactorRepo = new TwoFactorRepository(identityDb)
   const posCustomers = new PosCustomerRepository(identityDb)
   const financialOutbox = new FinancialOutboxRepository(salesDb)
@@ -614,6 +622,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     cache,
     automation,
     initiatives,
+    activityAudit,
     repos: {
       users,
       sessions,

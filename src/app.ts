@@ -5,6 +5,7 @@ import { createAppContext, shutdownAppContext } from './app.context.js'
 import contextPlugin, { configPlugin } from './plugins/context.plugin.js'
 import securityPlugin from './plugins/security.plugin.js'
 import swaggerPlugin from './plugins/swagger.plugin.js'
+import activityAuditPlugin from './modules/admin-activity/activity-audit.plugin.js'
 import { registerErrorHandler, registerHealthRoutes, registerApiRoutes } from './routes/index.js'
 
 export async function buildApp() {
@@ -25,6 +26,8 @@ export async function buildApp() {
   await app.register(contextPlugin)
   await app.register(securityPlugin)
   await app.register(swaggerPlugin)
+  // Antes de las rutas: los hooks solo se aplican a las rutas registradas después.
+  await app.register(activityAuditPlugin)
 
   registerErrorHandler(app)
   await registerHealthRoutes(app)

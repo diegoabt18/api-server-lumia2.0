@@ -5,6 +5,7 @@ import compress from '@fastify/compress'
 import cookie from '@fastify/cookie'
 import rateLimit from '@fastify/rate-limit'
 import { getCorsOrigins } from '../config/env.js'
+import { getClientIp } from '../common/utils/request.utils.js'
 
 export default fp(async (app) => {
   const env = app.ctx.env
@@ -35,6 +36,8 @@ export default fp(async (app) => {
     redis: app.ctx.redis.getClient() ?? undefined,
     skipOnError: true,
     nameSpace: 'lumia-api-rl-',
+    // Límite por cliente real: los proxies propios declaran su IP (ver getClientIp).
+    keyGenerator: (request) => getClientIp(request),
   })
 
   app.addHook('onRequest', async (request, reply) => {
