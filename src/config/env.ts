@@ -121,6 +121,13 @@ const envSchema = z.object({
   /** Clave de servicio servidor ↔ ia-asistente (X-API-Key). Nunca se expone al navegador. */
   LUMI_ASSISTANT_API_KEY: z.string().min(16).optional(),
   LUMI_ASSISTANT_TIMEOUT_MS: z.coerce.number().int().min(1000).default(120000),
+
+  // Motor de automatización de Lumi (scheduler + worker). Sin Qwen en la Fase 1.
+  LUMI_AUTOMATION_ENABLED: z
+    .string()
+    .transform((v) => v === 'true')
+    .default('true'),
+  LUMI_AUTOMATION_TICK_MS: z.coerce.number().int().min(5000).default(30000),
 })
 
 export type Env = z.infer<typeof envSchema>

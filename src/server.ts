@@ -18,7 +18,12 @@ async function main() {
   process.on('SIGTERM', () => void shutdown('SIGTERM'))
 
   await app.listen({ host: env.HOST, port: env.PORT })
-  app.log.info(`Lumia API listening on ${env.HOST}:${env.PORT}`)
+  if (env.LUMI_AUTOMATION_ENABLED) {
+    app.ctx.automation.start()
+    app.ctx.initiatives.start()
+    app.log.info(`Lumi automation scheduler started (tick ${env.LUMI_AUTOMATION_TICK_MS} ms)`)
+  }
+  app.log.info(`Lumi API listening on ${env.HOST}:${env.PORT}`)
   app.log.info(`Public URL: ${env.APP_URL}`)
   app.log.info(`Swagger: ${env.APP_URL}/docs`)
 }

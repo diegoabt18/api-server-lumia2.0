@@ -28,6 +28,21 @@ function toEntity(doc: OrderDocument): OrderEntity {
 export class OrderRepository extends BaseRepository<OrderDocument> {
   private readonly db: Db
 
+  /** Pedidos pagados y aún sin despachar desde antes de `before` (para iniciativas de Lumi). Solo datos mínimos. */
+  async findPaidBefore(before: Date, limit: number): Promise<Array<{ id: string; orderNumber: string | null; createdAt: Date }>> {
+    const docs = await this.collection
+      .find({ status: 'paid', createdAt: { $lt: before } } as never, {
+        projection: { orderNumber: 1, createdAt: 1 },
+        sort: { createdAt: 1 },
+        limit,
+      })
+      .toArray()
+    return docs.map((doc) => {
+      const row = doc as unknown as { _id: { toString(): string }; orderNumber?: string; createdAt: Date }
+      return { id: row._id.toString(), orderNumber: row.orderNumber ?? null, createdAt: row.createdAt }
+    })
+  }
+
   constructor(db: Db) {
     super(getCollection(db, 'orders'))
     this.db = db

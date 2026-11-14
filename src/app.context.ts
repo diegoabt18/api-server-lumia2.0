@@ -114,6 +114,26 @@ import { SecurityAdminService } from './modules/security/services/security-admin
 import { SecurityEnterpriseService } from './modules/security/services/security-enterprise.service.js'
 import { PermissionCacheService } from './modules/security/services/permission-cache.service.js'
 import { PosSaleService } from './modules/pos/services/pos-sale.service.js'
+import { LumiAutomationRepository } from './modules/lumi/automation/infrastructure/lumi-automation.repository.js'
+import {
+  LocalAutomationLock,
+  RedisAutomationLock,
+  RepositoryNotificationSink,
+} from './modules/lumi/automation/infrastructure/automation-adapters.js'
+import { AutomationWorker, DEFAULT_WORKER_OPTIONS } from './modules/lumi/automation/services/automation-worker.js'
+import {
+  AutomationScheduler,
+  DEFAULT_SCHEDULER_OPTIONS,
+} from './modules/lumi/automation/services/automation-scheduler.js'
+import { LumiTaskManager } from './modules/lumi/automation/services/task-manager.service.js'
+import { AutomationCommands } from './modules/lumi/automation/services/automation-commands.js'
+import { NotificationStreamHub } from './modules/notifications/services/notification-stream.hub.js'
+import { createFollowUpHandler } from './modules/lumi/automation/services/reminder-handlers.js'
+import { LumiInitiativeRepository } from './modules/lumi/initiatives/infrastructure/lumi-initiative.repository.js'
+import { RepositoryInitiativeSources } from './modules/lumi/initiatives/infrastructure/initiative-sources.js'
+import { InitiativeEngine } from './modules/lumi/initiatives/services/initiative-engine.js'
+import { InitiativeScheduler, DEFAULT_INITIATIVE_SCHEDULER_OPTIONS } from './modules/lumi/initiatives/services/initiative-scheduler.js'
+import { LumiInitiativeService } from './modules/lumi/initiatives/services/initiative.service.js'
 
 export interface AppContext {
   env: Env
@@ -121,6 +141,9 @@ export interface AppContext {
   mongo: MongoConnectionManager
   redis: RedisManager
   cache: CacheService
+  /** Scheduler único del motor de automatización de Lumi. Se arranca desde server.ts. */
+  automation: AutomationScheduler
+  initiatives: InitiativeScheduler
   repos: {
     users: UserRepository
     sessions: SessionRepository
@@ -169,6 +192,10 @@ export interface AppContext {
     productionCostSheets: CostSheetRepository
   }
   services: {
+    lumiTasks: LumiTaskManager
+    lumiInitiatives: LumiInitiativeService
+    lumiCommands: AutomationCommands
+    notificationHub: NotificationStreamHub
     auth: AuthService
     authorization: AuthorizationService
     twoFactor: TwoFactorService
@@ -511,12 +538,58 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     permissionCache,
   )
 
+  // Motor de automatización de Lumi (Fase 1): tareas, scheduler y worker. Sin Qwen.
+  const lumiAutomationRepo = new LumiAutomationRepository(identityDb)
+  await lumiAutomationRepo
+    .ensureIndexes()
+    .catch((err) => logger.warn({ err }, 'lumi automation indexes skipped'))
+  const lumiTasks = new LumiTaskManager(lumiAutomationRepo)
+  const notificationHub = new NotificationStreamHub()
+  const automationSink = new RepositoryNotificationSink(notifications, notificationHub)
+  const automationWorker = new AutomationWorker(
+    lumiAutomationRepo,
+    automationSink,
+    { ...DEFAULT_WORKER_OPTIONS, now: () => new Date() },
+    { follow_up: createFollowUpHandler(lumiAutomationRepo, automationSink) },
+  )
+  const lumiCommands = new AutomationCommands(lumiTasks, lumiAutomationRepo, () => new Date())
+
+  // Iniciativas de Lumi (Fase 4): reglas sobre stock, pedidos y rutinas. Sin Qwen. Scheduler propio con lock.
+  const initiativeRepo = new LumiInitiativeRepository(identityDb)
+  await initiativeRepo
+    .ensureIndexes()
+    .catch((err) => logger.warn({ err }, 'lumi initiative indexes skipped'))
+  const initiativeEngine = new InitiativeEngine(
+    initiativeRepo,
+    new RepositoryInitiativeSources(products, orders, lumiAutomationRepo),
+    automationSink,
+    () => new Date(),
+    (err, userId) => logger.error({ err, userId }, 'Lumi initiative run failed for user'),
+  )
+  const initiatives = new InitiativeScheduler(
+    initiativeEngine,
+    redisClient ? new RedisAutomationLock(redisClient) : new LocalAutomationLock(),
+    DEFAULT_INITIATIVE_SCHEDULER_OPTIONS,
+    (err) => logger.error({ err }, 'Lumi initiative scheduler tick failed'),
+  )
+  const lumiInitiatives = new LumiInitiativeService(initiativeRepo)
+  const automation = new AutomationScheduler(
+    lumiAutomationRepo,
+    redisClient ? new RedisAutomationLock(redisClient) : new LocalAutomationLock(),
+    automationWorker,
+    { ...DEFAULT_SCHEDULER_OPTIONS, tickMs: env.LUMI_AUTOMATION_TICK_MS },
+    () => new Date(),
+    (err) => logger.error({ err }, 'Lumi automation tick failed'),
+  )
+
   return {
     env,
     logger,
     mongo,
     redis: redisManager,
     cache,
+    automation,
+    initiatives,
     repos: {
       users,
       sessions,
@@ -565,6 +638,10 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       productionCostSheets: productionCostSheetsRepo,
     },
     services: {
+      lumiTasks,
+      lumiInitiatives,
+      lumiCommands,
+      notificationHub,
       auth,
       authorization,
       twoFactor,
@@ -625,6 +702,8 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
 }
 
 export async function shutdownAppContext(ctx: AppContext): Promise<void> {
+  ctx.automation.stop()
+  ctx.initiatives.stop()
   await ctx.redis.close()
   await ctx.mongo.closeAll()
 }

@@ -14,6 +14,9 @@ import { registerProductionPublicRoutes } from './production-public.routes.js'
 import { registerSecurityRoutes } from './security.routes.js'
 import { registerLumichatRoutes } from './lumichat.routes.js'
 import { registerLumiRoutes } from './lumi.routes.js'
+import { registerLumiAutomationRoutes } from './lumi-automation.routes.js'
+import { registerNotificationStreamRoutes } from './notifications-stream.routes.js'
+import { registerLumiInitiativeRoutes } from './lumi-initiatives.routes.js'
 
 export function registerErrorHandler(app: FastifyInstance) {
   app.setErrorHandler((error, request, reply) => {
@@ -243,6 +246,9 @@ export async function registerApiRoutes(app: FastifyInstance) {
     await registerSecurityRoutes(api, app.ctx)
     await registerLumichatRoutes(api, app.ctx)
     await registerLumiRoutes(api, app.ctx)
+    await registerLumiAutomationRoutes(api, app.ctx)
+    await registerNotificationStreamRoutes(api, app.ctx)
+    await registerLumiInitiativeRoutes(api, app.ctx)
     await registerAdminRoutes(api, app.ctx)
     await registerPosAdminRoutes(api, app.ctx)
     await registerImageRoutes(api, app.ctx)

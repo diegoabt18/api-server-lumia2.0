@@ -169,6 +169,15 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
   api.post('/admin/lumi/chat', { preHandler: g(PERMISSION_REGISTRY.LUMI_USE) }, async (request) => {
     const parsed = lumiChatBodySchema.safeParse(request.body)
     if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+    // Órdenes de recordatorio: se resuelven con reglas y el backend, sin llamar al modelo.
+    const automated = await ctx.services.lumiCommands.handle(userIdOf(request), parsed.data.message)
+    if (automated !== null) {
+      return {
+        conversationId: parsed.data.conversationId ?? '',
+        model: 'lumi-automation',
+        response: automated,
+      }
+    }
     const turn = await resolveTurn(request, parsed.data)
     const result = await requireClient().chat(
       userIdOf(request),
@@ -196,6 +205,23 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     async (request, reply) => {
       const parsed = lumiChatBodySchema.safeParse(request.body)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+
+      const automated = await ctx.services.lumiCommands.handle(userIdOf(request), parsed.data.message)
+      if (automated !== null) {
+        reply.hijack()
+        reply.raw.writeHead(200, {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache, no-transform',
+          Connection: 'keep-alive',
+          'X-Accel-Buffering': 'no',
+        })
+        reply.raw.write(`event: token\ndata: ${JSON.stringify({ text: automated })}\n\n`)
+        reply.raw.write(
+          `event: done\ndata: ${JSON.stringify({ conversationId: parsed.data.conversationId ?? '' })}\n\n`,
+        )
+        reply.raw.end()
+        return
+      }
 
       const controller = new AbortController()
       // Las reglas resuelven lo claro sin modelo. La búsqueda web no cambia esto: los pedidos son

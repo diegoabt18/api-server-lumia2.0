@@ -336,26 +336,46 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
       .toArray()
   }
 
+  /** Disponibilidad por producto: suma de (cantidad - reservado) de sus variantes. */
+  private availabilityStages() {
+    return [
+      { $match: { status: { $ne: 'inactive' } } },
+      { $lookup: { from: 'variants', localField: 'slug', foreignField: 'product_slug', as: 'variants' } },
+      { $unwind: { path: '$variants', preserveNullAndEmptyArrays: true } },
+      { $lookup: { from: 'inventory_items', localField: 'variants.sku', foreignField: 'sku', as: 'inv' } },
+      {
+        $addFields: {
+          variantAvailable: {
+            $subtract: [{ $sum: '$inv.quantity' }, { $sum: '$inv.reserved' }],
+          },
+        },
+      },
+      { $group: { _id: '$slug', name: { $first: '$name' }, image_path: { $first: '$image_path' }, category_slug: { $first: '$category_slug' }, available: { $sum: '$variantAvailable' } } },
+    ]
+  }
+
   async findOutOfStock(limit: number) {
     return this.collection
       .aggregate([
-        { $match: { status: { $ne: 'inactive' } } },
-        { $lookup: { from: 'variants', localField: 'slug', foreignField: 'product_slug', as: 'variants' } },
-        { $unwind: { path: '$variants', preserveNullAndEmptyArrays: true } },
-        { $lookup: { from: 'inventory_items', localField: 'variants.sku', foreignField: 'sku', as: 'inv' } },
-        {
-          $addFields: {
-            variantAvailable: {
-              $subtract: [{ $sum: '$inv.quantity' }, { $sum: '$inv.reserved' }],
-            },
-          },
-        },
-        { $group: { _id: '$slug', name: { $first: '$name' }, image_path: { $first: '$image_path' }, category_slug: { $first: '$category_slug' }, available: { $sum: '$variantAvailable' } } },
+        ...this.availabilityStages(),
         { $match: { available: { $lte: 0 } } },
         { $sort: { available: 1 } },
         { $limit: limit },
       ])
       .toArray()
+  }
+
+  /** Productos sin stock o con stock igual o menor al umbral (para iniciativas de Lumi). */
+  async findStockAlerts(lowThreshold: number, limit: number): Promise<Array<{ slug: string; name: string; available: number }>> {
+    const rows = await this.collection
+      .aggregate<{ _id: string; name: string; available: number }>([
+        ...this.availabilityStages(),
+        { $match: { available: { $lte: lowThreshold } } },
+        { $sort: { available: 1 } },
+        { $limit: limit },
+      ])
+      .toArray()
+    return rows.map((row) => ({ slug: String(row._id), name: String(row.name ?? row._id), available: Number(row.available) }))
   }
 
   async findEmptyCategories(limit: number) {

@@ -9,6 +9,11 @@ export interface NotificationEntity {
   title: string
   message: string
   read: boolean
+  /** Revisada: el usuario confirmó la acción asociada (p. ej. revisión de iniciativas). */
+  reviewed?: boolean
+  reviewedAt?: Date
+  /** Clave de deduplicación: una misma ocurrencia nunca genera dos notificaciones. */
+  dedupKey?: string
   createdAt: Date
   data?: Record<string, string>
 }
@@ -28,6 +33,8 @@ function toDto(doc: NotificationEntity) {
     title: doc.title,
     message: doc.message,
     read: doc.read,
+    reviewed: doc.reviewed ?? false,
+    reviewedAt: doc.reviewedAt?.toISOString() ?? null,
     createdAt: doc.createdAt.toISOString(),
     ...(doc.data && Object.keys(doc.data).length ? { data: doc.data } : {}),
   }
@@ -42,6 +49,12 @@ export class NotificationRepository extends BaseRepository<NotificationDocument>
     await super.ensureIndexes([
       { key: { userId: 1, createdAt: -1 }, name: 'notifications_user_createdAt' },
       { key: { userId: 1, read: 1 }, name: 'notifications_user_read' },
+      {
+        key: { userId: 1, dedupKey: 1 },
+        name: 'notifications_user_dedupkey_unique',
+        unique: true,
+        partialFilterExpression: { dedupKey: { $exists: true } },
+      },
     ])
   }
 
@@ -76,6 +89,22 @@ export class NotificationRepository extends BaseRepository<NotificationDocument>
     const res = await this.collection.updateMany(
       { userId, read: false } as never,
       { $set: { read: true } },
+    )
+    return res.modifiedCount
+  }
+
+  async findOwned(userId: string, id: string): Promise<NotificationEntity | null> {
+    if (!ObjectId.isValid(id)) return null
+    const doc = await this.collection.findOne({ userId, _id: new ObjectId(id) } as never)
+    return doc ? toEntity(doc as NotificationDocument) : null
+  }
+
+  async markReviewed(userId: string, ids: string[]): Promise<number> {
+    const oids = ids.filter(ObjectId.isValid).map((id) => new ObjectId(id))
+    if (!oids.length) return 0
+    const res = await this.collection.updateMany(
+      { userId, _id: { $in: oids } } as never,
+      { $set: { reviewed: true, reviewedAt: new Date(), read: true } },
     )
     return res.modifiedCount
   }
