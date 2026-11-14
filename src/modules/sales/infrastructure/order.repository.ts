@@ -16,6 +16,7 @@ import { ObjectId, type Db } from 'mongodb'
 import { BaseRepository, getCollection } from '../../../database/repositories/base.repository.js'
 import { toOrderDomain, type OrderDomain, type OrderEntity, type OrderEvent, type CancelledBy } from '../domain/order.entity.js'
 import { getEnv } from '../../../config/env.js'
+import { AppError } from '../../../common/errors/app.error.js'
 
 interface OrderDocument extends Omit<OrderEntity, '_id'> {
   _id: ObjectId
@@ -404,7 +405,12 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
 
     const ops: Record<string, unknown> = { $set: set }
     if (events.length) ops.$push = { events: { $each: events } }
-    await this.collection.updateOne({ _id: new ObjectId(id) } as never, ops)
+    // Escritura condicional: si otro cambio movió el estado desde la lectura, no se aplica.
+    const result = await this.collection.updateOne(
+      { _id: new ObjectId(id), status: order.status } as never,
+      ops,
+    )
+    if (result.matchedCount === 0) throw AppError.conflict('El pedido cambió mientras se editaba. Recarga e inténtalo de nuevo.')
     return this.findEntityById(id)
   }
 
@@ -484,10 +490,19 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
       set.cancellationReason = adminNote ?? 'Cancelación aprobada por administrador'
     }
 
-    await this.collection.updateOne(
-      { _id: new ObjectId(id) } as never,
+    // Solo se resuelven solicitudes abiertas (pendientes o con información pedida).
+    const result = await this.collection.updateOne(
+      {
+        _id: new ObjectId(id),
+        cancellationRequestStatus: { $in: ['requested', 'info_needed'] },
+      } as never,
       { $set: set, $push: { events: event } },
     )
+    if (result.matchedCount === 0) {
+      const exists = await this.findEntityById(id)
+      if (!exists) return null
+      throw AppError.conflict('El pedido no tiene una solicitud de cancelación abierta.')
+    }
     return this.findEntityById(id)
   }
 

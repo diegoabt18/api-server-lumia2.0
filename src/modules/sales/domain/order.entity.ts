@@ -1,6 +1,24 @@
 import type { DepositPolicy } from '../../catalog/domain/deposit-policy.js'
 
 export type OrderStatus = 'pending' | 'paid' | 'shipped' | 'delivered' | 'cancelled' | 'expired'
+
+/**
+ * Cambios de estado manuales permitidos desde administración. Cada estado tiene efectos (pagado
+ * descuenta stock, cancelado lo repone, entregado registra el ingreso), así que no se permiten
+ * saltos ni retrocesos. "Pagado" no está: lo decide el libro de pagos cuando el saldo se cubre.
+ */
+export const ADMIN_STATUS_TRANSITIONS: Readonly<Record<OrderStatus, readonly OrderStatus[]>> = {
+  pending: ['cancelled'],
+  paid: ['shipped', 'delivered', 'cancelled'],
+  shipped: ['delivered'],
+  delivered: [],
+  cancelled: [],
+  expired: [],
+}
+
+export function canAdminTransition(from: OrderStatus, to: OrderStatus): boolean {
+  return from === to || ADMIN_STATUS_TRANSITIONS[from]?.includes(to) === true
+}
 export type OrderPaymentStatus =
   | 'unpaid'
   | 'pending'

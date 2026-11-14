@@ -133,3 +133,41 @@ describe('AdminOrderService delivery event', () => {
     expect(deliveryEvents.recordDelivered).not.toHaveBeenCalled()
   })
 })
+
+describe('AdminOrderService status transitions', () => {
+  const noStock = () => ({
+    applyOnPaid: vi.fn(async (..._a: unknown[]) => false),
+    restoreIfDecremented: vi.fn(async (..._a: unknown[]) => false),
+  })
+
+  it.each([
+    ['pending', 'delivered'],
+    ['pending', 'shipped'],
+    ['cancelled', 'pending'],
+    ['delivered', 'shipped'],
+    ['shipped', 'cancelled'],
+  ] as const)('rejects %s -> %s without writing', async (from, to) => {
+    const current = order({ status: from })
+    const orders = {
+      findEntityById: vi.fn(async (..._a: unknown[]) => current),
+      adminPatch: vi.fn(async (..._a: unknown[]) => current),
+    }
+    const admin = new AdminOrderService(orders as never, {} as never, noStock() as never, { recordDelivered: vi.fn() } as never)
+    await expect(admin.patch('o1', { status: to }, 'admin-1')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'INVALID_TRANSITION',
+    })
+    expect(orders.adminPatch).not.toHaveBeenCalled()
+  })
+
+  it('allows notes on any status (no status change)', async () => {
+    const current = order({ status: 'delivered' })
+    const orders = {
+      findEntityById: vi.fn(async (..._a: unknown[]) => current),
+      adminPatch: vi.fn(async (..._a: unknown[]) => current),
+    }
+    const admin = new AdminOrderService(orders as never, {} as never, noStock() as never, { recordDelivered: vi.fn() } as never)
+    await admin.patch('o1', { notes: 'ok' }, 'admin-1')
+    expect(orders.adminPatch).toHaveBeenCalled()
+  })
+})

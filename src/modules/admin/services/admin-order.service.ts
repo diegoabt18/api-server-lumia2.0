@@ -4,7 +4,7 @@ import type { OrderStockService } from '../../sales/services/order-stock.service
 import type { OrderFinancialEvents } from '../../sales/services/order-financial-events.service.js'
 import type { OrderRepository } from '../../sales/infrastructure/order.repository.js'
 import type { UserRepository } from '../../identity/infrastructure/user.repository.js'
-import type { OrderEntity } from '../../sales/domain/order.entity.js'
+import { canAdminTransition, type OrderEntity } from '../../sales/domain/order.entity.js'
 import { renderOrderInvoiceHtml } from '../templates/order-invoice.template.js'
 import { renderPosReceiptHtml } from '../../pos/templates/pos-receipt.template.js'
 
@@ -200,6 +200,14 @@ export class AdminOrderService {
       )
     }
     const before = await this.orders.findEntityById(id)
+    if (!before) throw AppError.notFound('Orden no encontrada')
+    if (patch.status && !canAdminTransition(before.status, patch.status)) {
+      throw new AppError(
+        409,
+        `No se puede pasar un pedido de "${before.status}" a "${patch.status}".`,
+        'INVALID_TRANSITION',
+      )
+    }
     const updated = await this.orders.adminPatch(id, patch, actorId)
     if (!updated) throw AppError.notFound('Orden no encontrada')
     if (!isPaidState(before) && isPaidState(updated)) await this.stock.applyOnPaid(updated)
