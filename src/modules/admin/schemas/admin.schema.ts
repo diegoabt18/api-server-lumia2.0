@@ -1,4 +1,6 @@
 import { z } from 'zod'
+// Enlaces e imágenes publicados en la tienda: ruta interna o https (nunca javascript:, data: ni //host).
+import { safeLinkHref } from './store-settings.schema.js'
 import {
   isStoreBannerPosition,
   type StoreBannerPosition,
@@ -138,7 +140,7 @@ export const promotionUpsertSchema = z
     name: z.string().min(1).max(200),
     description: z.string().max(8000).optional().nullable(),
     banner_url: z
-      .union([z.string().max(2000), z.literal('')])
+      .union([safeLinkHref, z.literal('')])
       .optional()
       .nullable(),
     color: z
@@ -199,11 +201,11 @@ export const storeBannerUpsertSchema = z
     priority: z.number().int().min(0).max(999999).optional(),
     starts_at: z.string(),
     ends_at: z.string(),
-    image_url: z.string().min(1).max(4000),
+    image_url: safeLinkHref,
     title: z.string().max(300).optional().nullable(),
     subtitle: z.string().max(800).optional().nullable(),
     cta_label: z.string().max(120).optional().nullable(),
-    cta_href: z.string().max(2000).optional().nullable(),
+    cta_href: z.union([safeLinkHref, z.literal('')]).optional().nullable(),
     promotion_id: z.string().max(64).optional().nullable(),
     category_slug: z.string().max(200).optional().nullable(),
     collection_slug: z.string().max(200).optional().nullable(),

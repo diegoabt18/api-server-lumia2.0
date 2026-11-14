@@ -24,11 +24,13 @@ export function activeFilter(): Record<string, unknown> {
 function buildListFilter(search: string | undefined, opts: { onlyActive?: boolean }): Record<string, unknown> {
   const clauses: Record<string, unknown>[] = []
   if (opts.onlyActive) clauses.push(activeFilter())
-  if (search) {
+  if (typeof search === 'string' && search.trim()) {
+    // Búsqueda literal: el texto llega de la ruta pública /api/categories (evita ReDoS).
+    const term = search.trim().slice(0, 120).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     clauses.push({
       $or: [
-        { name: { $regex: search, $options: 'i' } },
-        { slug: { $regex: search, $options: 'i' } },
+        { name: { $regex: term, $options: 'i' } },
+        { slug: { $regex: term, $options: 'i' } },
       ],
     })
   }

@@ -1,4 +1,10 @@
 import type { FastifyInstance } from 'fastify'
+import {
+  currencySettingsPatchSchema,
+  customerSettingsPatchSchema,
+  shippingSettingsBodySchema,
+} from '../modules/admin/schemas/store-settings.schema.js'
+import { DEFAULT_SHIPPING_MESSAGES } from '../common/config/shipping-config.js'
 import type { AppContext } from '../app.context.js'
 import { AppError } from '../common/errors/app.error.js'
 import { PERMISSION_REGISTRY } from '../common/permissions/registry.js'
@@ -435,9 +441,12 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
     '/admin/store-shipping-settings',
     { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) },
     async (request) => {
-      const body = request.body as Record<string, unknown>
-      if (!body || typeof body !== 'object') throw AppError.badRequest('Invalid input')
-      return services.adminStore.putShippingSettings(body as never)
+      const parsed = shippingSettingsBodySchema.safeParse(request.body)
+      if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+      return services.adminStore.putShippingSettings({
+        ...parsed.data,
+        messages: { ...DEFAULT_SHIPPING_MESSAGES, ...parsed.data.messages },
+      })
     },
   )
 
@@ -457,9 +466,9 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
     '/admin/store-currency-settings',
     { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) },
     async (request) => {
-      const body = request.body as Record<string, unknown>
-      if (!body || typeof body !== 'object') throw AppError.badRequest('Invalid input')
-      return services.adminStore.patchCurrencySettings(body as never)
+      const parsed = currencySettingsPatchSchema.safeParse(request.body)
+      if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+      return services.adminStore.patchCurrencySettings(parsed.data)
     },
   )
 
@@ -473,9 +482,9 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
     '/admin/store-customer-settings',
     { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) },
     async (request) => {
-      const body = request.body as Record<string, unknown>
-      if (!body || typeof body !== 'object') throw AppError.badRequest('Invalid input')
-      return services.adminStore.patchCustomerSettings(body as never)
+      const parsed = customerSettingsPatchSchema.safeParse(request.body)
+      if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+      return services.adminStore.patchCustomerSettings(parsed.data)
     },
   )
 

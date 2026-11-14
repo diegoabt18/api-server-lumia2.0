@@ -197,8 +197,8 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
   }
 
   private buildAdminSearchFilter(search?: string): Record<string, unknown> {
-    if (!search?.trim()) return {}
-    const term = search.trim()
+    if (typeof search !== 'string' || !search.trim()) return {}
+    const term = escapeRegex(search.trim().slice(0, 120))
     return {
       $or: [
         { name: { $regex: term, $options: 'i' } },
