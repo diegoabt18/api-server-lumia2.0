@@ -98,6 +98,7 @@ import { TwoFactorRepository } from './modules/identity/infrastructure/two-facto
 import { PosCustomerRepository } from './modules/identity/infrastructure/pos-customer.repository.js'
 import { FinancialOutboxRepository } from './modules/sales/infrastructure/financial-outbox.repository.js'
 import { TwoFactorService } from './modules/identity/services/two-factor.service.js'
+import { AttemptLimiter } from './modules/identity/infrastructure/attempt-limiter.js'
 import { RoleRepository } from './modules/security/infrastructure/role.repository.js'
 import { UserRoleRepository } from './modules/security/infrastructure/user-role.repository.js'
 import { TemporalPermissionRepository } from './modules/security/infrastructure/temporal-permission.repository.js'
@@ -389,8 +390,31 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     permissionCache,
   )
   let auth: AuthService
-  const twoFactor = new TwoFactorService(users, twoFactorRepo, authAudit, () => auth)
-  auth = new AuthService(users, sessions, jwt, authAudit, twoFactor, authorization)
+  const lockWindow = env.LOGIN_LOCK_WINDOW_SECONDS
+  const twoFactor = new TwoFactorService(
+    users,
+    twoFactorRepo,
+    authAudit,
+    () => auth,
+    new AttemptLimiter(redisClient, {
+      prefix: 'auth:2fa-fail:',
+      maxFailures: env.TWO_FACTOR_MAX_FAILURES,
+      windowSeconds: lockWindow,
+    }),
+  )
+  auth = new AuthService(
+    users,
+    sessions,
+    jwt,
+    authAudit,
+    twoFactor,
+    authorization,
+    new AttemptLimiter(redisClient, {
+      prefix: 'auth:login-fail:',
+      maxFailures: env.LOGIN_MAX_FAILURES,
+      windowSeconds: lockWindow,
+    }),
+  )
   const manualPayments = new ManualPaymentService(payments, orders, carts)
   const mercadoPagoClient = isMercadoPagoEnabled(env)
     ? createMercadoPagoClient({ accessToken: env.MP_ACCESS_TOKEN as string })

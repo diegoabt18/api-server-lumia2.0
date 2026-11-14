@@ -1,5 +1,5 @@
 import Fastify from 'fastify'
-import { loadEnv } from './config/env.js'
+import { loadEnv, parseTrustProxy } from './config/env.js'
 import { getFastifyLoggerOptions } from './config/logger.js'
 import { createAppContext, shutdownAppContext } from './app.context.js'
 import contextPlugin, { configPlugin } from './plugins/context.plugin.js'
@@ -12,7 +12,7 @@ export async function buildApp() {
 
   const app = Fastify({
     logger: getFastifyLoggerOptions(env),
-    trustProxy: true,
+    trustProxy: parseTrustProxy(env.TRUST_PROXY),
     requestIdHeader: 'x-request-id',
     genReqId: (req) =>
       (req.headers['x-request-id'] as string | undefined) ??

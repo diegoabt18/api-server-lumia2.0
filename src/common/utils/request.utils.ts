@@ -1,8 +1,10 @@
 import type { FastifyRequest } from 'fastify'
 
+/**
+ * IP del cliente según la configuración TRUST_PROXY (Fastify/proxy-addr). No se lee
+ * X-Forwarded-For a mano: con proxies de confianza acotados, el cliente no puede falsearla.
+ */
 export function getClientIp(request: FastifyRequest): string {
-  const forwarded = request.headers['x-forwarded-for']
-  if (typeof forwarded === 'string') return forwarded.split(',')[0]?.trim() ?? request.ip
   return request.ip
 }
 

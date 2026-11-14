@@ -4,6 +4,8 @@ import swaggerUi from '@fastify/swagger-ui'
 
 export default fp(async (app) => {
   const env = app.ctx.env
+  // La documentación publica el mapa completo de la API (incluidas las rutas de administración).
+  if (!(env.SWAGGER_ENABLED ?? env.NODE_ENV !== 'production')) return
 
   await app.register(swagger, {
     openapi: {

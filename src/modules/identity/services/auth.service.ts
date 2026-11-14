@@ -24,6 +24,10 @@ import {
 import type { AuthAuditRepository } from '../infrastructure/auth-audit.repository.js'
 import type { TwoFactorService } from './two-factor.service.js'
 import type { AuthorizationService } from '../../security/services/authorization.service.js'
+import {
+  TOO_MANY_ATTEMPTS_MESSAGE,
+  type AttemptLimiter,
+} from '../infrastructure/attempt-limiter.js'
 
 export type LoginResult =
   | { requires2fa: true; tempToken: string; userId: string }
@@ -46,6 +50,7 @@ export class AuthService {
     private readonly authAudit?: AuthAuditRepository,
     private readonly twoFactor?: TwoFactorService,
     private readonly authorization?: AuthorizationService,
+    private readonly loginLimiter?: AttemptLimiter,
   ) {}
 
   async login(params: {
@@ -62,8 +67,21 @@ export class AuthService {
       throw AppError.forbidden('El acceso con email y contraseña no está disponible.')
     }
 
+    // Límite por cuenta: se comprueba antes de bcrypt para no gastar CPU en ataques.
+    if (await this.loginLimiter?.isBlocked(params.email)) {
+      await this.authAudit?.log({
+        event: 'LOGIN_FAILED',
+        email: params.email,
+        ip: params.ip ?? null,
+        userAgent: params.userAgent ?? null,
+        metadata: { reason: 'locked' },
+      })
+      throw new AppError(429, TOO_MANY_ATTEMPTS_MESSAGE, 'TOO_MANY_ATTEMPTS')
+    }
+
     const user = await this.users.findByEmail(params.email)
     if (!user?.passwordHash) {
+      await this.loginLimiter?.registerFailure(params.email)
       await this.authAudit?.log({
         event: 'LOGIN_FAILED',
         email: params.email,
@@ -75,6 +93,7 @@ export class AuthService {
 
     const valid = await bcrypt.compare(params.password, user.passwordHash)
     if (!valid) {
+      await this.loginLimiter?.registerFailure(params.email)
       await this.authAudit?.log({
         event: 'LOGIN_FAILED',
         userId: user._id,
@@ -84,6 +103,8 @@ export class AuthService {
       })
       throw AppError.unauthorized('Invalid credentials')
     }
+
+    await this.loginLimiter?.reset(params.email)
 
     if (this.twoFactor?.isTwoFactorEnabled(user)) {
       const tempToken = this.twoFactor.createLoginTempToken(user._id!, {

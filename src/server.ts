@@ -25,7 +25,9 @@ async function main() {
   }
   app.log.info(`Lumi API listening on ${env.HOST}:${env.PORT}`)
   app.log.info(`Public URL: ${env.APP_URL}`)
-  app.log.info(`Swagger: ${env.APP_URL}/docs`)
+  if (env.SWAGGER_ENABLED ?? env.NODE_ENV !== 'production') {
+    app.log.info(`Swagger: ${env.APP_URL}/docs`)
+  }
 }
 
 main().catch((err) => {

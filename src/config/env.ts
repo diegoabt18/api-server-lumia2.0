@@ -44,7 +44,22 @@ const envSchema = z.object({
   // Rate limit
   RATE_LIMIT_MAX: z.coerce.number().default(100),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
-  AUTH_RATE_LIMIT_MAX: z.coerce.number().default(10),
+  /** Contraseñas fallidas por cuenta (email) antes de bloquear el login durante la ventana. */
+  LOGIN_MAX_FAILURES: z.coerce.number().int().min(3).default(10),
+  /** Códigos 2FA fallidos por usuario antes de bloquear la verificación durante la ventana. */
+  TWO_FACTOR_MAX_FAILURES: z.coerce.number().int().min(3).default(5),
+  LOGIN_LOCK_WINDOW_SECONDS: z.coerce.number().int().min(60).default(900),
+  /**
+   * Proxies de confianza para calcular la IP del cliente (opción trustProxy de Fastify):
+   * 'true' (todos, comportamiento anterior), 'false', un número de saltos o una lista de IP/CIDR
+   * separadas por coma. Con 'true' la IP sale de X-Forwarded-For y el cliente puede falsearla.
+   */
+  TRUST_PROXY: z.string().default('true'),
+  /** Swagger UI en /docs. Sin valor: activo fuera de producción, desactivado en producción. */
+  SWAGGER_ENABLED: z
+    .string()
+    .transform((v) => v === 'true')
+    .optional(),
 
   // Store
   ORDER_NUMBER_PREFIX: z.string().default('ORD'),
@@ -169,6 +184,18 @@ export function getCorsOrigins(env: Env): string[] {
   }
 
   return [...new Set(origins)]
+}
+
+/** Convierte TRUST_PROXY en el valor que espera Fastify (boolean, saltos o lista de IP/CIDR). */
+export function parseTrustProxy(value: string): boolean | number | string[] {
+  const v = value.trim().toLowerCase()
+  if (v === '' || v === 'true') return true
+  if (v === 'false') return false
+  if (/^\d+$/.test(v)) return Number(v)
+  return value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
 }
 
 export function isCookieSecure(env: Env): boolean {

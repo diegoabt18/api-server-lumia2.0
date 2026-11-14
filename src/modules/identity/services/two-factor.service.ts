@@ -15,6 +15,10 @@ import {
 import type { AuthService } from '../../identity/services/auth.service.js'
 import type { AuthAuditRepository } from '../infrastructure/auth-audit.repository.js'
 import { generateBackupCodes, hashBackupCode } from '../utils/backup-codes.utils.js'
+import {
+  TOO_MANY_ATTEMPTS_MESSAGE,
+  type AttemptLimiter,
+} from '../infrastructure/attempt-limiter.js'
 
 export class TwoFactorService {
   constructor(
@@ -22,6 +26,7 @@ export class TwoFactorService {
     private readonly twoFactor: TwoFactorRepository,
     private readonly authAudit: AuthAuditRepository,
     private readonly getAuthService: () => AuthService,
+    private readonly verifyLimiter?: AttemptLimiter,
   ) {}
 
   async setup(userId: string) {
@@ -80,6 +85,10 @@ export class TwoFactorService {
   async verifyLogin(params: { tempToken: string; code: string; ip?: string; userAgent?: string }) {
     const payload = verifyTwoFactorTempToken(params.tempToken)
     if (!payload) throw AppError.unauthorized('Token 2FA inválido o expirado')
+    // Límite por usuario (no por token): pedir otro tempToken no reinicia el contador.
+    if (await this.verifyLimiter?.isBlocked(payload.userId)) {
+      throw new AppError(429, TOO_MANY_ATTEMPTS_MESSAGE, 'TOO_MANY_ATTEMPTS')
+    }
 
     const secretEnc = await this.twoFactor.getSecretEnc(payload.userId)
     if (!secretEnc) throw AppError.badRequest('2FA no configurado')
@@ -90,6 +99,7 @@ export class TwoFactorService {
     const secret = decryptTwoFactorSecret(secretEnc)
     const result = await verify({ secret, token: params.code })
     if (!result.valid) {
+      await this.verifyLimiter?.registerFailure(payload.userId)
       await this.authAudit.log({
         event: 'LOGIN_2FA_FAILED',
         userId: user._id,
@@ -99,6 +109,7 @@ export class TwoFactorService {
       })
       throw AppError.unauthorized('Código 2FA inválido')
     }
+    await this.verifyLimiter?.reset(payload.userId)
 
     const tokens = await this.getAuthService().issueTokensForUser(user, {
       rememberMe: payload.rememberMe,
