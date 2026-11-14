@@ -21,12 +21,15 @@ export class AdminAnalyticsService {
     private readonly products: ProductRepository,
   ) {}
 
-  private async orderMetrics(from: Date, to: Date) {
-    const orderDocs = await this.orders.findManyInRange(from, to)
-    const paid = orderDocs.filter((o) => ['paid', 'shipped', 'delivered'].includes(o.status))
-    const revenue = paid.reduce((sum, o) => sum + (o.total || 0), 0)
-    const orders = orderDocs.length
-    return { revenue, orders, aov: orders > 0 ? Math.round(revenue / orders) : 0, orderDocs }
+  private async orderMetrics(from: Date, to: Date, opts: { products?: boolean; days?: boolean } = {}) {
+    const summary = await this.orders.analyticsSummary(from, to, opts)
+    const orders = summary.orders
+    return {
+      revenue: summary.revenue,
+      orders,
+      aov: orders > 0 ? Math.round(summary.revenue / orders) : 0,
+      summary,
+    }
   }
 
   async getOverview(query: Record<string, unknown>) {
@@ -38,25 +41,13 @@ export class AdminAnalyticsService {
     const previousFrom = new Date(currentFrom.getTime() - days * 86400000)
 
     const [current, previous, newCustomersCurrent, newCustomersPrevious] = await Promise.all([
-      this.orderMetrics(currentFrom, now),
+      this.orderMetrics(currentFrom, now, { products: true, days: true }),
       this.orderMetrics(previousFrom, currentFrom),
       this.users.countCreatedBetween(currentFrom, now),
       this.users.countCreatedBetween(previousFrom, currentFrom),
     ])
 
-    const productRevenueMap = new Map<string, { slug: string; revenue: number; units: number }>()
-    for (const order of current.orderDocs) {
-      if (!['paid', 'shipped', 'delivered'].includes(order.status)) continue
-      for (const item of order.items || []) {
-        const slug = item.productSlug || item.productId
-        if (!slug) continue
-        const existing = productRevenueMap.get(slug) || { slug, revenue: 0, units: 0 }
-        existing.revenue += item.subtotal || 0
-        existing.units += item.quantity || 0
-        productRevenueMap.set(slug, existing)
-      }
-    }
-
+    const productRevenueMap = new Map(current.summary.products.map((p) => [p.slug, p]))
     const slugs = [...productRevenueMap.keys()]
     const nameMap = slugs.length
       ? await this.products.findNamesBySlugs(slugs)
@@ -76,14 +67,12 @@ export class AdminAnalyticsService {
       const key = new Date(now.getTime() - i * 86400000).toISOString().slice(0, 10)
       dayMap.set(key, { revenue: 0, orders: 0 })
     }
-    for (const order of current.orderDocs) {
-      if (!['paid', 'shipped', 'delivered'].includes(order.status)) continue
-      const key =
-        order.createdAt instanceof Date ? order.createdAt.toISOString().slice(0, 10) : null
-      if (!key || !dayMap.has(key)) continue
-      const entry = dayMap.get(key)!
-      entry.revenue += order.total || 0
-      entry.orders += 1
+    // Solo los días del periodo (agrupados en UTC, igual que antes).
+    for (const row of current.summary.days) {
+      const entry = dayMap.get(row.date)
+      if (!entry) continue
+      entry.revenue += row.revenue
+      entry.orders += row.orders
     }
 
     return {
@@ -127,31 +116,20 @@ export class AdminAnalyticsService {
     const days = { '7d': 7, '30d': 30, '90d': 90, '1y': 365 }[period]
     const now = new Date()
     const from = new Date(now.getTime() - days * 86400000)
-    const orderDocs = await this.orders.findManyInRange(from, now)
+    const summary = await this.orders.analyticsSummary(from, now)
+    const totalRevenue = summary.revenue
+    const refundTotal = summary.refunds
 
-    const byStatus = new Map<string, number>()
-    const byPayment = new Map<string, number>()
-    let totalRevenue = 0
-    let refundTotal = 0
-
-    for (const o of orderDocs) {
-      byStatus.set(o.status, (byStatus.get(o.status) ?? 0) + 1)
-      const pm = o.paymentMethod || 'unknown'
-      byPayment.set(pm, (byPayment.get(pm) ?? 0) + 1)
-      if (['paid', 'shipped', 'delivered'].includes(o.status)) totalRevenue += o.total || 0
-      if (o.paymentStatus === 'refunded') refundTotal += o.total || 0
-    }
-
-    const totalOrders = orderDocs.length
+    const totalOrders = summary.orders
     return {
       period: { from: from.toISOString(), to: now.toISOString(), label: period },
       revenue: {
         total: Math.round(totalRevenue),
-        byPaymentMethod: [...byPayment.entries()].map(([method, count]) => ({ method, count })),
+        byPaymentMethod: summary.byPayment,
       },
       orders: {
         total: totalOrders,
-        byStatus: [...byStatus.entries()].map(([status, count]) => ({ status, count })),
+        byStatus: summary.byStatus,
         averageFulfillmentTime: null,
       },
       aov: { overall: totalOrders > 0 ? Math.round(totalRevenue / totalOrders) : 0, byMonth: [] },

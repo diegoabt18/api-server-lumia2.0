@@ -26,6 +26,19 @@ function toEntity(doc: OrderDocument): OrderEntity {
   return { ...doc, _id: doc._id.toString() }
 }
 
+/** Estados que cuentan como venta en la analítica. */
+export const ANALYTICS_SOLD_STATUSES = ['paid', 'shipped', 'delivered']
+
+export interface OrderAnalyticsSummary {
+  orders: number
+  revenue: number
+  refunds: number
+  byStatus: Array<{ status: string; count: number }>
+  byPayment: Array<{ method: string; count: number }>
+  days: Array<{ date: string; revenue: number; orders: number }>
+  products: Array<{ slug: string; revenue: number; units: number }>
+}
+
 export class OrderRepository extends BaseRepository<OrderDocument> {
   private readonly db: Db
 
@@ -653,9 +666,93 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
     return this.findEntityById(id)
   }
 
-  async findManyInRange(from: Date, to: Date): Promise<OrderEntity[]> {
-    const docs = await this.findMany({ createdAt: { $gte: from, $lt: to } } as never, { sort: { createdAt: -1 } })
-    return docs.map((d) => toEntity(d))
+  /**
+   * Resumen analítico de un rango calculado en MongoDB (una sola consulta con $facet). Antes se
+   * cargaban en memoria todos los pedidos del periodo y del anterior. Mantiene la semántica previa:
+   * ingresos = total de pedidos pagados/enviados/entregados; días agrupados en UTC.
+   */
+  async analyticsSummary(
+    from: Date,
+    to: Date,
+    opts: { products?: boolean; days?: boolean } = {},
+  ): Promise<OrderAnalyticsSummary> {
+    const paid = { $in: ['$status', ANALYTICS_SOLD_STATUSES] }
+    const facets: Record<string, unknown[]> = {
+      totals: [
+        {
+          $group: {
+            _id: null,
+            orders: { $sum: 1 },
+            revenue: { $sum: { $cond: [paid, { $ifNull: ['$total', 0] }, 0] } },
+            refunds: {
+              $sum: { $cond: [{ $eq: ['$paymentStatus', 'refunded'] }, { $ifNull: ['$total', 0] }, 0] },
+            },
+          },
+        },
+      ],
+      byStatus: [{ $group: { _id: '$status', count: { $sum: 1 } } }, { $sort: { count: -1, _id: 1 } }],
+      byPayment: [
+        {
+          $group: {
+            _id: {
+              $cond: [{ $eq: [{ $ifNull: ['$paymentMethod', ''] }, ''] }, 'unknown', '$paymentMethod'],
+            },
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { count: -1, _id: 1 } },
+      ],
+    }
+    if (opts.days) {
+      facets.days = [
+        { $match: { status: { $in: ANALYTICS_SOLD_STATUSES } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+            revenue: { $sum: { $ifNull: ['$total', 0] } },
+            orders: { $sum: 1 },
+          },
+        },
+      ]
+    }
+    if (opts.products) {
+      facets.products = [
+        { $match: { status: { $in: ANALYTICS_SOLD_STATUSES } } },
+        { $unwind: '$items' },
+        {
+          $project: {
+            slug: {
+              $cond: [
+                { $eq: [{ $ifNull: ['$items.productSlug', ''] }, ''] },
+                '$items.productId',
+                '$items.productSlug',
+              ],
+            },
+            subtotal: { $ifNull: ['$items.subtotal', 0] },
+            quantity: { $ifNull: ['$items.quantity', 0] },
+          },
+        },
+        { $match: { slug: { $nin: [null, ''] } } },
+        { $group: { _id: '$slug', revenue: { $sum: '$subtotal' }, units: { $sum: '$quantity' } } },
+        { $sort: { revenue: -1, _id: 1 } },
+        { $limit: 10 },
+      ]
+    }
+    const [row] = await this.collection
+      .aggregate([{ $match: { createdAt: { $gte: from, $lt: to } } }, { $facet: facets }])
+      .toArray()
+    const r = (row ?? {}) as Record<string, Array<Record<string, unknown>>>
+    const totals = r.totals?.[0] ?? {}
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+    return {
+      orders: num(totals.orders),
+      revenue: num(totals.revenue),
+      refunds: num(totals.refunds),
+      byStatus: (r.byStatus ?? []).map((x) => ({ status: String(x._id), count: num(x.count) })),
+      byPayment: (r.byPayment ?? []).map((x) => ({ method: String(x._id), count: num(x.count) })),
+      days: (r.days ?? []).map((x) => ({ date: String(x._id), revenue: num(x.revenue), orders: num(x.orders) })),
+      products: (r.products ?? []).map((x) => ({ slug: String(x._id), revenue: num(x.revenue), units: num(x.units) })),
+    }
   }
 
   async countByUser(userId: string): Promise<number> {

@@ -14,6 +14,9 @@ import { ConditionEvaluationEngine, type ConditionContext } from './conditional-
 
 export type PermissionResolverContext = Partial<ConditionContext>
 
+/** Duración de la caché de permisos efectivos (segundos). */
+export const PERMISSION_CACHE_TTL_SECONDS = 300
+
 export class AuthorizationService {
   constructor(
     private readonly roles: RoleRepository,
@@ -33,12 +36,31 @@ export class AuthorizationService {
     if (cached) return expandPermissions(cached)
 
     const base = await this.resolveRoleBasedPermissions(userId)
-    const extra = await this.resolveExtraPermissions(userId, ctx)
+    const { keys: extra, nextExpiry } = await this.resolveExtraPermissions(userId, ctx)
     const merged = new Set<PermissionId>([...base, ...extra])
     const result = [...merged]
 
-    if (this.permCache) await this.permCache.set(userId, result)
+    if (this.permCache) {
+      // Un permiso temporal o una delegación que caduca antes que la caché acorta su duración:
+      // si no, seguiría vigente hasta 5 minutos después de caducar.
+      const ttl = nextExpiry
+        ? Math.max(1, Math.min(PERMISSION_CACHE_TTL_SECONDS, Math.ceil((nextExpiry.getTime() - Date.now()) / 1000)))
+        : PERMISSION_CACHE_TTL_SECONDS
+      await this.permCache.set(userId, result, ttl)
+    }
     return result
+  }
+
+  /**
+   * Mantenimiento periódico (no en cada petición): marca como caducados los permisos temporales y
+   * las delegaciones vencidas. La resolución ya los ignora por fecha; esto solo actualiza su estado.
+   */
+  async expireOverdueGrants(): Promise<{ temporal: number; delegations: number }> {
+    const [temporal, delegations] = await Promise.all([
+      this.temporal?.expireAllOverdue() ?? 0,
+      this.delegations?.expireAllOverdue() ?? 0,
+    ])
+    return { temporal, delegations }
   }
 
   /**
@@ -97,13 +119,19 @@ export class AuthorizationService {
   private async resolveExtraPermissions(
     userId: string,
     ctx?: PermissionResolverContext,
-  ): Promise<PermissionId[]> {
+  ): Promise<{ keys: PermissionId[]; nextExpiry: Date | null }> {
     const merged = new Set<PermissionId>()
+    let nextExpiry: Date | null = null
+    const noteExpiry = (date: unknown) => {
+      if (date instanceof Date && !Number.isNaN(date.getTime()) && (!nextExpiry || date < nextExpiry)) {
+        nextExpiry = date
+      }
+    }
 
     if (this.temporal) {
       try {
-        await this.temporal.expireAllOverdue()
         for (const p of await this.temporal.findActiveByUserId(userId)) {
+          noteExpiry(p.expiresAt)
           for (const k of p.permissionKeys) merged.add(k)
         }
       } catch {
@@ -113,8 +141,8 @@ export class AuthorizationService {
 
     if (this.delegations) {
       try {
-        await this.delegations.expireAllOverdue()
         for (const d of await this.delegations.findActiveByUserId(userId)) {
+          noteExpiry(d.expiresAt)
           const role = await this.roles.findByIdSafe(d.roleId)
           if (role) {
             for (const k of expandPermissions(role.permissionKeys)) merged.add(k)
@@ -148,7 +176,7 @@ export class AuthorizationService {
       }
     }
 
-    return [...merged]
+    return { keys: [...merged], nextExpiry }
   }
 
   async buildAuthzSnapshot(

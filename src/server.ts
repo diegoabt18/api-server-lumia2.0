@@ -18,6 +18,7 @@ async function main() {
   process.on('SIGTERM', () => void shutdown('SIGTERM'))
 
   await app.listen({ host: env.HOST, port: env.PORT })
+  app.ctx.securityMaintenance.start()
   if (env.LUMI_AUTOMATION_ENABLED) {
     app.ctx.automation.start()
     app.ctx.initiatives.start()

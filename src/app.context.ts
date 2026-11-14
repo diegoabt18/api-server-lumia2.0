@@ -93,6 +93,7 @@ import { VariantPriceRepostService } from './modules/production/services/variant
 import { UnitService } from './modules/production/services/unit.service.js'
 import { ProductionConfigService } from './modules/production/services/production-config.service.js'
 import { ProductionAuditService, ProductionDashboardService } from './modules/production/services/dashboard.service.js'
+import { SecurityMaintenance } from './modules/security/services/security-maintenance.js'
 import { ActivityAuditRepository } from './modules/admin-activity/infrastructure/activity-audit.repository.js'
 import { activityAuditKey } from './modules/admin-activity/domain/signing-key.js'
 import { AuthAuditRepository } from './modules/identity/infrastructure/auth-audit.repository.js'
@@ -147,6 +148,8 @@ export interface AppContext {
   /** Scheduler único del motor de automatización de Lumi. Se arranca desde server.ts. */
   automation: AutomationScheduler
   initiatives: InitiativeScheduler
+  /** Caducidad periódica de permisos temporales y delegaciones (fuera de la ruta de lectura). */
+  securityMaintenance: SecurityMaintenance
   /** Registro de actividad administrativa (solo inserción, HMAC encadenado). */
   activityAudit: ActivityAuditRepository
   repos: {
@@ -623,6 +626,11 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     automation,
     initiatives,
     activityAudit,
+    securityMaintenance: new SecurityMaintenance(
+      () => authorization.expireOverdueGrants(),
+      10 * 60_000,
+      (err) => logger.error({ err }, 'security maintenance failed'),
+    ),
     repos: {
       users,
       sessions,
@@ -737,6 +745,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
 export async function shutdownAppContext(ctx: AppContext): Promise<void> {
   ctx.automation.stop()
   ctx.initiatives.stop()
+  ctx.securityMaintenance.stop()
   await ctx.redis.close()
   await ctx.mongo.closeAll()
 }
