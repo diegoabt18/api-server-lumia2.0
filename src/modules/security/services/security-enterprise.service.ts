@@ -24,6 +24,8 @@ import {
   type ConditionClause,
   type ConditionContext,
 } from './conditional-evaluation.js'
+import { assertCanGrant, assertNotSelf, effectiveAllow, type GrantActor } from '../domain/grant-guard.js'
+import type { ConditionalPatch, TemplatePatch, WebhookPatch } from '../schemas/security.schema.js'
 
 function mapEntity<T extends { _id?: string }>(item: T) {
   const { _id, ...rest } = item
@@ -52,17 +54,21 @@ export class SecurityEnterpriseService {
   ) {}
 
   // ─── Temporal permissions ───
-  async grantTemporal(body: {
-    userId: string
-    permissionKeys: string[]
-    reason: string
-    startsAt: string
-    expiresAt: string
-    grantedBy: string
-  }) {
+  async grantTemporal(
+    body: {
+      userId: string
+      permissionKeys: string[]
+      reason: string
+      startsAt: string
+      expiresAt: string
+    },
+    actor: GrantActor,
+  ) {
+    assertNotSelf(actor, body.userId)
+    assertCanGrant(actor, body.permissionKeys)
     const item = await this.temporal.create({
       userId: body.userId,
-      grantedBy: body.grantedBy,
+      grantedBy: actor.userId,
       permissionKeys: body.permissionKeys,
       reason: body.reason,
       startsAt: new Date(body.startsAt),
@@ -74,7 +80,7 @@ export class SecurityEnterpriseService {
       entityId: item._id!,
       entityLabel: body.userId,
       action: 'grant',
-      changedBy: body.grantedBy,
+      changedBy: actor.userId,
       summary: `Temporal grant: ${body.reason}`,
       timestamp: new Date(),
     })
@@ -123,13 +129,17 @@ export class SecurityEnterpriseService {
   }
 
   // ─── User overrides ───
-  async grantOverride(body: {
-    userId: string
-    permissionKeys: string[]
-    reason: string
-    grantedBy: string
-  }) {
-    const item = await this.overrides.create(body)
+  async grantOverride(
+    body: {
+      userId: string
+      permissionKeys: string[]
+      reason: string
+    },
+    actor: GrantActor,
+  ) {
+    assertNotSelf(actor, body.userId)
+    assertCanGrant(actor, body.permissionKeys)
+    const item = await this.overrides.create({ ...body, grantedBy: actor.userId })
     await this.authorization.invalidateUserCache(body.userId)
     return { item: mapEntity(item) }
   }
@@ -170,18 +180,24 @@ export class SecurityEnterpriseService {
   }
 
   // ─── Role delegations ───
-  async delegateRole(body: {
-    userId: string
-    roleId: string
-    reason: string
-    startsAt: string
-    expiresAt: string
-    delegatedBy: string
-  }) {
+  async delegateRole(
+    body: {
+      userId: string
+      roleId: string
+      reason: string
+      startsAt: string
+      expiresAt: string
+    },
+    actor: GrantActor,
+  ) {
+    assertNotSelf(actor, body.userId)
     const role = await this.roles.findByIdSafe(body.roleId)
     if (!role) throw AppError.notFound('Rol no encontrado')
+    // La delegación concede los permisos directos del rol (ver AuthorizationService).
+    assertCanGrant(actor, effectiveAllow(role.permissionKeys))
     const item = await this.delegations.create({
       ...body,
+      delegatedBy: actor.userId,
       roleName: role.name,
       roleKey: role.key,
       startsAt: new Date(body.startsAt),
@@ -245,7 +261,7 @@ export class SecurityEnterpriseService {
     return { item: mapEntity(item) }
   }
 
-  async updateTemplate(id: string, patch: Record<string, unknown>, updatedBy: string) {
+  async updateTemplate(id: string, patch: TemplatePatch, updatedBy: string) {
     const item = await this.templates.update(id, { ...patch, updatedBy } as never)
     if (!item) throw AppError.notFound('Plantilla no encontrada')
     return { item: mapEntity(item) }
@@ -287,11 +303,19 @@ export class SecurityEnterpriseService {
     return { ok: true }
   }
 
-  async applyTemplate(templateId: string, roleId: string) {
+  async applyTemplate(templateId: string, roleId: string, actor: GrantActor) {
     const template = await this.templates.findByIdSafe(templateId)
     if (!template) throw AppError.notFound('Plantilla no encontrada')
+    const current = await this.roles.findByIdSafe(roleId)
+    if (!current) throw AppError.notFound('Rol no encontrado')
+    const before = new Set<string>(effectiveAllow(current.permissionKeys))
+    assertCanGrant(
+      actor,
+      effectiveAllow(template.permissionKeys).filter((k) => !before.has(k)),
+    )
     const role = await this.roles.update(roleId, { permissionKeys: template.permissionKeys })
     if (!role) throw AppError.notFound('Rol no encontrado')
+    await this.authorization.invalidateAllCaches()
     return { role: this.roles.toDomain(role) }
   }
 
@@ -318,13 +342,19 @@ export class SecurityEnterpriseService {
     priority?: number
     appliesToUserId?: string | null
     createdBy: string
-  }) {
+  }, actor: GrantActor) {
+    if (body.appliesToUserId) assertNotSelf(actor, body.appliesToUserId)
+    assertCanGrant(actor, body.permissionKeys)
     const item = await this.conditional.create(body)
+    await this.authorization.invalidateAllCaches()
     return { item: mapEntity(item) }
   }
 
-  async updateConditional(id: string, patch: Record<string, unknown>, updatedBy: string) {
-    const item = await this.conditional.update(id, { ...patch, updatedBy } as never)
+  async updateConditional(id: string, patch: ConditionalPatch, actor: GrantActor) {
+    if (patch.appliesToUserId) assertNotSelf(actor, patch.appliesToUserId)
+    if (patch.permissionKeys) assertCanGrant(actor, patch.permissionKeys)
+    const item = await this.conditional.update(id, { ...patch, updatedBy: actor.userId } as never)
+    await this.authorization.invalidateAllCaches()
     if (!item) throw AppError.notFound('Regla no encontrada')
     return { item: mapEntity(item) }
   }
@@ -350,14 +380,23 @@ export class SecurityEnterpriseService {
     return { item: mapEntity(item) }
   }
 
-  async toggleConditional(id: string, status: 'active' | 'inactive') {
+  async toggleConditional(id: string, status: 'active' | 'inactive', actor: GrantActor) {
+    if (status === 'active') {
+      // Reactivar una regla vuelve a conceder sus permisos.
+      const rule = await this.conditional.findByIdSafe(id)
+      if (!rule) throw AppError.notFound('Regla no encontrada')
+      if (rule.appliesToUserId) assertNotSelf(actor, rule.appliesToUserId)
+      assertCanGrant(actor, rule.permissionKeys)
+    }
     if (!(await this.conditional.setStatus(id, status)))
       throw AppError.notFound('Regla no encontrada')
+    await this.authorization.invalidateAllCaches()
     return { ok: true, status }
   }
 
   async deleteConditional(id: string) {
     if (!(await this.conditional.deleteSafe(id))) throw AppError.notFound('Regla no encontrada')
+    await this.authorization.invalidateAllCaches()
     return { ok: true }
   }
 
@@ -480,7 +519,7 @@ export class SecurityEnterpriseService {
     return { item: mapEntity(item) }
   }
 
-  async updateWebhook(id: string, patch: Record<string, unknown>, updatedBy: string) {
+  async updateWebhook(id: string, patch: WebhookPatch, updatedBy: string) {
     const item = await this.webhooks.update(id, { ...patch, updatedBy } as never)
     if (!item) throw AppError.notFound('Webhook no encontrado')
     return { item: mapEntity(item) }
@@ -773,8 +812,14 @@ export class SecurityEnterpriseService {
 
   async importTransfer(
     data: { roles?: Array<{ key: string; name: string; permissionKeys?: string[] }> },
-    performedBy: string,
+    actor: GrantActor,
   ) {
+    const performedBy = actor.userId
+    // Se valida todo el lote antes de escribir: o se importa entero o nada.
+    assertCanGrant(
+      actor,
+      (data.roles ?? []).flatMap((r) => r.permissionKeys ?? []),
+    )
     let created = 0
     let updated = 0
     for (const r of data.roles ?? []) {
@@ -803,6 +848,7 @@ export class SecurityEnterpriseService {
       summary: `Import transfer: ${created} created, ${updated} updated`,
       timestamp: new Date(),
     })
+    if (updated > 0) await this.authorization.invalidateAllCaches()
     return { created, updated }
   }
 
@@ -825,38 +871,56 @@ export class SecurityEnterpriseService {
   }
 
   // ─── Bulk ───
-  async executeBulk(body: {
-    type: string
-    items: Array<Record<string, unknown>>
-    performedBy: string
-  }) {
+  async executeBulk(
+    body: {
+      type: string
+      items: Array<Record<string, unknown>>
+    },
+    actor: GrantActor,
+  ) {
     const results: Array<{ ok: boolean; error?: string }> = []
     for (const item of body.items) {
       try {
         switch (body.type) {
-          case 'assign_role':
-            await this.userRoles.assign(String(item.userId), String(item.roleId), body.performedBy)
-            await this.authorization.invalidateUserCache(String(item.userId))
+          case 'assign_role': {
+            const userId = String(item.userId)
+            assertNotSelf(actor, userId)
+            const role = await this.roles.findByIdSafe(String(item.roleId))
+            if (!role) throw AppError.notFound('Rol no encontrado')
+            if (role.isArchived) throw AppError.conflict('El rol está archivado')
+            assertCanGrant(actor, effectiveAllow(role.permissionKeys, role.denyKeys ?? []))
+            await this.userRoles.assign(userId, String(item.roleId), actor.userId)
+            await this.authorization.invalidateUserCache(userId)
             results.push({ ok: true })
             break
-          case 'remove_role':
-            await this.userRoles.remove(String(item.userId), String(item.roleId))
-            await this.authorization.invalidateUserCache(String(item.userId))
+          }
+          case 'remove_role': {
+            const userId = String(item.userId)
+            assertNotSelf(actor, userId)
+            const role = await this.roles.findByIdSafe(String(item.roleId))
+            if (role?.denyKeys?.length) assertCanGrant(actor, effectiveAllow(role.denyKeys))
+            await this.userRoles.remove(userId, String(item.roleId))
+            await this.authorization.invalidateUserCache(userId)
             results.push({ ok: true })
             break
+          }
           case 'grant_temporal':
-            await this.grantTemporal({
-              userId: String(item.userId),
-              permissionKeys: (item.permissionKeys as string[]) ?? [],
-              reason: String(item.reason ?? 'bulk'),
-              startsAt: String(item.startsAt ?? new Date().toISOString()),
-              expiresAt: String(item.expiresAt ?? new Date(Date.now() + 86400000).toISOString()),
-              grantedBy: body.performedBy,
-            })
+            await this.grantTemporal(
+              {
+                userId: String(item.userId),
+                permissionKeys: Array.isArray(item.permissionKeys)
+                  ? item.permissionKeys.map(String)
+                  : [],
+                reason: String(item.reason ?? 'bulk'),
+                startsAt: String(item.startsAt ?? new Date().toISOString()),
+                expiresAt: String(item.expiresAt ?? new Date(Date.now() + 86400000).toISOString()),
+              },
+              actor,
+            )
             results.push({ ok: true })
             break
           case 'revoke_temporals':
-            if (item.id) await this.revokeTemporal(String(item.id), body.performedBy)
+            if (item.id) await this.revokeTemporal(String(item.id), actor.userId)
             results.push({ ok: true })
             break
           default:

@@ -13,6 +13,12 @@ import type { RoleEntity } from '../domain/role.entity.js'
 import type { RoleRepository } from '../infrastructure/role.repository.js'
 import type { UserRoleRepository } from '../infrastructure/user-role.repository.js'
 import type { AuthorizationService } from './authorization.service.js'
+import {
+  assertCanGrant,
+  assertNotSelf,
+  effectiveAllow,
+  type GrantActor,
+} from '../domain/grant-guard.js'
 
 export class SecurityAdminService {
   constructor(
@@ -76,18 +82,22 @@ export class SecurityAdminService {
     return [...new Set(keys)].sort()
   }
 
-  async createRole(body: {
-    key: string
-    name: string
-    description?: string
-    permissionKeys: string[]
-  }) {
+  async createRole(
+    body: {
+      key: string
+      name: string
+      description?: string
+      permissionKeys: string[]
+    },
+    actor: GrantActor,
+  ) {
     const key = body.key.trim()
     if (!key) throw AppError.badRequest('key es requerido')
     const existing = await this.roles.findByKey(key)
     if (existing) throw AppError.conflict('Ya existe un rol con esa key')
 
     const permissionKeys = await this.assertCatalogKeys(body.permissionKeys)
+    assertCanGrant(actor, permissionKeys)
     const role = await this.roles.create({
       key,
       name: body.name.trim(),
@@ -100,17 +110,27 @@ export class SecurityAdminService {
   async updateRole(
     id: string,
     patch: { name?: string; description?: string; permissionKeys?: string[] },
+    actor: GrantActor,
   ) {
     const update: Partial<Pick<RoleEntity, 'name' | 'description' | 'permissionKeys'>> = {}
     if (patch.name !== undefined) update.name = patch.name.trim()
     if (patch.description !== undefined) update.description = patch.description.trim()
     if (patch.permissionKeys !== undefined) {
       update.permissionKeys = await this.assertCatalogKeys(patch.permissionKeys)
+      const current = await this.roles.findByIdSafe(id)
+      if (!current) throw AppError.notFound('Rol no encontrado')
+      // Solo se comprueban los permisos que se añaden: quitar permisos nunca es una escalada.
+      const before = new Set<string>(effectiveAllow(current.permissionKeys))
+      assertCanGrant(
+        actor,
+        effectiveAllow(update.permissionKeys).filter((k) => !before.has(k)),
+      )
     }
 
     try {
       const updated = await this.roles.update(id, update)
       if (!updated) throw AppError.notFound('Rol no encontrado')
+      if (update.permissionKeys !== undefined) await this.authorization.invalidateAllCaches()
       return { role: this.roles.toDomain(updated) }
     } catch (err) {
       if (err instanceof Error && err.message === 'SYSTEM_ROLE_IMMUTABLE') {
@@ -123,6 +143,7 @@ export class SecurityAdminService {
   async deleteRole(id: string) {
     const ok = await this.roles.delete(id)
     if (!ok) throw AppError.notFound('Rol no encontrado o es de sistema')
+    await this.authorization.invalidateAllCaches()
     return { ok: true }
   }
 
@@ -234,13 +255,23 @@ export class SecurityAdminService {
     }
   }
 
-  async assignRole(userId: string, roleId: string, assignedBy?: string) {
+  /** Permisos que concede un rol: propios + heredados, menos los denegados. */
+  private async roleGrantKeys(role: RoleEntity): Promise<PermissionId[]> {
+    const inherited = await this.resolveRoleEffectiveKeys(role)
+    return effectiveAllow([...role.permissionKeys, ...inherited], role.denyKeys ?? [])
+  }
+
+  async assignRole(userId: string, roleId: string, actor: GrantActor) {
+    assertNotSelf(actor, userId)
     const user = await this.users.findByIdSafe(userId)
     if (!user) throw AppError.notFound('Usuario no encontrado')
     const role = await this.roles.findByIdSafe(roleId)
     if (!role) throw AppError.notFound('Rol no encontrado')
+    if (role.isArchived) throw AppError.conflict('El rol está archivado')
+    assertCanGrant(actor, await this.roleGrantKeys(role))
 
-    const assignment = await this.userRoles.assign(userId, roleId, assignedBy)
+    const assignment = await this.userRoles.assign(userId, roleId, actor.userId)
+    await this.authorization.invalidateUserCache(userId)
     const effectivePermissionKeys = await this.authorization.resolveEffectivePermissions(userId)
 
     return {
@@ -255,11 +286,16 @@ export class SecurityAdminService {
     }
   }
 
-  async removeRole(userId: string, roleId: string) {
+  async removeRole(userId: string, roleId: string, actor: GrantActor) {
+    assertNotSelf(actor, userId)
     const user = await this.users.findByIdSafe(userId)
     if (!user) throw AppError.notFound('Usuario no encontrado')
+    // Quitar un rol con denegaciones puede devolver permisos: quien lo quita debe tenerlos.
+    const role = await this.roles.findByIdSafe(roleId)
+    if (role?.denyKeys?.length) assertCanGrant(actor, effectiveAllow(role.denyKeys))
     const ok = await this.userRoles.remove(userId, roleId)
     if (!ok) throw AppError.notFound('Asignación no encontrada')
+    await this.authorization.invalidateUserCache(userId)
 
     const effectivePermissionKeys = await this.authorization.resolveEffectivePermissions(userId)
     return { ok: true, effectivePermissionKeys }
@@ -273,9 +309,17 @@ export class SecurityAdminService {
     }
   }
 
-  async importRoles(data: {
-    roles: Array<{ key: string; name: string; description?: string; permissionKeys?: string[] }>
-  }) {
+  async importRoles(
+    data: {
+      roles: Array<{ key: string; name: string; description?: string; permissionKeys?: string[] }>
+    },
+    actor: GrantActor,
+  ) {
+    // Se valida todo el lote antes de escribir: o se importa entero o nada.
+    assertCanGrant(
+      actor,
+      (data.roles ?? []).flatMap((r) => r.permissionKeys ?? []),
+    )
     let created = 0
     let updated = 0
     for (const r of data.roles ?? []) {
@@ -298,21 +342,31 @@ export class SecurityAdminService {
         created++
       }
     }
+    if (updated > 0) await this.authorization.invalidateAllCaches()
     return { created, updated }
   }
 
   async archiveRole(id: string) {
     if (!(await this.roles.archive(id)))
       throw AppError.notFound('Rol no encontrado o es de sistema')
+    await this.authorization.invalidateAllCaches()
     return { ok: true }
   }
 
-  async restoreRole(id: string) {
+  async restoreRole(id: string, actor: GrantActor) {
+    const role = await this.roles.findByIdSafe(id)
+    if (!role?.isArchived) throw AppError.notFound('Rol archivado no encontrado')
+    // Restaurar devuelve sus permisos a todos los usuarios que lo tienen asignado.
+    assertCanGrant(actor, await this.roleGrantKeys(role))
     if (!(await this.roles.restore(id))) throw AppError.notFound('Rol archivado no encontrado')
+    await this.authorization.invalidateAllCaches()
     return { ok: true }
   }
 
-  async duplicateRole(id: string, body: { key: string; name: string }) {
+  async duplicateRole(id: string, body: { key: string; name: string }, actor: GrantActor) {
+    const source = await this.roles.findByIdSafe(id)
+    if (!source) throw AppError.notFound('Rol origen no encontrado')
+    assertCanGrant(actor, await this.roleGrantKeys(source))
     const role = await this.roles.duplicate(id, body.key, body.name)
     if (!role) throw AppError.notFound('Rol origen no encontrado')
     return { role: this.roles.toDomain(role) }
@@ -466,13 +520,14 @@ export class SecurityAdminService {
     }
   }
 
-  async bulkAssignRoles(body: { userIds: string[]; roleId: string; assignedBy: string }) {
+  async bulkAssignRoles(body: { userIds: string[]; roleId: string }, actor: GrantActor) {
     const role = await this.roles.findByIdSafe(body.roleId)
     if (!role) throw AppError.notFound('Rol no encontrado')
+    assertCanGrant(actor, await this.roleGrantKeys(role))
     const results = []
     for (const userId of body.userIds) {
       try {
-        await this.assignRole(userId, body.roleId, body.assignedBy)
+        await this.assignRole(userId, body.roleId, actor)
         results.push({ userId, ok: true })
       } catch (err) {
         results.push({

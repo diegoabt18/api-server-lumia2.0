@@ -110,6 +110,10 @@ export const templateCreateSchema = z.object({
   icon: z.string().optional(),
 })
 
+/** Edición parcial de plantilla: solo los campos del alta (el resto se descarta). */
+export const templateUpdateSchema = templateCreateSchema.partial()
+export type TemplatePatch = z.infer<typeof templateUpdateSchema>
+
 export const templateApplySchema = z.object({
   templateId: z.string().min(1),
   roleId: z.string().min(1),
@@ -129,6 +133,10 @@ export const conditionalCreateSchema = z.object({
   priority: z.number().optional(),
   appliesToUserId: z.string().nullable().optional(),
 })
+
+/** Edición parcial de regla condicional: solo los campos del alta (el resto se descarta). */
+export const conditionalUpdateSchema = conditionalCreateSchema.partial()
+export type ConditionalPatch = z.infer<typeof conditionalUpdateSchema>
 
 export const approvalActionSchema = z.object({
   id: z.string().min(1),
@@ -160,6 +168,7 @@ export const webhookCreateSchema = z.object({
 export const webhookUpdateSchema = webhookCreateSchema.partial().extend({
   isActive: z.boolean().optional(),
 })
+export type WebhookPatch = z.infer<typeof webhookUpdateSchema>
 
 export const bulkOperationSchema = z.object({
   type: z.enum([

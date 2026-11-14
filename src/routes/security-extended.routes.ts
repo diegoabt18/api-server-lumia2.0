@@ -3,7 +3,7 @@ import type { AppContext } from '../app.context.js'
 import { AppError } from '../common/errors/app.error.js'
 import { PERMISSION_REGISTRY } from '../common/permissions/registry.js'
 import { adminGuard } from '../modules/admin/middleware/admin-guard.js'
-import type { AuthenticatedRequest } from '../modules/identity/middleware/auth.middleware.js'
+import { actorOf, type AuthenticatedRequest } from '../modules/identity/middleware/auth.middleware.js'
 import {
   approvalActionSchema,
   approvalCreateSchema,
@@ -11,6 +11,7 @@ import {
   bulkRolesSchema,
   cacheInvalidateSchema,
   conditionalCreateSchema,
+  conditionalUpdateSchema,
   delegationSchema,
   overrideGrantSchema,
   permissionCreateSchema,
@@ -20,11 +21,13 @@ import {
   scheduledChangeSchema,
   templateApplySchema,
   templateCreateSchema,
+  templateUpdateSchema,
   temporalGrantSchema,
   temporalRevokeSchema,
   transferImportSchema,
   validateInheritanceSchema,
   webhookCreateSchema,
+  webhookUpdateSchema,
 } from '../modules/security/schemas/security.schema.js'
 import type { ScheduledActionType } from '../modules/security/domain/enterprise.entities.js'
 import type { ConditionClause } from '../modules/security/services/conditional-evaluation.js'
@@ -107,7 +110,7 @@ export async function registerSecurityExtendedRoutes(api: FastifyInstance, ctx: 
   api.get('/admin/security/roles/export', { preHandler: rolesRead }, async () => admin.exportRoles())
   api.post('/admin/security/roles/import', { preHandler: rolesManage }, async (request) => {
     const data = parseBody(roleImportSchema, request.body)
-    return admin.importRoles(data)
+    return admin.importRoles(data, actorOf(request))
   })
   api.post('/admin/security/roles/validate-inheritance', { preHandler: rolesRead }, async (request) => {
     const data = parseBody(validateInheritanceSchema, request.body)
@@ -119,12 +122,12 @@ export async function registerSecurityExtendedRoutes(api: FastifyInstance, ctx: 
   })
   api.post('/admin/security/roles/restore/:id', { preHandler: rolesManage }, async (request) => {
     const { id } = request.params as { id: string }
-    return admin.restoreRole(id)
+    return admin.restoreRole(id, actorOf(request))
   })
   api.post('/admin/security/roles/duplicate/:id', { preHandler: rolesManage }, async (request) => {
     const { id } = request.params as { id: string }
     const data = parseBody(roleDuplicateSchema, request.body)
-    return admin.duplicateRole(id, data)
+    return admin.duplicateRole(id, data, actorOf(request))
   })
   api.get('/admin/security/roles/effective/:id', { preHandler: rolesRead }, async (request) => {
     const { id } = request.params as { id: string }
@@ -155,8 +158,7 @@ export async function registerSecurityExtendedRoutes(api: FastifyInstance, ctx: 
   // ─── Users bulk ───
   api.post('/admin/security/users/bulk-roles', { preHandler: usersManage }, async (request) => {
     const body = parseBody(bulkRolesSchema, request.body)
-    const auth = (request as AuthenticatedRequest).auth
-    return admin.bulkAssignRoles({ ...body, assignedBy: auth.userId })
+    return admin.bulkAssignRoles(body, actorOf(request))
   })
 
   // ─── Dashboards ───
@@ -198,8 +200,7 @@ export async function registerSecurityExtendedRoutes(api: FastifyInstance, ctx: 
   // ─── Temporal permissions (7 routes) ───
   api.post('/admin/security/temporal-permissions/grant', { preHandler: manage }, async (request) => {
     const body = parseBody(temporalGrantSchema, request.body)
-    const auth = (request as AuthenticatedRequest).auth
-    return enterprise.grantTemporal({ ...body, grantedBy: auth.userId })
+    return enterprise.grantTemporal(body, actorOf(request))
   })
   api.post('/admin/security/temporal-permissions/revoke', { preHandler: manage }, async (request) => {
     const body = parseBody(temporalRevokeSchema, request.body)
@@ -224,8 +225,7 @@ export async function registerSecurityExtendedRoutes(api: FastifyInstance, ctx: 
   // ─── User overrides (5 routes) ───
   api.post('/admin/security/user-overrides/grant', { preHandler: manage }, async (request) => {
     const body = parseBody(overrideGrantSchema, request.body)
-    const auth = (request as AuthenticatedRequest).auth
-    return enterprise.grantOverride({ ...body, grantedBy: auth.userId })
+    return enterprise.grantOverride(body, actorOf(request))
   })
   api.post('/admin/security/user-overrides/revoke', { preHandler: manage }, async (request) => {
     const { id } = parseBody(temporalRevokeSchema, request.body)
@@ -247,8 +247,7 @@ export async function registerSecurityExtendedRoutes(api: FastifyInstance, ctx: 
   // ─── Role delegations (6 routes) ───
   api.post('/admin/security/role-delegations/delegate', { preHandler: manage }, async (request) => {
     const body = parseBody(delegationSchema, request.body)
-    const auth = (request as AuthenticatedRequest).auth
-    return enterprise.delegateRole({ ...body, delegatedBy: auth.userId })
+    return enterprise.delegateRole(body, actorOf(request))
   })
   api.post('/admin/security/role-delegations/revoke', { preHandler: manage }, async (request) => {
     const { id } = parseBody(temporalRevokeSchema, request.body)
@@ -276,10 +275,10 @@ export async function registerSecurityExtendedRoutes(api: FastifyInstance, ctx: 
     return enterprise.createTemplate({ ...body, createdBy: auth.userId })
   })
   api.post('/admin/security/permission-templates/update', { preHandler: manage }, async (request) => {
-    const { id, ...patch } = request.body as { id: string } & Record<string, unknown>
-    if (!id) throw AppError.badRequest('id es requerido')
+    const { id, ...rest } = (request.body ?? {}) as { id?: unknown } & Record<string, unknown>
+    if (typeof id !== 'string' || !id) throw AppError.badRequest('id es requerido')
     const auth = (request as AuthenticatedRequest).auth
-    return enterprise.updateTemplate(id, patch, auth.userId)
+    return enterprise.updateTemplate(id, parseBody(templateUpdateSchema, rest), auth.userId)
   })
   api.post('/admin/security/permission-templates/archive', { preHandler: manage }, async (request) => {
     const { id } = request.body as { id?: string }
@@ -293,7 +292,7 @@ export async function registerSecurityExtendedRoutes(api: FastifyInstance, ctx: 
   })
   api.post('/admin/security/permission-templates/apply', { preHandler: manage }, async (request) => {
     const body = parseBody(templateApplySchema, request.body)
-    return enterprise.applyTemplate(body.templateId, body.roleId)
+    return enterprise.applyTemplate(body.templateId, body.roleId, actorOf(request))
   })
   api.get('/admin/security/permission-templates', { preHandler: read }, async (request) =>
     enterprise.listTemplates(request.query as Record<string, unknown>),
@@ -313,22 +312,27 @@ export async function registerSecurityExtendedRoutes(api: FastifyInstance, ctx: 
   api.post('/admin/security/conditional-permissions/create', { preHandler: manage }, async (request) => {
     const body = parseBody(conditionalCreateSchema, request.body)
     const auth = (request as AuthenticatedRequest).auth
-    return enterprise.createConditional({
-      ...body,
-      conditions: body.conditions as unknown as ConditionClause[],
-      createdBy: auth.userId,
-    })
+    return enterprise.createConditional(
+      {
+        ...body,
+        conditions: body.conditions as unknown as ConditionClause[],
+        createdBy: auth.userId,
+      },
+      actorOf(request),
+    )
   })
   api.post('/admin/security/conditional-permissions/update', { preHandler: manage }, async (request) => {
-    const { id, ...patch } = request.body as { id: string } & Record<string, unknown>
-    if (!id) throw AppError.badRequest('id es requerido')
-    const auth = (request as AuthenticatedRequest).auth
-    return enterprise.updateConditional(id, patch, auth.userId)
+    const { id, ...rest } = (request.body ?? {}) as { id?: unknown } & Record<string, unknown>
+    if (typeof id !== 'string' || !id) throw AppError.badRequest('id es requerido')
+    const patch = parseBody(conditionalUpdateSchema, rest)
+    return enterprise.updateConditional(id, patch, actorOf(request))
   })
   api.post('/admin/security/conditional-permissions/toggle-status', { preHandler: manage }, async (request) => {
-    const { id, status } = request.body as { id?: string; status?: 'active' | 'inactive' }
-    if (!id || !status) throw AppError.badRequest('id y status son requeridos')
-    return enterprise.toggleConditional(id, status)
+    const { id, status } = (request.body ?? {}) as { id?: unknown; status?: unknown }
+    if (typeof id !== 'string' || !id || (status !== 'active' && status !== 'inactive')) {
+      throw AppError.badRequest('id y status son requeridos')
+    }
+    return enterprise.toggleConditional(id, status, actorOf(request))
   })
   api.post('/admin/security/conditional-permissions/delete', { preHandler: manage }, async (request) => {
     const { id } = request.body as { id?: string }
@@ -410,8 +414,7 @@ export async function registerSecurityExtendedRoutes(api: FastifyInstance, ctx: 
   })
   api.post('/admin/security/transfer/import', { preHandler: permManage }, async (request) => {
     const data = parseBody(transferImportSchema, request.body)
-    const auth = (request as AuthenticatedRequest).auth
-    return enterprise.importTransfer(data, auth.userId)
+    return enterprise.importTransfer(data, actorOf(request))
   })
 
   // ─── Cache ───
@@ -431,10 +434,10 @@ export async function registerSecurityExtendedRoutes(api: FastifyInstance, ctx: 
     return enterprise.createWebhook({ ...body, events: body.events as never, createdBy: auth.userId })
   })
   api.post('/admin/security/webhooks/update', { preHandler: manage }, async (request) => {
-    const { id, ...patch } = request.body as { id: string } & Record<string, unknown>
-    if (!id) throw AppError.badRequest('id es requerido')
+    const { id, ...rest } = (request.body ?? {}) as { id?: unknown } & Record<string, unknown>
+    if (typeof id !== 'string' || !id) throw AppError.badRequest('id es requerido')
     const auth = (request as AuthenticatedRequest).auth
-    return enterprise.updateWebhook(id, patch, auth.userId)
+    return enterprise.updateWebhook(id, parseBody(webhookUpdateSchema, rest), auth.userId)
   })
   api.post('/admin/security/webhooks/delete', { preHandler: manage }, async (request) => {
     const { id } = request.body as { id?: string }
@@ -450,7 +453,6 @@ export async function registerSecurityExtendedRoutes(api: FastifyInstance, ctx: 
   // ─── Bulk ───
   api.post('/admin/security/bulk', { preHandler: manage }, async (request) => {
     const body = parseBody(bulkOperationSchema, request.body)
-    const auth = (request as AuthenticatedRequest).auth
-    return enterprise.executeBulk({ ...body, performedBy: auth.userId })
+    return enterprise.executeBulk(body, actorOf(request))
   })
 }

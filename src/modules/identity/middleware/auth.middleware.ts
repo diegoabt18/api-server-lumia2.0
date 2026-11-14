@@ -5,6 +5,7 @@ import type { AccessTokenPayload } from '../domain/session.entity.js'
 import { JwtTokenService } from '../infrastructure/jwt.service.js'
 import { SessionRepository } from '../infrastructure/session.repository.js'
 import type { AuthorizationService } from '../../security/services/authorization.service.js'
+import type { GrantActor } from '../../security/domain/grant-guard.js'
 
 export type AuthenticatedRequest = FastifyRequest & {
   auth: AccessTokenPayload
@@ -84,4 +85,10 @@ export function optionalAuth(sessions: SessionRepository, authorization?: Author
       ;(request as AuthenticatedRequest).permissionKeys = resolved.permissionKeys
     }
   }
+}
+
+/** Quién hace un cambio de permisos: usuario autenticado y sus permisos efectivos. */
+export function actorOf(request: FastifyRequest): GrantActor {
+  const req = request as AuthenticatedRequest
+  return { userId: req.auth.userId, permissionKeys: req.permissionKeys ?? [] }
 }

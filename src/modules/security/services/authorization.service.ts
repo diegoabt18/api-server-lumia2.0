@@ -202,4 +202,12 @@ export class AuthorizationService {
   async invalidateUserCache(userId: string): Promise<void> {
     if (this.permCache) await this.permCache.invalidate(userId)
   }
+
+  /**
+   * Drops every cached permission set. Used after role-level changes (edit, archive, restore,
+   * delete, template applied), which can affect any user holding or inheriting the role.
+   */
+  async invalidateAllCaches(): Promise<void> {
+    if (this.permCache) await this.permCache.invalidate()
+  }
 }

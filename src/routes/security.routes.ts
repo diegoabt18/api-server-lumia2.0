@@ -3,7 +3,7 @@ import type { AppContext } from '../app.context.js'
 import { AppError } from '../common/errors/app.error.js'
 import { PERMISSION_REGISTRY, hasPermission } from '../common/permissions/registry.js'
 import { adminGuard } from '../modules/admin/middleware/admin-guard.js'
-import type { AuthenticatedRequest } from '../modules/identity/middleware/auth.middleware.js'
+import { actorOf, type AuthenticatedRequest } from '../modules/identity/middleware/auth.middleware.js'
 import {
   assignRoleSchema,
   roleCreateSchema,
@@ -113,7 +113,7 @@ export async function registerSecurityRoutes(api: FastifyInstance, ctx: AppConte
     async (request) => {
       const parsed = roleCreateSchema.safeParse(request.body)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
-      return services.securityAdmin.createRole(parsed.data)
+      return services.securityAdmin.createRole(parsed.data, actorOf(request))
     },
   )
 
@@ -133,7 +133,7 @@ export async function registerSecurityRoutes(api: FastifyInstance, ctx: AppConte
       const { id } = request.params as { id: string }
       const parsed = rolePatchSchema.safeParse(request.body)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
-      return services.securityAdmin.updateRole(id, parsed.data)
+      return services.securityAdmin.updateRole(id, parsed.data, actorOf(request))
     },
   )
 
@@ -174,8 +174,7 @@ export async function registerSecurityRoutes(api: FastifyInstance, ctx: AppConte
       const { id } = request.params as { id: string }
       const parsed = assignRoleSchema.safeParse(request.body)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
-      const auth = (request as AuthenticatedRequest).auth
-      return services.securityAdmin.assignRole(id, parsed.data.roleId, auth.userId)
+      return services.securityAdmin.assignRole(id, parsed.data.roleId, actorOf(request))
     },
   )
 
@@ -184,7 +183,7 @@ export async function registerSecurityRoutes(api: FastifyInstance, ctx: AppConte
     { preHandler: g(PERMISSION_REGISTRY.ADMIN_USERS_MANAGE) },
     async (request) => {
       const { id, roleId } = request.params as { id: string; roleId: string }
-      return services.securityAdmin.removeRole(id, roleId)
+      return services.securityAdmin.removeRole(id, roleId, actorOf(request))
     },
   )
 
@@ -200,7 +199,7 @@ export async function registerSecurityRoutes(api: FastifyInstance, ctx: AppConte
     async (request) => {
       const parsed = roleCreateSchema.safeParse(request.body)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
-      return services.securityAdmin.createRole(parsed.data)
+      return services.securityAdmin.createRole(parsed.data, actorOf(request))
     },
   )
   api.get(
@@ -218,7 +217,7 @@ export async function registerSecurityRoutes(api: FastifyInstance, ctx: AppConte
       const { id } = request.params as { id: string }
       const parsed = rolePatchSchema.safeParse(request.body)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
-      return services.securityAdmin.updateRole(id, parsed.data)
+      return services.securityAdmin.updateRole(id, parsed.data, actorOf(request))
     },
   )
   api.delete(
