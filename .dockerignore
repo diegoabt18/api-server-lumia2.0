@@ -1,0 +1,17 @@
+# El Dockerfile solo copia package*.json, tsconfig*.json y src/. Todo lo demás queda fuera del
+# contexto de build: secretos (.env*), datos (backups, uploads, ops-local, logs) y dependencias locales.
+node_modules
+dist
+coverage
+.env
+.env.*
+!.env.example
+logs
+*.log
+backups
+uploads
+ops-local
+tools
+docker/data
+tests
+.git

@@ -11,7 +11,8 @@ import type { ImageStudioConfig } from './studios.js'
 type ImageFormatSpec = { width: number; height: number }
 const MAX_INPUT_PIXELS = 50_000_000
 
-type SharpFactory = typeof import('sharp')
+/** Fábrica `sharp(...)`: export por defecto (sharp ≥ 0.35 es ESM). */
+type SharpFactory = typeof import('sharp').default
 
 /** Carga perezosa: evita inicializar libvips al arrancar el servidor. */
 let factory: SharpFactory | null = null
