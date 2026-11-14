@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { AppContext } from '../app.context.js'
 import { AppError } from '../common/errors/app.error.js'
@@ -9,8 +10,10 @@ import {
 function lumichatDeviceKeyGuard(deviceKey: string | undefined) {
   return async (request: import('fastify').FastifyRequest) => {
     const header = request.headers['x-lumi-device-key']
-    const provided = typeof header === 'string' ? header : ''
-    if (!deviceKey || provided !== deviceKey) {
+    const provided = Buffer.from(typeof header === 'string' ? header : '')
+    const expected = Buffer.from(deviceKey ?? '')
+    // Comparación en tiempo constante (la longitud se compara antes, como exige timingSafeEqual).
+    if (!deviceKey || provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
       throw AppError.unauthorized('Invalid device registration key')
     }
   }

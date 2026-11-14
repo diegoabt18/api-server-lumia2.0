@@ -32,6 +32,7 @@ export class PermissionCacheService {
       }
     }
     const mem = this.memory.get(userId)
+    if (mem && Date.now() >= mem.expiresAt) this.memory.delete(userId)
     if (mem && Date.now() < mem.expiresAt) {
       this.stats.hits++
       try {
@@ -47,6 +48,8 @@ export class PermissionCacheService {
   async set(userId: string, keys: string[], ttlSeconds = DEFAULT_TTL): Promise<void> {
     const value = JSON.stringify(keys)
     await this.cache.set(this.key(userId), value, ttlSeconds)
+    // Poda ocasional: sin ella el mapa crece con cada usuario que inicia sesión (clientes incluidos).
+    if (this.memory.size >= 1000 && this.memory.size % 100 === 0) this.prune()
     this.memory.set(userId, { value, expiresAt: Date.now() + ttlSeconds * 1000 })
   }
 

@@ -243,7 +243,7 @@ export const adminVariantCreateSchema = z.object({
     .string()
     .min(1)
     .max(80)
-    .regex(/^[A-Za-z0-9._\-]+$/),
+    .regex(/^[A-Za-z0-9._-]+$/),
   barcode: z
     .string()
     .trim()

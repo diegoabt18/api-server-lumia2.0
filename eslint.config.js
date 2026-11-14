@@ -26,6 +26,9 @@ export default [
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       '@typescript-eslint/no-explicit-any': 'warn',
       'no-console': 'off',
+      // TypeScript ya comprueba los identificadores (incluidos fetch, Response, RequestInit…).
+      // Recomendación de typescript-eslint: no-undef da falsos positivos en archivos .ts.
+      'no-undef': 'off',
     },
   },
   prettier,

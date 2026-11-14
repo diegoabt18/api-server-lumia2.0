@@ -33,6 +33,12 @@ export class RedisManager {
         /* evita Unhandled error event cuando Redis no está disponible */
       })
       await client.connect()
+      // El arranque falla rápido (sin reintentos), pero una vez conectado hay que reconectar: con
+      // retryStrategy nula, un corte breve de Redis dejaba el cliente cerrado hasta reiniciar el
+      // servidor (sin locks del motor de Lumi, sin caché compartida ni límites en Redis).
+      // enableOfflineQueue sigue en false: mientras está caído, los comandos fallan al instante
+      // y los servicios usan su respaldo en memoria.
+      client.options.retryStrategy = (times: number) => Math.min(times * 1000, 10_000)
       this.client = client
       this.available = true
       this.logger.info('Redis connected')
@@ -48,6 +54,11 @@ export class RedisManager {
 
   getClient(): RedisClient {
     return this.available ? this.client : null
+  }
+
+  /** Estado real de la conexión (para salud y diagnóstico). */
+  isReady(): boolean {
+    return this.client?.status === 'ready'
   }
 
   isAvailable(): boolean {

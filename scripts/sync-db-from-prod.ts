@@ -87,9 +87,14 @@ function runRestore(runner: Runner, uri: string, dbName: string, dumpPath: strin
   )
 }
 
+/** Oculta usuario y contraseña de las URIs de Mongo antes de escribir el comando en consola. */
+function redactUris(cmd: string): string {
+  return cmd.replace(/(mongodb(?:\+srv)?:\/\/)[^@\s"]+@/g, '$1***@')
+}
+
 function run(cmd: string): void {
-  console.log(`> ${cmd}`)
-  execSync(cmd, { stdio: 'inherit', shell: true })
+  console.log(`> ${redactUris(cmd)}`)
+  execSync(cmd, { stdio: 'inherit' })
 }
 
 const targetArg = process.argv.find((a) => a.startsWith('--target='))
