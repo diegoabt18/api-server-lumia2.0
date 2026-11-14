@@ -178,6 +178,22 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
         response: automated,
       }
     }
+    // Mismas reglas que el streaming: lo que resuelve una herramienta del backend no usa el modelo.
+    const route = routeMessage(parsed.data.message)
+    if (route.kind === 'orders_recent') {
+      let response = ''
+      let conversationId = parsed.data.conversationId ?? ''
+      for await (const event of ordersRecentStream(
+        request,
+        route.limit,
+        parsed.data.message,
+        parsed.data.conversationId,
+      )) {
+        if (event.type === 'token') response += event.text
+        if (event.type === 'done') conversationId = event.conversationId
+      }
+      return { conversationId, model: 'lumi-tools', response }
+    }
     const turn = await resolveTurn(request, parsed.data)
     const result = await requireClient().chat(
       userIdOf(request),
