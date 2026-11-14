@@ -131,7 +131,10 @@ describe('parseTrustProxy', () => {
   })
   it('accepts false, hop counts and CIDR lists', () => {
     expect(parseTrustProxy('false')).toBe(false)
-    expect(parseTrustProxy('1')).toBe(1)
+    const oneHop = parseTrustProxy('1') as (address: string, hop: number) => boolean
+    expect(typeof oneHop).toBe('function')
+    expect(oneHop('10.0.0.1', 0)).toBe(true)
+    expect(oneHop('10.0.0.1', 1)).toBe(false)
     expect(parseTrustProxy('127.0.0.1, 172.18.0.0/16')).toEqual(['127.0.0.1', '172.18.0.0/16'])
   })
 })

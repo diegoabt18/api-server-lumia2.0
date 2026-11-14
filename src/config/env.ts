@@ -186,12 +186,20 @@ export function getCorsOrigins(env: Env): string[] {
   return [...new Set(origins)]
 }
 
-/** Convierte TRUST_PROXY en el valor que espera Fastify (boolean, saltos o lista de IP/CIDR). */
-export function parseTrustProxy(value: string): boolean | number | string[] {
+export type TrustProxySetting = boolean | string[] | ((address: string, hop: number) => boolean)
+
+/**
+ * Convierte TRUST_PROXY en el valor que espera Fastify: boolean, lista de IP/CIDR o, para un número
+ * de saltos N, la función equivalente de proxy-addr (se confía en los N saltos más cercanos).
+ */
+export function parseTrustProxy(value: string): TrustProxySetting {
   const v = value.trim().toLowerCase()
   if (v === '' || v === 'true') return true
   if (v === 'false') return false
-  if (/^\d+$/.test(v)) return Number(v)
+  if (/^\d+$/.test(v)) {
+    const hops = Number(v)
+    return (_address: string, hop: number) => hop < hops
+  }
   return value
     .split(',')
     .map((s) => s.trim())
