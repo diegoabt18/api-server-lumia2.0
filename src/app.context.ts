@@ -136,6 +136,14 @@ import { createFollowUpHandler } from './modules/lumi/automation/services/remind
 import { MongoPendingActions } from './modules/lumi/actions/pending-action.js'
 import { type ActiveEntityStore, MongoActiveEntities } from './modules/lumi/selector/active-entity.js'
 import { LumiInitiativeRepository } from './modules/lumi/initiatives/infrastructure/lumi-initiative.repository.js'
+import { LumiCapabilityRepository } from './modules/lumi/capabilities/infrastructure/lumi-capability.repository.js'
+import { LumiCapabilityService } from './modules/lumi/capabilities/services/capability.service.js'
+import { LumiCapabilityTestRepository } from './modules/lumi/capabilities/infrastructure/lumi-capability-test.repository.js'
+import { CapabilityTestService } from './modules/lumi/capabilities/services/capability-test.service.js'
+import { SandboxTurnRunner } from './modules/lumi/capabilities/services/sandbox-runner.js'
+import { LumiAssistantClient } from './modules/lumi/infrastructure/lumi-assistant.client.js'
+import { createLumiToolDeps } from './modules/lumi/tools/tool-adapters.js'
+import { DEFAULT_AUTOMATION_TIMEZONE } from './modules/lumi/automation/domain/schedule.js'
 import { RepositoryInitiativeSources } from './modules/lumi/initiatives/infrastructure/initiative-sources.js'
 import { InitiativeEngine } from './modules/lumi/initiatives/services/initiative-engine.js'
 import { InitiativeScheduler, DEFAULT_INITIATIVE_SCHEDULER_OPTIONS } from './modules/lumi/initiatives/services/initiative-scheduler.js'
@@ -207,6 +215,10 @@ export interface AppContext {
     lumiCommands: AutomationCommands
     /** Context Manager de Lumi: entidad activa por conversación (caduca sola). */
     lumiActiveEntities: ActiveEntityStore
+    /** Capability Manager: peticiones que ninguna herramienta resuelve, agrupadas para el panel. */
+    lumiCapabilities: LumiCapabilityService
+    /** Entorno de pruebas de capacidades (fase D). */
+    lumiCapabilityTests: CapabilityTestService
     notificationHub: NotificationStreamHub
     auth: AuthService
     authorization: AuthorizationService
@@ -601,6 +613,15 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   await lumiActiveEntities
     .ensureIndexes()
     .catch((err) => logger.warn({ err }, 'lumi context indexes skipped'))
+  const lumiCapabilityRepo = new LumiCapabilityRepository(identityDb)
+  await lumiCapabilityRepo
+    .ensureIndexes()
+    .catch((err) => logger.warn({ err }, 'lumi capability indexes skipped'))
+  const lumiCapabilityTestRepo = new LumiCapabilityTestRepository(identityDb)
+  await lumiCapabilityTestRepo
+    .ensureIndexes()
+    .catch((err) => logger.warn({ err }, 'lumi capability test indexes skipped'))
+  const lumiCapabilities = new LumiCapabilityService(lumiCapabilityRepo, undefined, undefined, lumiCapabilityTestRepo)
   const lumiCommands = new AutomationCommands(
     lumiTasks,
     lumiAutomationRepo,
@@ -630,6 +651,28 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     (err) => logger.error({ err }, 'Lumi initiative scheduler tick failed'),
   )
   const lumiInitiatives = new LumiInitiativeService(initiativeRepo)
+
+  // «Probar capacidad» (fase D): mismo plan de turno que el chat, solo lecturas, sin efectos.
+  const lumiAssistantForTests =
+    env.LUMI_ASSISTANT_URL && env.LUMI_ASSISTANT_API_KEY
+      ? new LumiAssistantClient({
+          baseUrl: env.LUMI_ASSISTANT_URL.replace(/\/+$/, ''),
+          apiKey: env.LUMI_ASSISTANT_API_KEY,
+          timeoutMs: env.LUMI_ASSISTANT_TIMEOUT_MS,
+        })
+      : null
+  const lumiCapabilityTests = new CapabilityTestService(
+    lumiCapabilityRepo,
+    lumiCapabilityTestRepo,
+    new SandboxTurnRunner({
+      select: lumiAssistantForTests
+        ? (userId, payload) => lumiAssistantForTests.select(userId, payload, env.LUMI_SELECTOR_TIMEOUT_MS)
+        : null,
+      selectorEnabled: env.LUMI_SELECTOR_ENABLED,
+      toolDeps: createLumiToolDeps({ orders, products, notifications, initiatives: lumiInitiatives }),
+      timezone: DEFAULT_AUTOMATION_TIMEZONE,
+    }),
+  )
   const automation = new AutomationScheduler(
     lumiAutomationRepo,
     redisClient ? new RedisAutomationLock(redisClient) : new LocalAutomationLock(),
@@ -705,6 +748,8 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       lumiInitiatives,
       lumiCommands,
       lumiActiveEntities,
+      lumiCapabilities,
+      lumiCapabilityTests,
       notificationHub,
       auth,
       authorization,

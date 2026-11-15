@@ -55,6 +55,7 @@ function fakeDeps(): LumiToolDeps & { calls: string[] } {
       })),
     },
     products: {
+      unpriced: track('products.unpriced', async () => ({ items: [{ name: 'Vela Sin Precio', status: 'active', variantCount: 1 }], total: 1 })),
       lowStock: track('products.lowStock', async () => [
         { name: 'Vela Lavanda', available: 0 },
         { name: 'Difusor Cítrico', available: 2 },

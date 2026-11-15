@@ -58,6 +58,9 @@ export function createLumiToolDeps(repos: {
       lowStock(threshold, limit) {
         return repos.products.findStockAlerts(threshold, limit)
       },
+      unpriced(limit) {
+        return repos.products.findUnpriced(limit)
+      },
       async search(term, limit) {
         // Búsqueda común del Server (modo contains, sin tildes, palabra por palabra).
         return (await repos.products.searchProducts({ query: term, pageSize: limit })).items

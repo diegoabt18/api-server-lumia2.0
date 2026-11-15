@@ -119,3 +119,73 @@ prioridad. Solo se guarda la referencia visible (nunca datos de clientes), y cad
 por el permiso de la herramienta.
 
 La especificación medida de estas reglas está en `local-ai-assistant/bench/rules.py`.
+
+## Capability Manager (fase B)
+
+Cuando el selector decide `missing_capability`, el Server registra la petición en
+`lumi_capabilities` y `lumi_capability_requests` (identity_db) y responde con una plantilla, sin
+modelo. Solo dice «He registrado la petición» si el registro funcionó.
+
+- **Agrupación** (`capabilities/domain/capability-signature.ts`): palabras clave de `need` y del
+  mensaje, sin palabras vacías ni verbos de petición, con sinónimos y raíz de 5 letras.
+  - Mismas palabras, Jaccard ≥ 0,6, o una contiene a la otra con dos palabras en común: **la misma**
+    capacidad (contador y frase de ejemplo).
+  - Coincidencia parcial: capacidad nueva con `possibleDuplicateOf`. Fusionar lo decide un
+    administrador.
+  - Compartir solo modificadores («sin», «exportar», «usuario») no agrupa.
+  - Una petición igual a una capacidad fusionada se suma a la que la absorbió.
+- **Repetición:** la misma persona con la misma firma solo cuenta una vez cada 10 minutos.
+- **Límites:** frase de 500 caracteres, `need` de 120, 5 frases de ejemplo y 50 entradas de historial.
+
+| Ruta (`/api/admin/lumi/capabilities`) | Permiso |
+|---|---|
+| `GET /` (filtros `status`, `module`, `priority`, `search`; orden `recent`, `requests`, `created`; paginada) · `GET /stats` · `GET /:id` | `lumi.capabilities.read` |
+| `PATCH /:id` (título, descripción, módulo, prioridad, especificación) · `POST /:id/status` · `POST /:id/merge` | `lumi.capabilities.manage` |
+
+- El detalle muestra las últimas frases **sin su autor** y el número de usuarios distintos.
+- Transiciones manuales: `detected → pending_review → approved → in_development → ready_for_testing`,
+  más `rejected` y su reapertura. `testing`, `validated`, `enabled` y `disabled` no se pueden
+  poner a mano: llegan con las fases D y E. `duplicate` solo llega por fusión.
+- Los cambios quedan en el historial de la capacidad y en la auditoría de actividad administrativa
+  (sin las frases de los usuarios).
+- Los dos permisos son nuevos y no se conceden a nadie automáticamente: solo los tienen los roles
+  con `*` hasta que se asignen.
+
+## Probar capacidad (fase D)
+
+El plan de un turno vive en `modules/lumi/turn/turn-plan.ts` (`planLumiTurn`): reglas → selector →
+Server, **sin efectos**. Lo usan el chat (que añade el registro de la capacidad que falta y las
+métricas) y el entorno de pruebas, así que lo que se prueba es lo que hace el chat.
+
+**Entorno de pruebas** (`capabilities/services/sandbox-runner.ts`):
+- recorre el mismo plan con los permisos de quien prueba;
+- los recordatorios solo se detectan (`parseAutomationCommand`), no se crean;
+- solo ejecuta herramientas del catálogo, todas de lectura. Sin permiso no lee datos;
+- no llama a la conversación del modelo, no registra capacidades, no guarda historial ni entidad activa;
+- sin contexto de pantalla ni de conversación: la frase se prueba sola;
+- `forceSelector` usa el selector aunque `LUMI_SELECTOR_ENABLED=false`, para evaluarlo antes de activarlo. Si el asistente no está configurado, responde 409.
+
+**Frases** (`lumi_capability_phrases`, máx. 30 por capacidad): texto, rol, resultado esperado
+(`supported`, `missing_information`, `missing_capability`, `ambiguous`, `delegated` o `unsupported`),
+herramienta esperada opcional (solo con `supported` o `missing_information`) y si es crítica.
+- `test`: entra en la batería.
+- `validation`: entra en la batería y decide si la capacidad pasa.
+- `control`: **nunca** se ejecuta aquí; solo lo usa el banco de medición.
+
+**Ejecuciones** (`lumi_capability_test_runs`, TTL de 90 días):
+- corren en segundo plano: `POST` responde 202 y el panel consulta la ejecución;
+- una sola en curso por capacidad; tras 30 minutos se da por interrumpida;
+- por frase se guardan la etapa, la propuesta del modelo y la decisión del Server, la latencia y los tokens, la entrada validada, las herramientas ejecutadas (filas, tiempo y texto recortado a 300 caracteres) y si acertó.
+
+**Batería y estado:**
+- **Pasa** con ≥ 90 % en validación y el 100 % de las frases críticas.
+- Si la capacidad está en `ready_for_testing`, `testing`, `failed` o `validated` y hay frases de validación, pasa a `testing` y al terminar queda `validated` o `failed`.
+- **Nunca** pasa a `enabled`: eso es la fase E.
+- La última batería queda en `lastTest`.
+- Al fusionar capacidades, las frases pasan al destino.
+
+| Ruta (`/api/admin/lumi/capabilities/:id`) | Permiso |
+|---|---|
+| `GET /phrases` · `GET /test-runs` (últimas 20, sin detalle) · `GET /test-runs/:runId` | `lumi.capabilities.read` |
+| `POST /phrases` · `DELETE /phrases/:phraseId` | `lumi.capabilities.manage` |
+| `POST /test-runs` (`{kind: 'single', text, …}` o `{kind: 'battery'}`, y `forceSelector`) | `lumi.capabilities.test` (nuevo) |

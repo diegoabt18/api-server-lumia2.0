@@ -66,6 +66,18 @@ const SNAPSHOTS: Array<{ match: RegExp; type: string; load: Loader }> = [
     type: 'order',
     load: (ctx, p) => (p.id ? ctx.services.adminOrders.get(p.id) : Promise.resolve(null)),
   },
+  {
+    match: /^\/api\/admin\/lumi\/capabilities\/:id(\/.*)?$/,
+    type: 'lumi-capability',
+    // Sin frases de ejemplo: la auditoría guarda lo que decide el administrador, no lo que escribieron los usuarios.
+    load: async (ctx, p) => {
+      if (!p.id) return null
+      const found = await ctx.services.lumiCapabilities.get(p.id).catch(() => null)
+      if (!found) return null
+      const { title, description, module, status, priority, spec, mergedInto, requestCount } = found.capability
+      return { title, description, module, status, priority, spec, mergedInto, requestCount }
+    },
+  },
   { match: /^\/api\/admin\/store-shipping-settings(\/reset)?$/, type: 'store-shipping-settings', load: (ctx) => ctx.services.adminStore.getShippingSettings() },
   { match: /^\/api\/admin\/store-currency-settings$/, type: 'store-currency-settings', load: (ctx) => ctx.services.adminStore.getCurrencySettings() },
   { match: /^\/api\/admin\/store-customer-settings$/, type: 'store-customer-settings', load: (ctx) => ctx.services.adminStore.getCustomerSettings() },

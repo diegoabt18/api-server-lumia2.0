@@ -62,6 +62,15 @@ export const PERMISSION_REGISTRY = {
   LUMI_USE: 'lumi.use',
   /** Lumi con búsqueda web. Solo la pregunta sale a internet, nunca datos de la API ni contexto. */
   LUMI_WEB: 'lumi.web',
+  /** Ver las capacidades que le faltan a Lumi (peticiones registradas desde el chat). */
+  LUMI_CAPABILITIES_READ: 'lumi.capabilities.read',
+  /** Gestionar esas capacidades: especificación, prioridad, estado y fusión. No las habilita. */
+  LUMI_CAPABILITIES_MANAGE: 'lumi.capabilities.manage',
+  /**
+   * Probar capacidades con frases (fase D). Lee datos reales con los permisos de quien prueba;
+   * nunca ejecuta escrituras.
+   */
+  LUMI_CAPABILITIES_TEST: 'lumi.capabilities.test',
   /**
    * Permisos por módulo (2026-11). Antes estos módulos reutilizaban admin.access o products.*.
    * La migración scripts/migrate-module-permissions.ts los concede a quien ya tenía el acceso.

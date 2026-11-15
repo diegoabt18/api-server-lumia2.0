@@ -7,21 +7,15 @@ import { adminGuard } from '../modules/admin/middleware/admin-guard.js'
 import type { AuthenticatedRequest } from '../modules/identity/middleware/auth.middleware.js'
 import {
   LumiAssistantClient,
+  type LumiSelectRequest,
   type LumiStreamEvent,
 } from '../modules/lumi/infrastructure/lumi-assistant.client.js'
 import { type LumiMode, resolveLumiModes } from '../modules/lumi/services/lumi-intent-router.js'
 import { DEFAULT_AUTOMATION_TIMEZONE } from '../modules/lumi/automation/domain/schedule.js'
-import { capabilitiesFor, matchTool, runTool, type ToolMatch } from '../modules/lumi/tools/catalog.js'
+import { capabilitiesFor, runTool, type ToolMatch } from '../modules/lumi/tools/catalog.js'
 import type { LumiEntityRef } from '../modules/lumi/tools/tool.types.js'
-import { entityContextLine } from '../modules/lumi/selector/active-entity.js'
-import {
-  AMBIGUOUS_REPLY,
-  interpret,
-  missingCapabilityReply,
-  normalizeProposal,
-  REMINDER_HINT,
-  selectorCatalog,
-} from '../modules/lumi/selector/lumi-selector.js'
+import { missingCapabilityReply } from '../modules/lumi/selector/lumi-selector.js'
+import { planLumiTurn, type TurnPlan } from '../modules/lumi/turn/turn-plan.js'
 import { createLumiToolDeps } from '../modules/lumi/tools/tool-adapters.js'
 import {
   buildAssistRequest,
@@ -64,6 +58,12 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
         })
       : null
 
+  /** Selector de la etapa 2, o null si está desactivado o el asistente no está configurado. */
+  const selectFn =
+    env.LUMI_SELECTOR_ENABLED && client
+      ? (userId: string, payload: LumiSelectRequest) => client.select(userId, payload, env.LUMI_SELECTOR_TIMEOUT_MS)
+      : null
+
   const requireClient = (): LumiAssistantClient => {
     if (!client)
       throw new AppError(503, 'El asistente Lumi no está configurado', 'LUMI_NOT_CONFIGURED')
@@ -99,10 +99,6 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     notifications: ctx.repos.notifications,
     initiatives: ctx.services.lumiInitiatives,
   })
-
-  /** Herramienta del catálogo reconocida por reglas (consultas de datos reales, sin modelo). */
-  const findTool = (request: FastifyRequest, message: string): ToolMatch | null =>
-    matchTool(message, keysOf(request), { now: new Date(), timezone })
 
   const executeTool = (request: FastifyRequest, match: ToolMatch) =>
     runTool(match, {
@@ -178,80 +174,66 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     }
   }
 
-  type TurnPlan =
-    /** Datos de la tienda con texto determinista, sin conversación con el modelo. */
-    | { kind: 'tools'; matches: ToolMatch[] }
-    /** Respuesta fija del Server: falta un dato, falta la capacidad o no se entiende. */
-    | { kind: 'reply'; text: string }
-    /** Conversación con el modelo; con `match`, los datos de esa herramienta van como contexto. */
-    | { kind: 'model'; match: ToolMatch | null; forceWeb: boolean }
-
   /**
-   * Intent Engine de Lumi en tres etapas: reglas (sin modelo) → selector con Qwen (propone) →
-   * Server (valida, completa, comprueba permisos y decide). Si el selector está desactivado o no
-   * responde, el turno sigue como antes: conversación.
+   * Intent Engine de Lumi (modules/lumi/turn/turn-plan.ts): reglas → selector → Server. Aquí solo
+   * se añaden los efectos del chat: registrar la capacidad que falta y las métricas del selector.
+   * Si el selector está desactivado o no responde, el turno sigue como conversación.
    */
   const planTurn = async (
     request: FastifyRequest,
     message: string,
     conversationId: string | undefined,
     contextInput: LumiContextInput | undefined,
-  ): Promise<TurnPlan> => {
-    const match = findTool(request, message)
-    if (match) return match.explain && !match.denied ? { kind: 'model', match, forceWeb: false } : { kind: 'tools', matches: [match] }
-    if (!env.LUMI_SELECTOR_ENABLED || !client) return { kind: 'model', match: null, forceWeb: false }
-
+  ): Promise<Exclude<TurnPlan, { kind: 'missing_capability' }>> => {
     const now = new Date()
-    const entity = await activeEntity(request, conversationId, contextInput, now)
-    let proposal
-    try {
-      proposal = await client.select(
-        userIdOf(request),
-        { message, context: entityContextLine(entity), ...selectorCatalog() },
-        env.LUMI_SELECTOR_TIMEOUT_MS,
-      )
-    } catch (err) {
-      request.log.warn({ err }, 'Lumi selector unavailable; falling back to chat')
-      return { kind: 'model', match: null, forceWeb: false }
-    }
-    const normalized = normalizeProposal(message, proposal, entity)
-    const result = interpret(message, normalized, keysOf(request), { now, timezone })
-    // Métricas del selector sin el texto del usuario.
-    request.log.info(
+    const { plan, trace } = await planLumiTurn(
       {
-        lumiSelector: {
-          proposed: proposal.status,
-          final: result.status,
-          tools: normalized.intents.map((i) => i.tool),
-          module: normalized.module,
-          latencyMs: proposal.latencyMs,
-          promptTokens: proposal.promptTokens,
-          completionTokens: proposal.completionTokens,
-          parseErrors: proposal.errors.length,
-        },
+        userId: userIdOf(request),
+        message,
+        permissionKeys: keysOf(request),
+        now,
+        timezone,
+        resolveEntity: () => activeEntity(request, conversationId, contextInput, now),
       },
-      'Lumi selector',
+      { select: selectFn },
     )
-    switch (result.status) {
-      case 'supported': {
-        const only = result.matches.length === 1 ? result.matches[0]! : null
-        return only && only.explain && !only.denied
-          ? { kind: 'model', match: only, forceWeb: false }
-          : { kind: 'tools', matches: result.matches }
-      }
-      case 'delegated':
-        return result.delegate === 'reminder'
-          ? { kind: 'reply', text: REMINDER_HINT }
-          : { kind: 'model', match: null, forceWeb: result.delegate === 'web' }
-      case 'missing_information':
-        return { kind: 'reply', text: result.ask }
-      case 'missing_capability':
-        return { kind: 'reply', text: missingCapabilityReply(result.need) }
-      case 'ambiguous':
-        return { kind: 'reply', text: AMBIGUOUS_REPLY }
-      case 'unsupported':
-        return { kind: 'model', match: null, forceWeb: false }
+    if (trace.selector?.outcome === 'error') {
+      request.log.warn({ err: trace.selector.error }, 'Lumi selector unavailable; falling back to chat')
     }
+    if (trace.selector?.outcome === 'ok') {
+      // Métricas del selector sin el texto del usuario.
+      request.log.info(
+        {
+          lumiSelector: {
+            proposed: trace.selector.proposal?.status,
+            final: trace.interpretation,
+            tools: trace.selector.normalized?.intents.map((i) => i.tool) ?? [],
+            module: trace.module,
+            latencyMs: trace.selector.latencyMs,
+            promptTokens: trace.selector.promptTokens,
+            completionTokens: trace.selector.completionTokens,
+            parseErrors: trace.selector.parseErrors,
+          },
+        },
+        'Lumi selector',
+      )
+    }
+    if (plan.kind !== 'missing_capability') return plan
+    // Registro en el Capability Manager. Si falla, se responde igual, sin decir que se registró.
+    let registered = false
+    try {
+      await ctx.services.lumiCapabilities.recordMissing({
+        userId: userIdOf(request),
+        conversationId: conversationId ?? null,
+        message,
+        need: plan.need,
+        module: plan.module,
+      })
+      registered = true
+    } catch (err) {
+      request.log.warn({ err }, 'Lumi missing capability not recorded')
+    }
+    return { kind: 'reply', text: missingCapabilityReply(plan.need, registered) }
   }
 
   /**

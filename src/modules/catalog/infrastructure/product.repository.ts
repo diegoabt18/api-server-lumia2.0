@@ -383,6 +383,39 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
   }
 
   /**
+   * Productos sin precio: ninguna de sus variantes tiene un precio mayor que cero (sin variantes,
+   * precio nulo, ausente o 0). Solo lectura, para Lumi (capacidad «productos sin precio», fase E).
+   */
+  async findUnpriced(limit: number): Promise<{ items: Array<{ slug: string; name: string; status: string; variantCount: number }>; total: number }> {
+    const [result] = await this.collection
+      .aggregate<{ items: Array<{ slug: string; name: string; status?: string; variantCount: number }>; total: Array<{ n: number }> }>([
+        { $lookup: { from: 'variants', localField: 'slug', foreignField: 'product_slug', as: 'variants' } },
+        {
+          $project: {
+            slug: 1,
+            name: 1,
+            status: 1,
+            variantCount: { $size: '$variants' },
+            priced: { $size: { $filter: { input: '$variants', as: 'v', cond: { $gt: ['$$v.price', 0] } } } },
+          },
+        },
+        { $match: { priced: 0 } },
+        { $sort: { name: 1, slug: 1 } },
+        { $facet: { items: [{ $limit: limit }], total: [{ $count: 'n' }] } },
+      ])
+      .toArray()
+    return {
+      items: (result?.items ?? []).map((row) => ({
+        slug: String(row.slug),
+        name: String(row.name ?? row.slug),
+        status: String(row.status ?? 'active'),
+        variantCount: Number(row.variantCount ?? 0),
+      })),
+      total: result?.total[0]?.n ?? 0,
+    }
+  }
+
+  /**
    * Búsqueda común de productos (modo `exact` o `contains`), paginada, con identificación inequívoca
    * (id y slug), disponibilidad (cantidad menos reservado) y rango de precios. Busca en nombre y slug.
    * Sin texto no busca nada: nunca devuelve el catálogo entero.

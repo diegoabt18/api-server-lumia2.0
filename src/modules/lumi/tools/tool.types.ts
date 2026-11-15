@@ -21,6 +21,7 @@ export type LumiToolName =
   | 'products.search'
   | 'initiatives.list'
   | 'notifications.unread'
+  | 'products.unpriced'
 
 /** Fila de pedido sin datos del cliente. */
 export interface AssistantOrderRow {
@@ -65,6 +66,8 @@ export interface LumiToolDeps {
   }
   products: {
     lowStock(threshold: number, limit: number): Promise<Array<{ name: string; available: number }>>
+    /** Productos sin ninguna variante con precio mayor que cero (fase E). */
+    unpriced(limit: number): Promise<{ items: Array<{ name: string; status: string; variantCount: number }>; total: number }>
     search(term: string, limit: number): Promise<AssistantProductRow[]>
   }
   initiatives: {
@@ -157,6 +160,16 @@ export interface LumiToolSelector<I> {
 
 export interface LumiTool<I> {
   name: LumiToolName
+  /**
+   * Clave de la capacidad en `lumi_capabilities` (fase E). Con ella el Server sabe que la capacidad
+   * está implementada; si está habilitada lo decide la base de datos, no el código.
+   */
+  capabilityKey: string
+  /**
+   * Solo las herramientas anteriores a la fase E: al migrar se dan de alta habilitadas para no
+   * cambiar el comportamiento. Una herramienta nueva NO lo declara y arranca deshabilitada.
+   */
+  enabledByDefault?: true
   /** Etiqueta corta para el chat ("Consultando pedidos"). */
   label: string
   /** Capacidad y frase de ejemplo, para el prompt de capacidades y la ayuda. */

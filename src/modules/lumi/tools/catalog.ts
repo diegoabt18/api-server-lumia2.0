@@ -8,6 +8,7 @@ import {
   type LumiToolContext,
   type LumiToolResult,
 } from './tool.types.js'
+import { productsUnpriced } from './products-unpriced.tool.js'
 
 /* ───────────────────────── Formato ───────────────────────── */
 
@@ -113,6 +114,8 @@ export function wantsExplanation(normalized: string): boolean {
 
 const ordersLookup: LumiTool<{ term: string }> = {
   name: 'orders.lookup',
+  capabilityKey: 'tool-orders-lookup',
+  enabledByDefault: true,
   label: 'Buscando el pedido',
   capability: 'Ver el estado de un pedido por su referencia',
   example: '¿Cómo va el pedido ORD-CB07203E?',
@@ -165,6 +168,8 @@ const ordersLookup: LumiTool<{ term: string }> = {
 
 const ordersCount: LumiTool<{ statuses: string[] | null; range: TimeRange | null }> = {
   name: 'orders.count',
+  capabilityKey: 'tool-orders-count',
+  enabledByDefault: true,
   label: 'Contando pedidos',
   capability: 'Contar pedidos por estado (pendientes, por despachar, enviados…) y por periodo',
   example: '¿Cuántos pedidos tengo por despachar?',
@@ -215,6 +220,8 @@ const ordersCount: LumiTool<{ statuses: string[] | null; range: TimeRange | null
 
 const ordersRecent: LumiTool<{ limit: number; customerFilter: boolean }> = {
   name: 'orders.recent',
+  capabilityKey: 'tool-orders-recent',
+  enabledByDefault: true,
   label: 'Consultando los últimos pedidos',
   capability: 'Listar los últimos pedidos (sin datos de clientes)',
   example: 'Muéstrame los últimos 5 pedidos',
@@ -248,6 +255,8 @@ const ordersRecent: LumiTool<{ limit: number; customerFilter: boolean }> = {
 
 const salesSummary: LumiTool<{ range: TimeRange; top: boolean }> = {
   name: 'sales.summary',
+  capabilityKey: 'tool-sales-summary',
+  enabledByDefault: true,
   label: 'Calculando ventas',
   capability: 'Ventas, pedidos vendidos y ticket promedio de un periodo (hoy, ayer, esta semana, este mes, últimos N días)',
   example: '¿Cuánto vendimos esta semana?',
@@ -299,6 +308,8 @@ const salesSummary: LumiTool<{ range: TimeRange; top: boolean }> = {
 
 const productsSearch: LumiTool<{ term: string }> = {
   name: 'products.search',
+  capabilityKey: 'tool-products-search',
+  enabledByDefault: true,
   label: 'Buscando productos',
   capability: 'Buscar un producto y ver su precio (y su stock si puedes ver el inventario)',
   example: '¿Cuánto stock queda de la vela de vainilla?',
@@ -347,6 +358,8 @@ export const LOW_STOCK_THRESHOLD = 3
 
 const inventoryLow: LumiTool<Record<string, never>> = {
   name: 'inventory.low',
+  capabilityKey: 'tool-inventory-low',
+  enabledByDefault: true,
   label: 'Revisando el inventario',
   capability: `Productos sin stock o con stock bajo (${LOW_STOCK_THRESHOLD} unidades o menos)`,
   example: '¿Qué productos se están agotando?',
@@ -355,7 +368,7 @@ const inventoryLow: LumiTool<Record<string, never>> = {
     return INVENTORY_WORD.test(text) ? {} : null
   },
   selector: {
-    description: 'Productos sin stock o con poco stock',
+    description: 'Productos agotados, sin stock, con poco stock o por reponer',
     module: 'inventario',
     args: [],
     fromArgs: () => ({ input: {} }),
@@ -377,6 +390,8 @@ const PRIORITY_LABEL: Record<number, string> = { 3: 'urgente', 2: 'revisar', 1: 
 
 const initiativesList: LumiTool<{ urgentOnly: boolean }> = {
   name: 'initiatives.list',
+  capabilityKey: 'tool-initiatives-list',
+  enabledByDefault: true,
   label: 'Revisando tus iniciativas',
   capability: 'Ver tus iniciativas abiertas (stock, pedidos atrasados, recordatorios fallidos)',
   example: '¿Qué iniciativas urgentes tengo?',
@@ -410,6 +425,8 @@ const initiativesList: LumiTool<{ urgentOnly: boolean }> = {
 
 const notificationsUnread: LumiTool<Record<string, never>> = {
   name: 'notifications.unread',
+  capabilityKey: 'tool-notifications-unread',
+  enabledByDefault: true,
   label: 'Revisando tus notificaciones',
   capability: 'Contar y listar tus notificaciones sin leer',
   example: '¿Tengo notificaciones sin leer?',
@@ -444,6 +461,8 @@ export const LUMI_TOOLS: ReadonlyArray<LumiTool<never>> = [
   ordersCount,
   ordersRecent,
   salesSummary,
+  // Antes de la búsqueda: «productos sin precio» no es buscar el texto «sin precio».
+  productsUnpriced,
   productsSearch,
   inventoryLow,
   initiativesList,
@@ -459,6 +478,13 @@ export interface ToolMatch {
   explain: boolean
 }
 
+/** Herramientas habilitadas (fase E). Sin conjunto (pruebas, código previo): todas. */
+export type EnabledTools = ReadonlySet<string> | undefined
+
+export function isToolEnabled(tool: Pick<LumiTool<never>, 'name'>, enabled: EnabledTools): boolean {
+  return enabled === undefined || enabled.has(tool.name)
+}
+
 export function canUseTool(tool: Pick<LumiTool<never>, 'permission'>, keys: readonly PermissionId[]): boolean {
   return tool.permission === null || hasPermission([...keys], tool.permission)
 }
@@ -467,10 +493,12 @@ export function canUseTool(tool: Pick<LumiTool<never>, 'permission'>, keys: read
 export function matchTool(
   message: string,
   keys: readonly PermissionId[],
-  ctx: { now: Date; timezone: string },
+  ctx: { now: Date; timezone: string; enabled?: EnabledTools },
 ): ToolMatch | null {
   const normalized = normalizeText(message)
   for (const tool of LUMI_TOOLS) {
+    // Una herramienta deshabilitada no existe para el chat (fase E).
+    if (!isToolEnabled(tool, ctx.enabled)) continue
     const input = tool.match(normalized, message, ctx)
     if (input === null) continue
     return { tool, input, denied: !canUseTool(tool, keys), explain: wantsExplanation(normalized) }
@@ -498,7 +526,12 @@ export async function runTool(match: ToolMatch, ctx: LumiToolContext): Promise<L
  * Texto de capacidades para el modelo: lo que este usuario puede pedir (según sus permisos) y cómo.
  * Se envía en cada turno que llega al modelo. Lo escribe el Server; no contiene datos de la tienda.
  */
-export function capabilitiesFor(keys: readonly PermissionId[], now: Date, timezone: string): string {
+export function capabilitiesFor(
+  keys: readonly PermissionId[],
+  now: Date,
+  timezone: string,
+  enabled?: EnabledTools,
+): string {
   const today = new Intl.DateTimeFormat('es-CO', {
     timeZone: timezone,
     weekday: 'long',
@@ -506,7 +539,7 @@ export function capabilitiesFor(keys: readonly PermissionId[], now: Date, timezo
     month: 'long',
     year: 'numeric',
   }).format(now)
-  const tools = LUMI_TOOLS.filter((t) => canUseTool(t, keys)).map((t) => `- ${t.capability}. Ejemplo: «${t.example}»`)
+  const tools = LUMI_TOOLS.filter((t) => isToolEnabled(t, enabled) && canUseTool(t, keys)).map((t) => `- ${t.capability}. Ejemplo: «${t.example}»`)
   return [
     `Hoy es ${today} (hora de ${timezone}). Eres Lumi, el asistente del panel de administración de la tienda Lumia.`,
     'El sistema (no tú) puede hacer esto cuando el usuario lo pide con frases como las de ejemplo:',

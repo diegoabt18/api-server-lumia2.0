@@ -1,5 +1,5 @@
 import { PERMISSION_REGISTRY, hasPermission, type PermissionId } from '../../../common/permissions/registry.js'
-import { canUseTool, LUMI_TOOLS, wantsExplanation, type ToolMatch } from '../tools/catalog.js'
+import { canUseTool, isToolEnabled, LUMI_TOOLS, wantsExplanation, type EnabledTools, type ToolMatch } from '../tools/catalog.js'
 import {
   LUMI_MODULES,
   type LumiEntityRef,
@@ -71,14 +71,15 @@ export interface SelectorToolSpec {
   args: Array<{ name: string; kind: string | string[]; required: boolean; description: string }>
 }
 
-const selectorTools = (): Array<LumiTool<never>> => LUMI_TOOLS.filter((t) => t.selector !== undefined)
+const selectorTools = (enabled?: EnabledTools): Array<LumiTool<never>> =>
+  LUMI_TOOLS.filter((t) => t.selector !== undefined && isToolEnabled(t, enabled))
 
 /**
  * Catálogo para /select. Se envían TODAS las herramientas, también las que el usuario no puede
  * usar: si se ocultaran, "¿cuánto vendimos?" sin permiso de analítica se registraría como una
  * capacidad que falta. El permiso se comprueba después, en el Server, y no se lee ningún dato.
  */
-export function selectorCatalog(): { tools: SelectorToolSpec[]; modules: string[] } {
+export function selectorCatalog(enabled?: EnabledTools): { tools: SelectorToolSpec[]; modules: string[] } {
   const spec = (name: string, description: string, args: readonly LumiSelectorArg[]): SelectorToolSpec => ({
     name,
     description,
@@ -91,7 +92,7 @@ export function selectorCatalog(): { tools: SelectorToolSpec[]; modules: string[
   })
   return {
     tools: [
-      ...selectorTools().map((t) => spec(t.name, t.selector!.description, t.selector!.args)),
+      ...selectorTools(enabled).map((t) => spec(t.name, t.selector!.description, t.selector!.args)),
       ...DELEGATES.map((d) => spec(d.name, d.description, d.args)),
     ],
     modules: [...LUMI_MODULES],
@@ -208,7 +209,7 @@ export function interpret(
   message: string,
   normalized: NormalizedProposal,
   permissionKeys: readonly PermissionId[],
-  ctx: Pick<LumiToolContext, 'now' | 'timezone'>,
+  ctx: Pick<LumiToolContext, 'now' | 'timezone'> & { enabled?: EnabledTools },
 ): LumiInterpretation {
   if (normalized.status === 'missing') return { status: 'missing_capability', need: normalized.need, module: normalized.module }
   if (normalized.status === 'ambiguous') return { status: 'ambiguous' }
@@ -218,7 +219,8 @@ export function interpret(
   const matches: ToolMatch[] = []
   let delegate: LumiDelegate | null = null
   for (const intent of normalized.intents) {
-    const tool = selectorTools().find((t) => t.name === intent.tool)
+    // Una herramienta deshabilitada se trata como inexistente (el modelo no la ve en su catálogo).
+    const tool = selectorTools(ctx.enabled).find((t) => t.name === intent.tool)
     if (!tool) {
       delegate ??= DELEGATES.find((d) => d.name === intent.tool)?.delegate ?? null
       continue
@@ -250,10 +252,14 @@ export const REMINDER_HINT =
 export const AMBIGUOUS_REPLY =
   'No estoy seguro de qué necesitas. ¿Me lo explicas con un poco más de detalle? Por ejemplo, qué pedido, producto o periodo.'
 
-/** Respuesta cuando falta la capacidad. La Fase B añadirá el registro en el Capability Manager. */
-export function missingCapabilityReply(need: string): string {
+/**
+ * Respuesta cuando falta la capacidad. `registered`: la petición quedó en el Capability Manager
+ * (o ya estaba registrada por esta persona hace poco). Solo se dice si es verdad.
+ */
+export function missingCapabilityReply(need: string, registered = false): string {
   const what = need.replace(/[«»"]/g, '').trim()
-  return what
+  const base = what
     ? `Todavía no tengo una herramienta para «${what}». No voy a usar otra parecida porque podría darte datos que no son los que pides.`
     : 'Todavía no tengo una herramienta para eso. No voy a usar otra parecida porque podría darte datos que no son los que pides.'
+  return registered ? `${base} He registrado la petición para que la evalúen en Lumia Admin.` : base
 }
