@@ -14,6 +14,8 @@ import { MongoPendingActions } from '../../src/modules/lumi/actions/pending-acti
 import { LumiInitiativeRepository } from '../../src/modules/lumi/initiatives/infrastructure/lumi-initiative.repository.js'
 import { LumiInitiativeService } from '../../src/modules/lumi/initiatives/services/initiative.service.js'
 import { matchTool, runTool } from '../../src/modules/lumi/tools/catalog.js'
+import { MongoActiveEntities } from '../../src/modules/lumi/selector/active-entity.js'
+import { interpret, normalizeProposal } from '../../src/modules/lumi/selector/lumi-selector.js'
 import { createLumiToolDeps } from '../../src/modules/lumi/tools/tool-adapters.js'
 
 const uri = process.env.MONGO_TEST_URI
@@ -228,6 +230,38 @@ describeIfDb('Lumi fase 3 (MongoDB real)', () => {
       expect(text).toContain('- Estado: pagado, por despachar')
       expect(text).toContain('- Artículos: 2')
       expect(text).not.toMatch(/Ana|example|3000000000/)
+    })
+  })
+
+  describe('selector (fase A2) y entidad activa', () => {
+    it('"¿qué productos contiene?" con el pedido de la respuesta anterior lee ese pedido', async () => {
+      const deps = createLumiToolDeps({ orders, products, notifications, initiatives: new LumiInitiativeService(initiatives) })
+      const keys = [P.LUMI_USE, P.ORDERS_READ]
+      const ctx = { userId: 'u1', permissionKeys: keys, now: NOW, timezone: 'America/Bogota', deps }
+      const store = new MongoActiveEntities(db)
+      await store.ensureIndexes()
+
+      // Turno 1 (reglas): el pedido queda como entidad activa de la conversación.
+      const first = await runTool(matchTool('¿Cómo va el pedido ORD-CB07203E?', keys, ctx)!, ctx)
+      expect(first.entity).toEqual({ kind: 'order', label: 'ORD-CB07203E' })
+      await store.set('u1', 'conv-1', first.entity!, NOW)
+
+      // Turno 2 (selector): el modelo propone orders.lookup sin referencia; el Server usa la entidad.
+      const message = '¿y qué productos contiene?'
+      const entity = await store.get('u1', 'conv-1', NOW)
+      const proposal = { status: 'tool' as const, intents: [{ tool: 'orders.lookup', args: {} }], need: '', module: 'pedidos' }
+      const result = interpret(message, normalizeProposal(message, proposal, entity), keys, ctx)
+      expect(result.status).toBe('supported')
+      const text = (await runTool((result as { matches: Parameters<typeof runTool>[0][] }).matches[0]!, ctx)).text
+      expect(text).toContain('Pedido ORD-CB07203E')
+      expect(text).not.toMatch(/Ana|example/)
+
+      // Otra conversación u otro usuario no ven esa entidad; caduca sola.
+      expect(await store.get('u2', 'conv-1', NOW)).toBeNull()
+      expect(await store.get('u1', 'conv-2', NOW)).toBeNull()
+      expect(await store.get('u1', 'conv-1', new Date(NOW.getTime() + 31 * 60_000))).toBeNull()
+      const indexes = await db.collection('lumi_context').indexes()
+      expect(indexes.map((i) => i.name)).toEqual(expect.arrayContaining(['lumi_context_ttl', 'lumi_context_user_conversation']))
     })
   })
 })

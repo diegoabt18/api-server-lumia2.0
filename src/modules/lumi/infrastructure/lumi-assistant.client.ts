@@ -115,6 +115,39 @@ const STREAM_ERROR_MESSAGE = 'El asistente Lumi no pudo completar la respuesta.'
 
 const generateUpstreamSchema = z.object({ model: z.string(), text: z.string() })
 
+/** Respuesta de /select. Se valida aquí: el Server no confía en la forma de lo que devuelve el asistente. */
+const selectUpstreamSchema = z.object({
+  status: z.enum(['tool', 'chat', 'missing', 'ambiguous']),
+  intents: z.array(z.object({ tool: z.string().max(60), args: z.record(z.unknown()) })).max(2),
+  need: z.string().max(200),
+  module: z.string().max(40),
+  errors: z.array(z.string()).max(10),
+  model: z.string(),
+  latency_ms: z.number(),
+  prompt_tokens: z.number().int(),
+  completion_tokens: z.number().int(),
+})
+
+export interface LumiSelectRequest {
+  message: string
+  context?: string
+  tools: Array<{ name: string; description: string; args: Array<{ name: string; kind: string | string[]; required: boolean; description: string }> }>
+  modules: string[]
+  examples?: Array<{ message: string; tool: string; args: Record<string, unknown> }>
+}
+
+export interface LumiSelectResult {
+  status: 'tool' | 'chat' | 'missing' | 'ambiguous'
+  intents: Array<{ tool: string; args: Record<string, unknown> }>
+  need: string
+  module: string
+  errors: string[]
+  model: string
+  latencyMs: number
+  promptTokens: number
+  completionTokens: number
+}
+
 const streamStartSchema = z.object({ conversation_id: z.string() })
 const streamTokenSchema = z.object({ text: z.string() })
 const streamThinkingSchema = z.object({ text: z.string() })
@@ -304,6 +337,38 @@ export class LumiAssistantClient {
    * Respuesta en streaming. Los errores previos al primer evento (conversación inexistente,
    * servicio caído) se lanzan al llamar; después, el stream se cierra al abortar `signal`.
    */
+  /**
+   * Etapa 2 de Lumi: el modelo propone herramienta, conversación o capacidad que falta. No crea
+   * conversación. Tiene su propio tiempo límite: si se agota, el turno sigue como conversación.
+   */
+  async select(userRef: string, payload: LumiSelectRequest, timeoutMs: number): Promise<LumiSelectResult> {
+    const body = await this.request(
+      userRef,
+      'POST',
+      '/select',
+      {
+        message: payload.message,
+        context: payload.context ?? null,
+        tools: payload.tools,
+        modules: payload.modules,
+        examples: payload.examples ?? [],
+      },
+      timeoutMs,
+    )
+    const parsed = selectUpstreamSchema.parse(body)
+    return {
+      status: parsed.status,
+      intents: parsed.intents,
+      need: parsed.need,
+      module: parsed.module,
+      errors: parsed.errors,
+      model: parsed.model,
+      latencyMs: parsed.latency_ms,
+      promptTokens: parsed.prompt_tokens,
+      completionTokens: parsed.completion_tokens,
+    }
+  }
+
   /** Genera texto con instrucciones fijas. No crea conversación ni guarda historial. */
   async generate(
     userRef: string,
@@ -401,6 +466,7 @@ export class LumiAssistantClient {
     method: 'GET' | 'POST' | 'DELETE',
     path: string,
     body?: unknown,
+    timeoutMs: number = this.options.timeoutMs,
   ): Promise<unknown> {
     if (!USER_REF_PATTERN.test(userRef)) {
       throw AppError.badRequest('Identificador de usuario no válido para el asistente')
@@ -417,7 +483,7 @@ export class LumiAssistantClient {
           ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(this.options.timeoutMs),
+        signal: AbortSignal.timeout(timeoutMs),
       })
     } catch {
       throw new AppError(

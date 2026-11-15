@@ -38,9 +38,19 @@ function clipText(text: string): string {
   return text.length > TOOL_TEXT_MAX_CHARS ? `${text.slice(0, TOOL_TEXT_MAX_CHARS - 1)}…` : text
 }
 
-function result(text: string, rows: number): LumiToolResult {
-  return { text: clipText(text), rows }
+function result(text: string, rows: number, entity?: LumiToolResult['entity']): LumiToolResult {
+  return entity ? { text: clipText(text), rows, entity } : { text: clipText(text), rows }
 }
+
+/** Texto que propone el modelo: se acepta como cadena corta, nunca como otro tipo. */
+function argText(value: unknown, max = 60): string | null {
+  if (typeof value !== 'string') return null
+  const text = value.replace(/\s+/g, ' ').trim()
+  return text.length > 0 && text.length <= max ? text : null
+}
+
+const PERIOD_VALUES = ['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month', 'last_7_days', 'last_30_days', 'last_90_days'] as const
+const STATUS_VALUES = ['pending', 'paid', 'shipped', 'delivered', 'cancelled', 'expired', 'open'] as const
 
 function orderLine(row: AssistantOrderRow, index?: number): string {
   const ref = row.reference ?? row.orderNumber ?? '—'
@@ -59,8 +69,9 @@ const ORDER_STATUS_WORDS: Array<[RegExp, string[]]> = [
   [/\b(por pagar|sin pagar|pendientes? de pago)\b/, ['pending']],
   [/\b(pendientes?|abiertos?|en curso|activos?)\b/, ['pending', 'paid', 'shipped']],
   [/\b(enviados?|en camino)\b/, ['shipped']],
-  [/\b(entregados?)\b/, ['delivered']],
-  [/\b(cancelados?)\b/, ['cancelled']],
+  // "entregados", "entregamos", "se entregaron"; "cancelados", "se cancelaron".
+  [/\b(entreg(?:ad[oa]s?|amos|aron|o))\b/, ['delivered']],
+  [/\b(cancel(?:ad[oa]s?|amos|aron|o))\b/, ['cancelled']],
   [/\b(vencidos?|expirados?)\b/, ['expired']],
 ]
 /** Referencia de pedido: ORD-XXXXXXXX, el número interno completo o "pedido 1A2B3C4D". */
@@ -113,6 +124,18 @@ const ordersLookup: LumiTool<{ term: string }> = {
     if (token && /\d/.test(token[1]!) && !COUNT_WORD.test(text)) return { term: token[1]! }
     return null
   },
+  selector: {
+    description: 'Estado de un pedido por su referencia (ORD-...)',
+    module: 'pedidos',
+    args: [{ name: 'reference', kind: 'str', required: true, description: 'referencia tal como la escribe el usuario' }],
+    ask: '¿Qué pedido? Dime su referencia (por ejemplo ORD-CB07203E).',
+    fromArgs(args) {
+      const ref = argText(args.reference, 40)
+      // Una referencia tiene números y solo letras, números y guiones ("mi pedido" no lo es).
+      if (!ref || !/\d/.test(ref) || !/^[a-z0-9-]{4,40}$/i.test(ref)) return { missing: ['reference'] }
+      return { input: { term: ref.toLowerCase() } }
+    },
+  },
   async run(ctx, input) {
     const rows = await ctx.deps.orders.findByReference(input.term.toUpperCase(), 3)
     if (rows.length === 0) {
@@ -133,6 +156,7 @@ const ordersLookup: LumiTool<{ term: string }> = {
           `- Total: ${formatMoney(o.total)}`,
         ].join('\n'),
         1,
+        { kind: 'order', label: o.reference ?? o.orderNumber ?? input.term.toUpperCase() },
       )
     }
     return result([`Encontré ${rows.length} pedidos que empiezan por «${input.term.toUpperCase()}»:`, ...rows.map((r, i) => orderLine(r, i))].join('\n'), rows.length)
@@ -153,6 +177,19 @@ const ordersCount: LumiTool<{ statuses: string[] | null; range: TimeRange | null
     if (!COUNT_WORD.test(text) && !status) return null
     if (!COUNT_WORD.test(text) && RECENT_WORD.test(text) && !range) return null
     return { statuses: status ? status[1] : null, range }
+  },
+  selector: {
+    description: 'Contar pedidos por estado o periodo',
+    module: 'pedidos',
+    args: [
+      { name: 'status', kind: STATUS_VALUES },
+      { name: 'period', kind: PERIOD_VALUES },
+    ],
+    // Estado y periodo salen del mensaje (reglas), no del modelo: así "este mes" nunca se convierte en "el mes pasado".
+    fromArgs(_args, text, ctx) {
+      const status = ORDER_STATUS_WORDS.find(([re]) => re.test(text))
+      return { input: { statuses: status ? status[1] : null, range: parseTimeRange(text, ctx.now, ctx.timezone) } }
+    },
   },
   async run(ctx, input) {
     const counts = await ctx.deps.orders.countByStatus(input.range ? { from: input.range.from, to: input.range.to } : undefined)
@@ -191,6 +228,15 @@ const ordersRecent: LumiTool<{ limit: number; customerFilter: boolean }> = {
     const customerFilter = /\bpedidos? (de|del cliente|de la cliente) (?!hoy|ayer|esta|este|la semana|el mes|los ultimos)[a-z]/.test(text)
     return { limit, customerFilter }
   },
+  selector: {
+    description: 'Listar los últimos pedidos',
+    module: 'pedidos',
+    args: [{ name: 'limit', kind: 'int' }],
+    fromArgs(_args, text) {
+      const count = /\b(\d{1,2})\b/.exec(text)
+      return { input: { limit: Math.min(Math.max(count ? Number(count[1]) : 10, 1), 50), customerFilter: false } }
+    },
+  },
   async run(ctx, input) {
     const rows = await ctx.deps.orders.recent(input.limit)
     const note = input.customerFilter ? '\n\nNota: no filtro pedidos por cliente; esta es la lista general.' : ''
@@ -213,6 +259,22 @@ const salesSummary: LumiTool<{ range: TimeRange; top: boolean }> = {
       range: parseTimeRange(text, ctx.now, ctx.timezone) ?? todayRange(ctx.now, ctx.timezone),
       top: TOP_SELLERS.test(text),
     }
+  },
+  selector: {
+    description: 'Ventas, ticket promedio y más vendidos de un periodo',
+    module: 'ventas',
+    args: [
+      { name: 'period', kind: PERIOD_VALUES, required: true },
+      { name: 'compare_to', kind: ['previous_period'], description: 'si pide comparar con el periodo anterior' },
+    ],
+    fromArgs(_args, text, ctx) {
+      return {
+        input: {
+          range: parseTimeRange(text, ctx.now, ctx.timezone) ?? todayRange(ctx.now, ctx.timezone),
+          top: TOP_SELLERS.test(text),
+        },
+      }
+    },
   },
   async run(ctx, input) {
     const s = await ctx.deps.orders.salesSummary(input.range.from, input.range.to)
@@ -252,6 +314,18 @@ const productsSearch: LumiTool<{ term: string }> = {
     }
     return null
   },
+  selector: {
+    description: 'Buscar productos por nombre y ver su precio y su stock',
+    module: 'productos',
+    args: [{ name: 'query', kind: 'str', required: true, description: "texto a buscar, sin palabras como 'busca' o 'producto'" }],
+    ask: '¿Qué producto busco? Dime su nombre o una palabra del nombre.',
+    fromArgs(args) {
+      const raw = argText(args.query)
+      const term = raw ? cleanTerm(normalizeText(raw)) : null
+      if (!term || /^(todo|todos|todas|productos?|inventario|la tienda)$/.test(term)) return { missing: ['query'] }
+      return { input: { term } }
+    },
+  },
   async run(ctx, input) {
     const rows = await ctx.deps.products.search(input.term, 8)
     if (rows.length === 0) return result(`No encontré productos que coincidan con «${input.term}».`, 0)
@@ -264,7 +338,8 @@ const productsSearch: LumiTool<{ term: string }> = {
       const stock = canSeeStock ? `${Math.max(0, p.available)} disponibles · ` : ''
       return `- ${p.name}${state}: ${stock}${price}`
     })
-    return result([`Productos que coinciden con «${input.term}»:`, ...lines].join('\n'), rows.length)
+    const only = rows.length === 1 ? { kind: 'product' as const, label: rows[0]!.name } : undefined
+    return result([`Productos que coinciden con «${input.term}»:`, ...lines].join('\n'), rows.length, only)
   },
 }
 
@@ -278,6 +353,12 @@ const inventoryLow: LumiTool<Record<string, never>> = {
   permission: PERMISSION_REGISTRY.INVENTORY_READ,
   match(text) {
     return INVENTORY_WORD.test(text) ? {} : null
+  },
+  selector: {
+    description: 'Productos sin stock o con poco stock',
+    module: 'inventario',
+    args: [],
+    fromArgs: () => ({ input: {} }),
   },
   async run(ctx) {
     const rows = await ctx.deps.products.lowStock(LOW_STOCK_THRESHOLD, 15)
@@ -304,6 +385,12 @@ const initiativesList: LumiTool<{ urgentOnly: boolean }> = {
     if (!INITIATIVES_WORD.test(text) || !LISTING_HINT.test(text)) return null
     return { urgentOnly: /\burgentes?\b/.test(text) }
   },
+  selector: {
+    description: 'Iniciativas abiertas de Lumi',
+    module: 'iniciativas',
+    args: [{ name: 'urgent_only', kind: 'bool' }],
+    fromArgs: (args, text) => ({ input: { urgentOnly: args.urgent_only === true || /\burgentes?\b/.test(text) } }),
+  },
   async run(ctx, input) {
     const all = await ctx.deps.initiatives.list(ctx.userId, ctx.permissionKeys, 100)
     const open = all.filter((i) => ['nueva', 'pendiente', 'en_revision', 'aceptada'].includes(i.state))
@@ -329,6 +416,12 @@ const notificationsUnread: LumiTool<Record<string, never>> = {
   permission: null,
   match(text) {
     return NOTIFICATIONS_WORD.test(text) && LISTING_HINT.test(text) ? {} : null
+  },
+  selector: {
+    description: 'Notificaciones sin leer',
+    module: 'notificaciones',
+    args: [],
+    fromArgs: () => ({ input: {} }),
   },
   async run(ctx) {
     const [count, recent] = await Promise.all([

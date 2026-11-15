@@ -12,6 +12,16 @@ import {
 import { type LumiMode, resolveLumiModes } from '../modules/lumi/services/lumi-intent-router.js'
 import { DEFAULT_AUTOMATION_TIMEZONE } from '../modules/lumi/automation/domain/schedule.js'
 import { capabilitiesFor, matchTool, runTool, type ToolMatch } from '../modules/lumi/tools/catalog.js'
+import type { LumiEntityRef } from '../modules/lumi/tools/tool.types.js'
+import { entityContextLine } from '../modules/lumi/selector/active-entity.js'
+import {
+  AMBIGUOUS_REPLY,
+  interpret,
+  missingCapabilityReply,
+  normalizeProposal,
+  REMINDER_HINT,
+  selectorCatalog,
+} from '../modules/lumi/selector/lumi-selector.js'
 import { createLumiToolDeps } from '../modules/lumi/tools/tool-adapters.js'
 import {
   buildAssistRequest,
@@ -117,15 +127,131 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
    */
   async function* toolTurnStream(
     request: FastifyRequest,
-    match: ToolMatch,
+    matches: ToolMatch[],
     message: string,
     conversationId: string | undefined,
   ): AsyncGenerator<LumiStreamEvent> {
-    const result = await executeTool(request, match)
-    yield toolEvent(match, result.rows)
-    const saved = await requireClient().recordExchange(userIdOf(request), message, result.text, conversationId)
-    yield { type: 'token', text: result.text }
+    const texts: string[] = []
+    let entity: LumiEntityRef | undefined
+    for (const match of matches) {
+      const result = await executeTool(request, match)
+      yield toolEvent(match, result.rows)
+      texts.push(result.text)
+      entity = result.entity ?? entity
+    }
+    const text = texts.join('\n\n')
+    const saved = await requireClient().recordExchange(userIdOf(request), message, text, conversationId)
+    // Context Manager: la entidad de la respuesta queda activa para el turno siguiente.
+    if (entity) {
+      await ctx.services.lumiActiveEntities
+        .set(userIdOf(request), saved.conversationId, entity, new Date())
+        .catch((err) => request.log.warn({ err }, 'Lumi active entity not saved'))
+    }
+    yield { type: 'token', text }
     yield { type: 'done', conversationId: saved.conversationId }
+  }
+
+  /**
+   * Entidad activa del turno: la que el usuario tiene abierta en pantalla (con su permiso) o, si
+   * no, la última de la conversación mientras no caduque. Nunca falla el turno por esto.
+   */
+  const activeEntity = async (
+    request: FastifyRequest,
+    conversationId: string | undefined,
+    input: LumiContextInput | undefined,
+    now: Date,
+  ): Promise<LumiEntityRef | null> => {
+    const keys = keysOf(request)
+    try {
+      if (input?.kind === 'order' && hasPermission([...keys], PERMISSION_REGISTRY.ORDERS_READ)) {
+        const { order } = await ctx.services.adminOrders.get(input.id)
+        return order.orderNumber ? { kind: 'order', label: order.orderNumber } : null
+      }
+      if (input?.kind === 'product' && hasPermission([...keys], PERMISSION_REGISTRY.PRODUCTS_READ)) {
+        const { product } = await ctx.services.adminProducts.get(input.id)
+        return { kind: 'product', label: product.name }
+      }
+      return conversationId ? await ctx.services.lumiActiveEntities.get(userIdOf(request), conversationId, now) : null
+    } catch (err) {
+      request.log.warn({ err }, 'Lumi active entity unavailable')
+      return null
+    }
+  }
+
+  type TurnPlan =
+    /** Datos de la tienda con texto determinista, sin conversación con el modelo. */
+    | { kind: 'tools'; matches: ToolMatch[] }
+    /** Respuesta fija del Server: falta un dato, falta la capacidad o no se entiende. */
+    | { kind: 'reply'; text: string }
+    /** Conversación con el modelo; con `match`, los datos de esa herramienta van como contexto. */
+    | { kind: 'model'; match: ToolMatch | null; forceWeb: boolean }
+
+  /**
+   * Intent Engine de Lumi en tres etapas: reglas (sin modelo) → selector con Qwen (propone) →
+   * Server (valida, completa, comprueba permisos y decide). Si el selector está desactivado o no
+   * responde, el turno sigue como antes: conversación.
+   */
+  const planTurn = async (
+    request: FastifyRequest,
+    message: string,
+    conversationId: string | undefined,
+    contextInput: LumiContextInput | undefined,
+  ): Promise<TurnPlan> => {
+    const match = findTool(request, message)
+    if (match) return match.explain && !match.denied ? { kind: 'model', match, forceWeb: false } : { kind: 'tools', matches: [match] }
+    if (!env.LUMI_SELECTOR_ENABLED || !client) return { kind: 'model', match: null, forceWeb: false }
+
+    const now = new Date()
+    const entity = await activeEntity(request, conversationId, contextInput, now)
+    let proposal
+    try {
+      proposal = await client.select(
+        userIdOf(request),
+        { message, context: entityContextLine(entity), ...selectorCatalog() },
+        env.LUMI_SELECTOR_TIMEOUT_MS,
+      )
+    } catch (err) {
+      request.log.warn({ err }, 'Lumi selector unavailable; falling back to chat')
+      return { kind: 'model', match: null, forceWeb: false }
+    }
+    const normalized = normalizeProposal(message, proposal, entity)
+    const result = interpret(message, normalized, keysOf(request), { now, timezone })
+    // Métricas del selector sin el texto del usuario.
+    request.log.info(
+      {
+        lumiSelector: {
+          proposed: proposal.status,
+          final: result.status,
+          tools: normalized.intents.map((i) => i.tool),
+          module: normalized.module,
+          latencyMs: proposal.latencyMs,
+          promptTokens: proposal.promptTokens,
+          completionTokens: proposal.completionTokens,
+          parseErrors: proposal.errors.length,
+        },
+      },
+      'Lumi selector',
+    )
+    switch (result.status) {
+      case 'supported': {
+        const only = result.matches.length === 1 ? result.matches[0]! : null
+        return only && only.explain && !only.denied
+          ? { kind: 'model', match: only, forceWeb: false }
+          : { kind: 'tools', matches: result.matches }
+      }
+      case 'delegated':
+        return result.delegate === 'reminder'
+          ? { kind: 'reply', text: REMINDER_HINT }
+          : { kind: 'model', match: null, forceWeb: result.delegate === 'web' }
+      case 'missing_information':
+        return { kind: 'reply', text: result.ask }
+      case 'missing_capability':
+        return { kind: 'reply', text: missingCapabilityReply(result.need) }
+      case 'ambiguous':
+        return { kind: 'reply', text: AMBIGUOUS_REPLY }
+      case 'unsupported':
+        return { kind: 'model', match: null, forceWeb: false }
+    }
   }
 
   /**
@@ -187,15 +313,19 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       reasoningMode?: LumiMode
       webMode?: LumiMode
     },
+    forceWeb = false,
   ): Promise<{ context: string | undefined; webSearch: boolean; reasoning: boolean; capabilities: string }> => {
     const keys = (request as AuthenticatedRequest).permissionKeys
     const capabilities = capabilitiesFor(keys, new Date(), timezone)
+    const canWeb = hasPermission(keys, PERMISSION_REGISTRY.LUMI_WEB)
+    const webMode = body.webMode ?? (body.webSearch === undefined ? 'auto' : body.webSearch ? 'on' : 'off')
     const modes = resolveLumiModes({
       message: body.message,
       reasoningMode:
         body.reasoningMode ?? (body.think === undefined ? 'auto' : body.think ? 'on' : 'off'),
-      webMode: body.webMode ?? (body.webSearch === undefined ? 'auto' : body.webSearch ? 'on' : 'off'),
-      canWeb: hasPermission(keys, PERMISSION_REGISTRY.LUMI_WEB),
+      // El selector reconoció clima o investigación: en modo automático se activa la búsqueda web.
+      webMode: forceWeb && webMode === 'auto' && canWeb ? 'on' : webMode,
+      canWeb,
     })
     if (modes.webDenied) throw AppError.forbidden('Sin permiso para la búsqueda web de Lumi')
     if (modes.webSearch) return { context: undefined, webSearch: true, reasoning: modes.reasoning, capabilities }
@@ -219,20 +349,28 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
         response: automated,
       }
     }
-    // Mismas reglas que el streaming: lo que resuelve una herramienta del backend no usa el modelo.
-    const match = findTool(request, parsed.data.message)
-    if (match && (!match.explain || match.denied)) {
+    // Mismo plan que el streaming: lo que resuelve una herramienta del backend no usa el modelo.
+    const plan = await planTurn(request, parsed.data.message, parsed.data.conversationId, parsed.data.context)
+    if (plan.kind === 'reply') {
+      return {
+        conversationId: await saveAutomatedTurn(request, parsed.data.message, plan.text, parsed.data.conversationId),
+        model: 'lumi-selector',
+        response: plan.text,
+      }
+    }
+    if (plan.kind === 'tools') {
       let response = ''
       let conversationId = parsed.data.conversationId ?? ''
       let tool: { name: string; rows: number } | null = null
-      for await (const event of toolTurnStream(request, match, parsed.data.message, parsed.data.conversationId)) {
-        if (event.type === 'tool') tool = { name: event.name, rows: event.rows }
+      for await (const event of toolTurnStream(request, plan.matches, parsed.data.message, parsed.data.conversationId)) {
+        if (event.type === 'tool') tool ??= { name: event.name, rows: event.rows }
         if (event.type === 'token') response += event.text
         if (event.type === 'done') conversationId = event.conversationId
       }
       return { conversationId, model: 'lumi-tools', response, tool }
     }
-    const turn = await resolveTurn(request, parsed.data)
+    const match = plan.match
+    const turn = await resolveTurn(request, parsed.data, plan.forceWeb)
     // Petición de explicación sobre datos: la herramienta los lee y sustituyen al contexto de pantalla.
     const toolResult = match ? await executeTool(request, match) : null
     const result = await requireClient().chat(
@@ -264,11 +402,17 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
 
       const automated = await ctx.services.lumiCommands.handle(userIdOf(request), parsed.data.message)
-      if (automated !== null) {
+      const plan =
+        automated === null
+          ? await planTurn(request, parsed.data.message, parsed.data.conversationId, parsed.data.context)
+          : null
+      // Respuesta sin modelo: recordatorio resuelto por reglas o respuesta fija del selector.
+      const fixed = automated ?? (plan?.kind === 'reply' ? plan.text : null)
+      if (fixed !== null) {
         const conversationId = await saveAutomatedTurn(
           request,
           parsed.data.message,
-          automated,
+          fixed,
           parsed.data.conversationId,
         )
         reply.hijack()
@@ -278,7 +422,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
           Connection: 'keep-alive',
           'X-Accel-Buffering': 'no',
         })
-        reply.raw.write(`event: token\ndata: ${JSON.stringify({ text: automated })}\n\n`)
+        reply.raw.write(`event: token\ndata: ${JSON.stringify({ text: fixed })}\n\n`)
         reply.raw.write(
           `event: done\ndata: ${JSON.stringify({ conversationId })}\n\n`,
         )
@@ -289,15 +433,15 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       const controller = new AbortController()
       // Las reglas resuelven lo claro sin modelo. La búsqueda web no cambia esto: los pedidos o las
       // ventas son datos de la tienda, no una consulta a internet.
-      const match = findTool(request, parsed.data.message)
-      const toolOnly = match !== null && (!match.explain || match.denied)
-      const turn = toolOnly ? null : await resolveTurn(request, parsed.data)
+      const toolMatches = plan?.kind === 'tools' ? plan.matches : null
+      const match = plan?.kind === 'model' ? plan.match : null
+      const turn = toolMatches ? null : await resolveTurn(request, parsed.data, plan?.kind === 'model' && plan.forceWeb)
       // Explicación sobre datos: primero la herramienta (datos reales), después el modelo los explica.
       const toolResult = match && turn ? await executeTool(request, match) : null
       const preface: LumiStreamEvent[] = match && toolResult ? [toolEvent(match, toolResult.rows)] : []
       const events = (
-        toolOnly || !turn
-          ? toolTurnStream(request, match!, parsed.data.message, parsed.data.conversationId)
+        toolMatches || !turn
+          ? toolTurnStream(request, toolMatches ?? [], parsed.data.message, parsed.data.conversationId)
           : requireClient().chatStream(
               userIdOf(request),
               parsed.data.message,

@@ -134,6 +134,7 @@ import { AutomationCommands } from './modules/lumi/automation/services/automatio
 import { NotificationStreamHub } from './modules/notifications/services/notification-stream.hub.js'
 import { createFollowUpHandler } from './modules/lumi/automation/services/reminder-handlers.js'
 import { MongoPendingActions } from './modules/lumi/actions/pending-action.js'
+import { type ActiveEntityStore, MongoActiveEntities } from './modules/lumi/selector/active-entity.js'
 import { LumiInitiativeRepository } from './modules/lumi/initiatives/infrastructure/lumi-initiative.repository.js'
 import { RepositoryInitiativeSources } from './modules/lumi/initiatives/infrastructure/initiative-sources.js'
 import { InitiativeEngine } from './modules/lumi/initiatives/services/initiative-engine.js'
@@ -204,6 +205,8 @@ export interface AppContext {
     lumiTasks: LumiTaskManager
     lumiInitiatives: LumiInitiativeService
     lumiCommands: AutomationCommands
+    /** Context Manager de Lumi: entidad activa por conversación (caduca sola). */
+    lumiActiveEntities: ActiveEntityStore
     notificationHub: NotificationStreamHub
     auth: AuthService
     authorization: AuthorizationService
@@ -593,6 +596,11 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   await lumiPendingActions
     .ensureIndexes()
     .catch((err) => logger.warn({ err }, 'lumi pending action indexes skipped'))
+  // Entidad de la que se habla en cada conversación de Lumi ("¿y sus pagos?"). Índice TTL.
+  const lumiActiveEntities = new MongoActiveEntities(identityDb)
+  await lumiActiveEntities
+    .ensureIndexes()
+    .catch((err) => logger.warn({ err }, 'lumi context indexes skipped'))
   const lumiCommands = new AutomationCommands(
     lumiTasks,
     lumiAutomationRepo,
@@ -696,6 +704,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       lumiTasks,
       lumiInitiatives,
       lumiCommands,
+      lumiActiveEntities,
       notificationHub,
       auth,
       authorization,

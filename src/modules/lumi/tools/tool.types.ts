@@ -84,11 +84,75 @@ export interface LumiToolContext {
   deps: LumiToolDeps
 }
 
+/** Entidad que una respuesta deja "abierta" para el turno siguiente ("¿y sus pagos?"). */
+export interface LumiEntityRef {
+  kind: 'order' | 'product'
+  /** Referencia del pedido o nombre del producto, tal como se muestra. Nunca datos de clientes. */
+  label: string
+}
+
 export interface LumiToolResult {
   /** Respuesta lista para mostrar (también se guarda en el historial). */
   text: string
   /** Filas leídas, para el indicador de actividad del chat. */
   rows: number
+  /** Si la respuesta trata de una sola entidad, queda como contexto del turno siguiente. */
+  entity?: LumiEntityRef
+}
+
+/**
+ * Módulos de la tienda. El selector indica a cuál se refiere una petición; cuando no hay
+ * herramienta, el módulo permite registrar la capacidad que falta donde corresponde.
+ */
+export const LUMI_MODULES = [
+  'productos',
+  'inventario',
+  'pedidos',
+  'pagos',
+  'ventas',
+  'clientes',
+  'promociones',
+  'banners',
+  'categorias',
+  'resenas',
+  'produccion',
+  'usuarios',
+  'configuracion',
+  'recordatorios',
+  'notificaciones',
+  'iniciativas',
+] as const
+export type LumiModule = (typeof LUMI_MODULES)[number]
+
+/** Tipo de un argumento tal como lo ve el modelo: texto, entero, booleano o lista cerrada. */
+export type LumiSelectorArgKind = 'str' | 'int' | 'bool' | readonly string[]
+
+export interface LumiSelectorArg {
+  name: string
+  kind: LumiSelectorArgKind
+  required?: boolean
+  description?: string
+}
+
+/** Lo que construye `fromArgs`: la entrada validada, o los datos obligatorios que faltan. */
+export type LumiSelectorBuild<I> = { input: I } | { missing: string[] }
+
+/**
+ * Cómo ve una herramienta el selector (etapa 2). El modelo solo PROPONE la herramienta y sus
+ * argumentos; `fromArgs` (Server) construye la entrada: los valores cerrados (periodos, estados)
+ * salen del mensaje, nunca del modelo.
+ */
+export interface LumiToolSelector<I> {
+  description: string
+  module: LumiModule
+  args: readonly LumiSelectorArg[]
+  /** Pregunta al usuario cuando falta un dato obligatorio. */
+  ask?: string
+  fromArgs(
+    args: Readonly<Record<string, unknown>>,
+    normalized: string,
+    ctx: Pick<LumiToolContext, 'now' | 'timezone'>,
+  ): LumiSelectorBuild<I>
 }
 
 export interface LumiTool<I> {
@@ -103,6 +167,8 @@ export interface LumiTool<I> {
   /** Regla determinista: devuelve la entrada validada o null si el mensaje no es para esta herramienta. */
   match(normalized: string, original: string, ctx: Pick<LumiToolContext, 'now' | 'timezone'>): I | null
   run(ctx: LumiToolContext, input: I): Promise<LumiToolResult>
+  /** Sin `selector`, la herramienta solo se usa por reglas (etapa 1). */
+  selector?: LumiToolSelector<I>
 }
 
 /** Límite de caracteres de una respuesta de herramienta (el historial acepta hasta 8000). */

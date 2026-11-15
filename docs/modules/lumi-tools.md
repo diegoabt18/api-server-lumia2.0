@@ -72,8 +72,50 @@ En ambos modos no se distinguen tildes ni mayúsculas, y el texto del usuario se
 
 1. Definir `LumiTool` en `catalog.ts`: nombre, etiqueta, capacidad, ejemplo, permiso, `match`
    (regla sobre texto normalizado) y `run` (lectura acotada y texto por plantilla).
+   Para que el selector (etapa 2) pueda elegirla, añadir `selector`: descripción, módulo,
+   argumentos y `fromArgs` (construye la entrada; los valores cerrados salen del mensaje).
 2. Si necesita datos nuevos, añadir el puerto en `tool.types.ts` y el adaptador en `tool-adapters.ts`.
 3. Añadir pruebas:
    - frases positivas y negativas en `tests/unit/lumi-tools.test.ts`;
    - la consulta real en `tests/integration/lumi-tools.integration.test.ts`;
    - si cambia el flujo, el E2E.
+
+## Selector con Qwen (etapa 2, fase A2)
+
+Las reglas (`match`) siguen resolviendo primero, sin modelo. Si ninguna reconoce el mensaje y
+`LUMI_SELECTOR_ENABLED=true`, el Server pide a ia-asistente (`POST /api/v1/select`) una propuesta:
+
+```json
+{"status": "tool|chat|missing|ambiguous", "intents": [{"tool": "...", "args": {}}], "need": "", "module": "pedidos"}
+```
+
+El modelo solo **propone**. El Server (`src/modules/lumi/selector/lumi-selector.ts`):
+
+1. descarta herramientas y argumentos que no existen;
+2. exige que los textos (búsqueda, referencia) aparezcan en el mensaje o en la entidad activa;
+3. toma la referencia del mensaje (`ORD-…`) o de la entidad activa;
+4. construye la entrada con `fromArgs` (periodos y estados salen del mensaje);
+5. comprueba el permiso (sin permiso no lee nada);
+6. decide el estado final.
+
+| Estado | Respuesta |
+|---|---|
+| `supported` | Ejecuta una o dos herramientas (texto determinista) |
+| `missing_information` | Pregunta solo el dato que falta (`selector.ask`) |
+| `missing_capability` | «Todavía no tengo una herramienta para…». No usa una herramienta parecida. La fase B la registrará |
+| `ambiguous` | Pide más detalle |
+| `delegated` | Clima e internet van al chat con búsqueda web (si hay `lumi.web`); recordatorios, a la pista de uso |
+| `unsupported` | Conversación normal con el modelo |
+
+- El catálogo enviado incluye **todas** las herramientas, también las que el usuario no puede usar: así una consulta sin permiso responde «no tienes permiso» en lugar de registrarse como capacidad que falta.
+- Si ia-asistente no responde en `LUMI_SELECTOR_TIMEOUT_MS`, el turno sigue como conversación.
+- Los registros guardan el estado, las herramientas, la latencia y los tokens, **nunca el texto del usuario**.
+
+### Entidad activa (Context Manager)
+
+`lumi_context` (identity_db) guarda por usuario y conversación la última entidad de una respuesta
+(un pedido o un producto) durante 30 minutos (índice TTL). La entidad abierta en pantalla tiene
+prioridad. Solo se guarda la referencia visible (nunca datos de clientes), y cada uso vuelve a pasar
+por el permiso de la herramienta.
+
+La especificación medida de estas reglas está en `local-ai-assistant/bench/rules.py`.
