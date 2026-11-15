@@ -71,6 +71,12 @@ export const PERMISSION_REGISTRY = {
    * nunca ejecuta escrituras.
    */
   LUMI_CAPABILITIES_TEST: 'lumi.capabilities.test',
+  /** Habilitar o deshabilitar capacidades en el chat (fase E). Solo con la batería aprobada. */
+  LUMI_CAPABILITIES_ENABLE: 'lumi.capabilities.enable',
+  /** Ver lo que Lumi ha aprendido (interpretaciones de usuarios y globales). Fase F. */
+  LUMI_LEARNING_READ: 'lumi.learning.read',
+  /** Aprobar, retirar, hacer global o borrar interpretaciones aprendidas. Fase F. */
+  LUMI_LEARNING_MANAGE: 'lumi.learning.manage',
   /**
    * Permisos por módulo (2026-11). Antes estos módulos reutilizaban admin.access o products.*.
    * La migración scripts/migrate-module-permissions.ts los concede a quien ya tenía el acceso.

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify'
-import type { z } from 'zod'
+import { z } from 'zod'
 import type { AppContext } from '../app.context.js'
 import { AppError } from '../common/errors/app.error.js'
 import { PERMISSION_REGISTRY } from '../common/permissions/registry.js'
@@ -9,6 +9,7 @@ import {
   capabilityIdParamsSchema,
   changeCapabilityStatusSchema,
   listCapabilitiesQuerySchema,
+  enableCapabilitySchema,
   mergeCapabilitySchema,
   updateCapabilitySchema,
 } from '../modules/lumi/capabilities/domain/capability.types.js'
@@ -18,6 +19,8 @@ import {
   runParamsSchema,
   startRunSchema,
 } from '../modules/lumi/capabilities/domain/capability-test.types.js'
+
+const turnMetricsQuerySchema = z.object({ days: z.coerce.number().int().refine((d) => [1, 7, 30].includes(d)).default(7) })
 
 /**
  * Capability Manager de Lumi (fase B): lo que los usuarios piden y Lumi aún no sabe hacer.
@@ -30,6 +33,8 @@ export async function registerLumiCapabilityRoutes(api: FastifyInstance, ctx: Ap
   const test = adminGuard(ctx.repos.sessions, PERMISSION_REGISTRY.LUMI_CAPABILITIES_TEST, ctx.services.authorization)
   const capabilities = ctx.services.lumiCapabilities
   const tests = ctx.services.lumiCapabilityTests
+  const enableGuard = adminGuard(ctx.repos.sessions, PERMISSION_REGISTRY.LUMI_CAPABILITIES_ENABLE, ctx.services.authorization)
+  const activation = ctx.services.lumiCapabilityActivation
   const base = '/admin/lumi/capabilities'
   const userIdOf = (request: unknown): string => (request as AuthenticatedRequest).auth.userId
   const keysOf = (request: unknown) => (request as AuthenticatedRequest).permissionKeys ?? []
@@ -43,6 +48,12 @@ export async function registerLumiCapabilityRoutes(api: FastifyInstance, ctx: Ap
   api.get(base, { preHandler: read }, async (request) => capabilities.list(parse(listCapabilitiesQuerySchema, request.query)))
 
   api.get(`${base}/stats`, { preHandler: read }, async () => capabilities.stats())
+
+  // Fase G: cómo resuelve Lumi los turnos (contadores diarios, sin texto ni usuario).
+  api.get(`${base}/metrics`, { preHandler: read }, async (request) => {
+    const { days } = parse(turnMetricsQuerySchema, request.query)
+    return ctx.services.lumiTurnMetrics.summary(days, new Date())
+  })
 
   api.get(`${base}/:id`, { preHandler: read }, async (request) => {
     const { id } = parse(capabilityIdParamsSchema, request.params)
@@ -106,5 +117,25 @@ export async function registerLumiCapabilityRoutes(api: FastifyInstance, ctx: Ap
     completion.catch((err) => request.log.error({ err }, 'Lumi capability test run failed'))
     reply.code(202)
     return { run }
+  })
+
+  /* ───────────── Fase E: activación ───────────── */
+
+  // Requisitos para habilitar (sin la casilla de documentación, que se confirma al habilitar).
+  api.get(`${base}/:id/enablement`, { preHandler: read }, async (request) => {
+    const { id } = parse(capabilityIdParamsSchema, request.params)
+    const { checks, canEnable } = await activation.checks(id)
+    return { checks, canEnable }
+  })
+
+  api.post(`${base}/:id/enable`, { preHandler: enableGuard }, async (request) => {
+    const { id } = parse(capabilityIdParamsSchema, request.params)
+    parse(enableCapabilitySchema, request.body)
+    return { capability: await activation.enable(id, userIdOf(request)) }
+  })
+
+  api.post(`${base}/:id/disable`, { preHandler: enableGuard }, async (request) => {
+    const { id } = parse(capabilityIdParamsSchema, request.params)
+    return { capability: await activation.disable(id, userIdOf(request)) }
   })
 }

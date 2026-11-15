@@ -176,7 +176,7 @@ class MemoryStores implements CapabilityTestStore {
   constructor(status: LumiCapability['status']) {
     this.capability = {
       id: 'c'.repeat(24), key: 'k', title: 'productos sin precio', description: '', module: 'productos', status, priority: 'normal',
-      signature: 's', keywords: [], requestCount: 1, samples: [], spec: { ...EMPTY_SPEC }, mergedInto: null, possibleDuplicateOf: null,
+      signature: 's', keywords: [], requestCount: 1, samples: [], spec: { ...EMPTY_SPEC }, mergedInto: null, possibleDuplicateOf: null, toolName: null,
       history: [], lastTest: null, firstSeenAt: NOW, lastSeenAt: NOW, createdAt: NOW, updatedAt: NOW,
     }
   }
@@ -195,6 +195,7 @@ class MemoryStores implements CapabilityTestStore {
       },
       create: notUsed, findCandidates: notUsed, addRequest: notUsed, insertRequest: notUsed, hasRecentRequest: notUsed,
       list: notUsed, stats: notUsed, recentRequests: notUsed, distinctUsers: notUsed, absorb: notUsed,
+      upsertForTool: notUsed, enabledToolNames: notUsed,
     } as CapabilityStore
   }
   async addPhrase(p: NewPhrase) {

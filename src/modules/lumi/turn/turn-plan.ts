@@ -47,8 +47,12 @@ export interface TurnTraceSelector {
 
 /** Lo que pasó en cada etapa, para el entorno de pruebas y las métricas (sin el texto del usuario). */
 export interface TurnTrace {
-  stage: 'rules' | 'selector' | 'fallback'
+  stage: 'learned' | 'rules' | 'selector' | 'fallback'
+  /** Interpretación aprendida que resolvió el turno (fase F), sin la frase. */
+  learned: { knowledgeId: string; scope: 'user' | 'global'; tool: string } | null
   rules: { tool: string; denied: boolean; explain: boolean } | null
+  /** Ejemplos aprendidos enviados al selector (solo cuántos). */
+  examples: number
   selector: TurnTraceSelector | null
   interpretation: LumiInterpretation['status'] | null
   /** Entradas validadas de las herramientas elegidas (valores del Server, no del modelo). */
@@ -76,6 +80,10 @@ export interface TurnInput {
 export interface TurnDeps {
   /** null: selector desactivado o asistente sin configurar. */
   select: ((userId: string, payload: LumiSelectRequest) => Promise<LumiSelectResult>) | null
+  /** Interpretación aprobada para esta frase exacta (fase F). */
+  learned?: (message: string, enabled?: ReadonlySet<string>) => Promise<{ knowledgeId: string; tool: string; scope: 'user' | 'global' } | null>
+  /** Interpretaciones aprobadas parecidas, como ejemplos para el selector (fase F). */
+  examples?: (message: string, enabled?: ReadonlySet<string>) => Promise<NonNullable<LumiSelectRequest['examples']>>
 }
 
 const matchSummary = (m: ToolMatch) => ({
@@ -86,13 +94,26 @@ const matchSummary = (m: ToolMatch) => ({
 })
 
 function emptyTrace(stage: TurnTrace['stage']): TurnTrace {
-  return { stage, rules: null, selector: null, interpretation: null, matches: [], pendingTool: null, missing: [], delegate: null, need: null, module: null }
+  return { stage, learned: null, rules: null, examples: 0, selector: null, interpretation: null, matches: [], pendingTool: null, missing: [], delegate: null, need: null, module: null }
 }
 
 export async function planLumiTurn(input: TurnInput, deps: TurnDeps): Promise<{ plan: TurnPlan; trace: TurnTrace }> {
   const ctx = { now: input.now, timezone: input.timezone, enabled: input.enabledTools }
 
-  // Etapa 1: reglas de las herramientas.
+  // Etapa 1a: lo que este usuario (o un administrador, globalmente) ya enseñó para esta frase exacta.
+  // Va antes de las reglas: es una corrección explícita. Pasa por la misma validación y permisos.
+  const learned = deps.learned ? await deps.learned(input.message, input.enabledTools).catch(() => null) : null
+  if (learned) {
+    const entity = await input.resolveEntity()
+    const proposal = { status: 'tool' as const, intents: [{ tool: learned.tool, args: {} }], need: '', module: 'none' }
+    const result = interpret(input.message, normalizeProposal(input.message, proposal, entity), [...input.permissionKeys], ctx)
+    if (result.status === 'supported' || result.status === 'missing_information') {
+      const trace: TurnTrace = { ...emptyTrace('learned'), learned, interpretation: result.status }
+      return planFrom(result, trace)
+    }
+  }
+
+  // Etapa 1b: reglas de las herramientas.
   const match = matchTool(input.message, [...input.permissionKeys], ctx)
   if (match) {
     const trace = { ...emptyTrace('rules'), rules: { tool: match.tool.name, denied: match.denied, explain: match.explain }, interpretation: 'supported' as const, matches: [matchSummary(match)] }
@@ -106,9 +127,15 @@ export async function planLumiTurn(input: TurnInput, deps: TurnDeps): Promise<{ 
 
   // Etapa 2: el selector propone.
   const entity = await input.resolveEntity()
+  const examples = deps.examples ? await deps.examples(input.message, input.enabledTools).catch(() => []) : []
   let proposal: LumiSelectResult
   try {
-    proposal = await deps.select(input.userId, { message: input.message, context: entityContextLine(entity), ...selectorCatalog(input.enabledTools) })
+    proposal = await deps.select(input.userId, {
+      message: input.message,
+      context: entityContextLine(entity),
+      ...selectorCatalog(input.enabledTools),
+      ...(examples.length ? { examples } : {}),
+    })
   } catch (err) {
     const error = err instanceof Error ? err.message.slice(0, 200) : 'error'
     return { plan: { kind: 'model', match: null, forceWeb: false }, trace: { ...emptyTrace('fallback'), selector: { outcome: 'error', error }, interpretation: 'unsupported' } }
@@ -131,8 +158,12 @@ export async function planLumiTurn(input: TurnInput, deps: TurnDeps): Promise<{ 
     },
     interpretation: result.status,
     module: normalized.module,
+    examples: examples.length,
   }
+  return planFrom(result, trace)
+}
 
+function planFrom(result: LumiInterpretation, trace: TurnTrace): { plan: TurnPlan; trace: TurnTrace } {
   switch (result.status) {
     case 'supported': {
       trace.matches = result.matches.map(matchSummary)

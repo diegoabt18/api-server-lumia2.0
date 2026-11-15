@@ -172,7 +172,7 @@ export class LumiCapabilityService {
     if (source.status === 'duplicate' || target.status === 'duplicate') {
       throw AppError.conflict('Una de las capacidades ya está fusionada')
     }
-    if (['testing', 'validated', 'enabled', 'disabled'].includes(source.status)) {
+    if (source.toolName || ['testing', 'validated', 'enabled', 'disabled'].includes(source.status)) {
       throw AppError.conflict('No se puede fusionar una capacidad que ya tiene herramienta')
     }
     const now = this.clock()

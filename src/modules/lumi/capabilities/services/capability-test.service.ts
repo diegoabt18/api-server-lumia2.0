@@ -144,7 +144,7 @@ export class CapabilityTestService {
     if (decidesStatus && capability.status !== 'testing') {
       await this.setStatus(capability, 'testing', now)
     }
-    const completion = this.execute(run, items, input.forceSelector, tester, decidesStatus ? capabilityId : null)
+    const completion = this.execute(run, items, input.forceSelector, tester, decidesStatus ? capabilityId : null, capability.toolName)
     return { run, completion }
   }
 
@@ -154,13 +154,20 @@ export class CapabilityTestService {
     forceSelector: boolean,
     tester: Tester,
     decideFor: string | null,
+    toolUnderTest: string | null,
   ): Promise<void> {
     const results: PhraseResult[] = []
     try {
       for (const item of items) {
         let result: PhraseResult
         try {
-          const outcome = await this.runner.run({ userId: tester.userId, permissionKeys: tester.permissionKeys, message: item.text, forceSelector })
+          const outcome = await this.runner.run({
+            userId: tester.userId,
+            permissionKeys: tester.permissionKeys,
+            message: item.text,
+            forceSelector,
+            includeTools: toolUnderTest ? [toolUnderTest] : [],
+          })
           result = {
             ...item,
             actual: outcome.actual,

@@ -12,6 +12,11 @@ export interface SandboxInput {
   message: string
   /** Usar el selector aunque esté desactivado en el chat (para evaluarlo antes de activarlo). */
   forceSelector: boolean
+  /**
+   * Herramientas que se prueban aunque aún no estén habilitadas (la de la capacidad en pruebas):
+   * así se valida antes de activarla. El resto se comporta como en el chat.
+   */
+  includeTools?: readonly string[]
 }
 
 export type SandboxOutcome = Pick<PhraseResult, 'actual' | 'automation' | 'trace' | 'executions' | 'durationMs' | 'error'> & {
@@ -24,6 +29,11 @@ export interface SandboxDeps {
   select: ((userId: string, payload: LumiSelectRequest) => Promise<LumiSelectResult>) | null
   /** LUMI_SELECTOR_ENABLED: lo que haría el chat hoy. */
   selectorEnabled: boolean
+  /** Herramientas habilitadas en el chat (fase E). Sin función: todas. */
+  enabledTools?: () => Promise<ReadonlySet<string>>
+  /** Lo aprendido (fase F) por quien prueba y lo global. */
+  learned?: (userId: string, message: string, enabled?: ReadonlySet<string>) => Promise<{ knowledgeId: string; tool: string; scope: 'user' | 'global' } | null>
+  examples?: (userId: string, message: string, enabled?: ReadonlySet<string>) => Promise<Array<{ message: string; tool: string; args: Record<string, unknown> }>>
   /** Solo lecturas: es el mismo puerto de lectura que usa el chat. */
   toolDeps: LumiToolDeps
   timezone: string
@@ -61,8 +71,11 @@ export class SandboxTurnRunner {
     }
 
     const useSelector = input.forceSelector || this.deps.selectorEnabled
+    const enabled = this.deps.enabledTools ? new Set(await this.deps.enabledTools()) : undefined
+    for (const name of input.includeTools ?? []) enabled?.add(name)
     const { plan, trace } = await planLumiTurn(
       {
+        enabledTools: enabled,
         userId: input.userId,
         message: input.message,
         permissionKeys: input.permissionKeys,
@@ -71,7 +84,11 @@ export class SandboxTurnRunner {
         // Sin conversación ni pantalla: la frase se prueba sola.
         resolveEntity: async () => null,
       },
-      { select: useSelector ? this.deps.select : null },
+      {
+        select: useSelector ? this.deps.select : null,
+        learned: this.deps.learned ? (message, en) => this.deps.learned!(input.userId, message, en) : undefined,
+        examples: this.deps.examples ? (message, en) => this.deps.examples!(input.userId, message, en) : undefined,
+      },
     )
 
     const toRun: ToolMatch[] = plan.kind === 'tools' ? plan.matches : plan.kind === 'model' && plan.match ? [plan.match] : []

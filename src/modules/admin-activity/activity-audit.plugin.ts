@@ -16,6 +16,8 @@ const ADMIN_PREFIX = '/api/admin/'
 /** Operaciones bajo /api/admin que no cambian datos administrativos (conversación con el asistente). */
 const EXCLUDED = [
   /^\/api\/admin\/lumi\/chat(\/stream)?$/,
+  // «No era esto»: su cuerpo es la pregunta del usuario; el aprendizaje tiene su propio registro de eventos.
+  /^\/api\/admin\/lumi\/feedback$/,
   /^\/api\/admin\/lumi\/products\/:id\/assist$/,
 ]
 

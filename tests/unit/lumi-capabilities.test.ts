@@ -33,7 +33,7 @@ class MemoryCapabilityStore implements CapabilityStore {
     const capability: LumiCapability = {
       id, key: input.key, title: input.title, description: '', module: input.module, status: 'detected',
       priority: 'normal', signature: input.signature, keywords: input.keywords, requestCount: 1,
-      samples: [input.sample], spec: { ...EMPTY_SPEC }, mergedInto: null, possibleDuplicateOf: input.possibleDuplicateOf,
+      samples: [input.sample], spec: { ...EMPTY_SPEC }, mergedInto: null, possibleDuplicateOf: input.possibleDuplicateOf, toolName: null,
       history: [{ at: input.now, by: 'system', action: 'created' }], lastTest: null, firstSeenAt: input.now, lastSeenAt: input.now,
       createdAt: input.now, updatedAt: input.now,
     }
@@ -75,6 +75,12 @@ class MemoryCapabilityStore implements CapabilityStore {
     const c = this.capabilities.find((x) => x.id === id)!
     Object.assign(c, patch)
     c.history = [...c.history, entry]
+  }
+  async upsertForTool(): Promise<'unchanged'> {
+    return 'unchanged'
+  }
+  async enabledToolNames() {
+    return this.capabilities.filter((c) => c.status === 'enabled' && c.toolName).map((c) => c.toolName!)
   }
   async absorb(targetId: string, sourceId: string, requestCount: number, samples: string[], entry: CapabilityHistoryEntry) {
     const t = this.capabilities.find((x) => x.id === targetId)!

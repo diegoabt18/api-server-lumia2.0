@@ -16,6 +16,7 @@ import { capabilitiesFor, runTool, type ToolMatch } from '../modules/lumi/tools/
 import type { LumiEntityRef } from '../modules/lumi/tools/tool.types.js'
 import { missingCapabilityReply } from '../modules/lumi/selector/lumi-selector.js'
 import { planLumiTurn, type TurnPlan } from '../modules/lumi/turn/turn-plan.js'
+import { sampleFromTrace, type TurnSample } from '../modules/lumi/metrics/turn-metrics.js'
 import { createLumiToolDeps } from '../modules/lumi/tools/tool-adapters.js'
 import {
   buildAssistRequest,
@@ -174,6 +175,24 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     }
   }
 
+  /** Métricas del turno (fase G): nunca bloquean ni rompen el turno. */
+  const recordTurn = (request: FastifyRequest, sample: TurnSample) => {
+    void ctx.services.lumiTurnMetrics.record(sample, new Date()).catch((err) => request.log.warn({ err }, 'Lumi turn metrics not recorded'))
+  }
+
+  /**
+   * Correcciones por texto (fase F): «no, me refiero a…» y la respuesta «sí»/«no» a la pregunta de
+   * Lumi. Devuelve la respuesta, o null si el mensaje no es eso. Nunca rompe el turno.
+   */
+  const learningTurn = async (request: FastifyRequest, message: string): Promise<string | null> => {
+    try {
+      return await ctx.services.lumiLearning.handleTextTurn({ userId: userIdOf(request), permissionKeys: keysOf(request) }, message)
+    } catch (err) {
+      request.log.warn({ err }, 'Lumi learning turn failed; continuing')
+      return null
+    }
+  }
+
   /**
    * Intent Engine de Lumi (modules/lumi/turn/turn-plan.ts): reglas → selector → Server. Aquí solo
    * se añaden los efectos del chat: registrar la capacidad que falta y las métricas del selector.
@@ -188,6 +207,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     const now = new Date()
     const { plan, trace } = await planLumiTurn(
       {
+        enabledTools: await ctx.services.lumiToolGate.enabledTools(),
         userId: userIdOf(request),
         message,
         permissionKeys: keysOf(request),
@@ -195,8 +215,20 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
         timezone,
         resolveEntity: () => activeEntity(request, conversationId, contextInput, now),
       },
-      { select: selectFn },
+      {
+        select: selectFn,
+        learned: (msg, enabled) => ctx.services.lumiLearning.learnedTool(userIdOf(request), msg, enabled),
+        examples: (msg, enabled) => ctx.services.lumiLearning.examples(userIdOf(request), msg, enabled),
+      },
     )
+    // La pregunta queda recordada 10 min para entender un «no, me refiero a…» posterior.
+    void ctx.services.lumiLearning
+      .rememberLastMessage(userIdOf(request), message)
+      .catch((err) => request.log.warn({ err }, 'Lumi last message not saved'))
+    recordTurn(request, sampleFromTrace(trace))
+    if (trace.stage === 'learned') {
+      request.log.info({ lumiLearned: { scope: trace.learned?.scope, tool: trace.learned?.tool } }, 'Lumi learned interpretation used')
+    }
     if (trace.selector?.outcome === 'error') {
       request.log.warn({ err: trace.selector.error }, 'Lumi selector unavailable; falling back to chat')
     }
@@ -298,7 +330,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     forceWeb = false,
   ): Promise<{ context: string | undefined; webSearch: boolean; reasoning: boolean; capabilities: string }> => {
     const keys = (request as AuthenticatedRequest).permissionKeys
-    const capabilities = capabilitiesFor(keys, new Date(), timezone)
+    const capabilities = capabilitiesFor(keys, new Date(), timezone, await ctx.services.lumiToolGate.enabledTools())
     const canWeb = hasPermission(keys, PERMISSION_REGISTRY.LUMI_WEB)
     const webMode = body.webMode ?? (body.webSearch === undefined ? 'auto' : body.webSearch ? 'on' : 'off')
     const modes = resolveLumiModes({
@@ -325,10 +357,20 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     // Órdenes de recordatorio: se resuelven con reglas y el backend, sin llamar al modelo.
     const automated = await ctx.services.lumiCommands.handle(userIdOf(request), parsed.data.message)
     if (automated !== null) {
+      recordTurn(request, { stage: 'automation', interpretation: null })
       return {
         conversationId: await saveAutomatedTurn(request, parsed.data.message, automated, parsed.data.conversationId),
         model: 'lumi-automation',
         response: automated,
+      }
+    }
+    const learnedReply = await learningTurn(request, parsed.data.message)
+    if (learnedReply !== null) {
+      recordTurn(request, { stage: 'correction', interpretation: null })
+      return {
+        conversationId: await saveAutomatedTurn(request, parsed.data.message, learnedReply, parsed.data.conversationId),
+        model: 'lumi-learning',
+        response: learnedReply,
       }
     }
     // Mismo plan que el streaming: lo que resuelve una herramienta del backend no usa el modelo.
@@ -384,12 +426,15 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
 
       const automated = await ctx.services.lumiCommands.handle(userIdOf(request), parsed.data.message)
+      const learnedReply = automated === null ? await learningTurn(request, parsed.data.message) : null
       const plan =
-        automated === null
+        automated === null && learnedReply === null
           ? await planTurn(request, parsed.data.message, parsed.data.conversationId, parsed.data.context)
           : null
-      // Respuesta sin modelo: recordatorio resuelto por reglas o respuesta fija del selector.
-      const fixed = automated ?? (plan?.kind === 'reply' ? plan.text : null)
+      // Respuesta sin modelo: recordatorio, corrección aprendida o respuesta fija del selector.
+      const fixed = automated ?? learnedReply ?? (plan?.kind === 'reply' ? plan.text : null)
+      if (automated !== null) recordTurn(request, { stage: 'automation', interpretation: null })
+      else if (learnedReply !== null) recordTurn(request, { stage: 'correction', interpretation: null })
       if (fixed !== null) {
         const conversationId = await saveAutomatedTurn(
           request,

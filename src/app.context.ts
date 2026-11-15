@@ -141,6 +141,12 @@ import { LumiCapabilityService } from './modules/lumi/capabilities/services/capa
 import { LumiCapabilityTestRepository } from './modules/lumi/capabilities/infrastructure/lumi-capability-test.repository.js'
 import { CapabilityTestService } from './modules/lumi/capabilities/services/capability-test.service.js'
 import { SandboxTurnRunner } from './modules/lumi/capabilities/services/sandbox-runner.js'
+import { LumiToolGate } from './modules/lumi/capabilities/services/tool-gate.js'
+import { CapabilityActivationService } from './modules/lumi/capabilities/services/capability-activation.service.js'
+import { LUMI_TOOLS } from './modules/lumi/tools/catalog.js'
+import { LumiKnowledgeRepository } from './modules/lumi/learning/infrastructure/lumi-knowledge.repository.js'
+import { LumiLearningService } from './modules/lumi/learning/services/learning.service.js'
+import { MongoTurnMetrics, type TurnMetricsStore } from './modules/lumi/metrics/turn-metrics.js'
 import { LumiAssistantClient } from './modules/lumi/infrastructure/lumi-assistant.client.js'
 import { createLumiToolDeps } from './modules/lumi/tools/tool-adapters.js'
 import { DEFAULT_AUTOMATION_TIMEZONE } from './modules/lumi/automation/domain/schedule.js'
@@ -219,6 +225,13 @@ export interface AppContext {
     lumiCapabilities: LumiCapabilityService
     /** Entorno de pruebas de capacidades (fase D). */
     lumiCapabilityTests: CapabilityTestService
+    /** Fase E: herramientas habilitadas para el chat y su activación. */
+    lumiToolGate: LumiToolGate
+    lumiCapabilityActivation: CapabilityActivationService
+    /** Fase F: Learning Engine. */
+    lumiLearning: LumiLearningService
+    /** Fase G: métricas de turnos. */
+    lumiTurnMetrics: TurnMetricsStore
     notificationHub: NotificationStreamHub
     auth: AuthService
     authorization: AuthorizationService
@@ -622,6 +635,37 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     .ensureIndexes()
     .catch((err) => logger.warn({ err }, 'lumi capability test indexes skipped'))
   const lumiCapabilities = new LumiCapabilityService(lumiCapabilityRepo, undefined, undefined, lumiCapabilityTestRepo)
+  // Fase E: qué herramientas usa el chat lo decide lumi_capabilities (caché de 60 s).
+  const lumiToolGate = new LumiToolGate(
+    () => lumiCapabilityRepo.enabledToolNames(),
+    LUMI_TOOLS.filter((t) => t.enabledByDefault).map((t) => t.name),
+    (err) => logger.warn({ err }, 'lumi tool gate: using last known enabled tools'),
+  )
+  const lumiCapabilityActivation = new CapabilityActivationService(lumiCapabilityRepo, LUMI_TOOLS, lumiToolGate)
+  // Fase F: Learning Engine (interpretaciones aprendidas, por usuario o globales aprobadas).
+  const lumiKnowledgeRepo = new LumiKnowledgeRepository(identityDb)
+  await lumiKnowledgeRepo
+    .ensureIndexes()
+    .catch((err) => logger.warn({ err }, 'lumi knowledge indexes skipped'))
+  // Fase G: métricas diarias de turnos (sin texto ni usuario).
+  const lumiTurnMetrics = new MongoTurnMetrics(identityDb)
+  await lumiTurnMetrics
+    .ensureIndexes()
+    .catch((err) => logger.warn({ err }, 'lumi turn metrics indexes skipped'))
+  const lumiLearning = new LumiLearningService(lumiKnowledgeRepo, {
+    tools: LUMI_TOOLS,
+    enabledTools: () => lumiToolGate.enabledTools(),
+    recordMissing: (input) => lumiCapabilities.recordMissing(input),
+    timezone: DEFAULT_AUTOMATION_TIMEZONE,
+  })
+  // Cada herramienta del registro tiene su capacidad. Las existentes nacen habilitadas; las nuevas no.
+  await lumiCapabilityActivation
+    .syncRegistry()
+    .then((sync) => {
+      const changed = sync.filter((s) => s.result !== 'unchanged')
+      if (changed.length) logger.info({ lumiToolSync: changed }, 'lumi tool registry synced')
+    })
+    .catch((err) => logger.warn({ err }, 'lumi tool registry sync skipped'))
   const lumiCommands = new AutomationCommands(
     lumiTasks,
     lumiAutomationRepo,
@@ -669,6 +713,10 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
         ? (userId, payload) => lumiAssistantForTests.select(userId, payload, env.LUMI_SELECTOR_TIMEOUT_MS)
         : null,
       selectorEnabled: env.LUMI_SELECTOR_ENABLED,
+      enabledTools: () => lumiToolGate.enabledTools(),
+      // Las pruebas aplican lo aprendido por quien prueba y lo global, igual que su chat.
+      learned: (userId, message, enabled) => lumiLearning.learnedTool(userId, message, enabled, false),
+      examples: (userId, message, enabled) => lumiLearning.examples(userId, message, enabled),
       toolDeps: createLumiToolDeps({ orders, products, notifications, initiatives: lumiInitiatives }),
       timezone: DEFAULT_AUTOMATION_TIMEZONE,
     }),
@@ -750,6 +798,10 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       lumiActiveEntities,
       lumiCapabilities,
       lumiCapabilityTests,
+      lumiToolGate,
+      lumiCapabilityActivation,
+      lumiLearning,
+      lumiTurnMetrics,
       notificationHub,
       auth,
       authorization,

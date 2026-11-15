@@ -189,3 +189,73 @@ herramienta esperada opcional (solo con `supported` o `missing_information`) y s
 | `GET /phrases` · `GET /test-runs` (últimas 20, sin detalle) · `GET /test-runs/:runId` | `lumi.capabilities.read` |
 | `POST /phrases` · `DELETE /phrases/:phraseId` | `lumi.capabilities.manage` |
 | `POST /test-runs` (`{kind: 'single', text, …}` o `{kind: 'battery'}`, y `forceSelector`) | `lumi.capabilities.test` (nuevo) |
+
+## Activación de capacidades (fase E)
+
+- **Registro único:** `LUMI_TOOLS`. Cada herramienta declara su `capabilityKey`. Las 8 anteriores a la fase E llevan además `enabledByDefault: true`.
+- **Al arrancar** (`CapabilityActivationService.syncRegistry`), cada herramienta tiene su capacidad en `lumi_capabilities`:
+  - si no existe, se crea: **habilitada** si es una de las anteriores (migración sin cambio de comportamiento) y **«lista para probar»** si es nueva;
+  - si existe (por ejemplo, detectada desde el chat con esa clave), solo se enlaza (`toolName`) sin tocar su estado.
+
+  **Nada se habilita al arrancar.**
+- **Qué usa el chat** lo decide `LumiToolGate`: las herramientas con capacidad `enabled`, con una caché de 60 s (en esta instancia, al momento). Una herramienta deshabilitada no existe para las reglas, para el catálogo del selector, para la interpretación del Server ni para el texto de capacidades. Si MongoDB falla, el chat usa la última lista conocida; si nunca la leyó, solo las 8 anteriores.
+- **Entorno de pruebas:** incluye la herramienta de la capacidad en pruebas aunque esté deshabilitada, para validarla antes de activarla.
+- **Habilitar** (`POST /:id/enable {documented: true}`, permiso `lumi.capabilities.enable`). El Server comprueba:
+  - que la herramienta existe en el registro;
+  - que su permiso es válido;
+  - que declara sus argumentos (`selector`);
+  - que la última batería pasó, desde `validated` o `disabled`;
+  - que se confirmó la documentación.
+
+  Si falta algo, responde 409 con la lista. `POST /:id/disable` la retira. `GET /:id/enablement` devuelve los requisitos.
+- Una capacidad con herramienta no se puede fusionar en otra; las demás sí se pueden fusionar en ella.
+
+### Añadir una capacidad nueva (recorrido de la fase E)
+
+1. Crear la herramienta en su propio archivo (por ejemplo, `tools/products-unpriced.tool.ts`) con `capabilityKey` y **sin** `enabledByDefault`.
+2. Añadir una línea en `LUMI_TOOLS` y su nombre en `LumiToolName`.
+3. Si necesita datos nuevos, añadir un método de lectura en `LumiToolDeps`, el adaptador y el repositorio.
+4. Al desplegar, la capacidad aparece «lista para probar». En Lumia Admin: frases → batería → validada → habilitar.
+5. Añadir el nombre a `LUMI_TOOL_NAMES` en `lumia-admin/shared/schemas/lumi-capability-tests.ts`, para el selector del formulario de frases.
+
+## Learning Engine (fase F)
+
+Lumi aprende «frase → herramienta» **solo por acciones explícitas**:
+- **Botón «No era esto»** (`POST /admin/lumi/feedback`, `lumi.use`): el usuario elige la consulta correcta entre las que ya puede usar (`GET /admin/lumi/feedback/options`), o escribe lo que quería. En ese segundo caso no se aprende nada: se registra como capacidad que falta.
+- **Corrección por texto:** «no, me refiero a X», «quise decir X»… Lumi pregunta «¿Guardo que «<pregunta anterior>» significa…?» y solo guarda con un «sí» en los 10 minutos siguientes. Si X no tiene herramienta, se registra como capacidad que falta.
+
+**Reglas:**
+- **Alcance de usuario por defecto.** Global solo si un administrador la hace global en el panel. Si contradice otra global, las dos quedan en revisión y nadie las usa.
+- **Nunca concede permisos:** al usarse vuelve a pasar por la puerta de habilitación, por el permiso y por la validación de la entrada (`fromArgs`, con los datos sacados del mensaje).
+- **No reentrena nada:** el modelo solo recibe hasta 3 interpretaciones parecidas como ejemplos en el mensaje (`examples` de `/select`).
+
+**En el turno** (`planLumiTurn`):
+1. **Etapa 1a, lo aprendido** (antes que las reglas): coincidencia exacta de la frase normalizada, sin tildes, signos, cortesía ni artículos. Primero la del usuario; si no, una global sin contradicciones.
+2. Etapa 1b, las reglas.
+3. Etapa 2, el selector, con los ejemplos aprendidos.
+
+**Datos:**
+- `lumi_knowledge`: frase, frase normalizada, herramienta, alcance, estado y usos.
+- `lumi_knowledge_events`: auditoría.
+- `lumi_last_messages`: la última pregunta de cada usuario, con TTL de 10 min, para entender las correcciones.
+
+`POST /admin/lumi/feedback` no entra en la auditoría de actividad, porque su cuerpo es la pregunta del usuario.
+
+| Ruta (`/api/admin/lumi/knowledge`) | Permiso |
+|---|---|
+| `GET /` (filtros `scope`, `status`, `tool`, `search` literal) · `GET /:id` (con eventos, sin identificadores) | `lumi.learning.read` |
+| `POST /:id/status` · `POST /:id/promote` (hacer global) · `DELETE /:id` | `lumi.learning.manage` |
+
+## Métricas de turnos (fase G)
+
+`lumi_turn_metrics` (identity_db) guarda **un documento por día** (zona de la tienda), con TTL de 180 días y **sin texto ni usuario**:
+- turnos por etapa: `automation`, `correction`, `learned`, `rules`, `selector` y `fallback`;
+- estados finales del intérprete;
+- llamadas al selector, errores, latencia, tokens y llamadas con ejemplos aprendidos.
+
+Se registra en cada turno del chat, sin bloquearlo. `GET /api/admin/lumi/capabilities/metrics?days=1|7|30` (`lumi.capabilities.read`) devuelve el resumen:
+- **sin modelo:** todo lo que no pasó por el selector ni acabó en conversación;
+- **llamadas al selector por cada 100 turnos;**
+- **latencia y tokens medios.**
+
+Lumia Admin lo muestra en Lumi → Capacidades («Cómo resuelve Lumi»).
