@@ -104,6 +104,8 @@ function throwForStatus(res: Response): void {
 export type LumiStreamEvent =
   | { type: 'start'; conversationId: string }
   | { type: 'mode'; webSearch: boolean; reasoning: boolean }
+  /** Herramienta del Server usada en el turno (consulta de datos reales, sin modelo). */
+  | { type: 'tool'; name: string; label: string; rows: number; denied: boolean }
   | { type: 'thinking'; text: string }
   | { type: 'token'; text: string }
   | { type: 'done'; conversationId: string }
@@ -177,13 +179,19 @@ export function toLumiStreamEvent(event: string, rawData: string): LumiStreamEve
 export interface LumiTurnOptions {
   think?: boolean
   maxTokens?: number
+  /** Qué puede hacer el sistema por este usuario (lo escribe el Server según sus permisos). */
+  capabilities?: string
 }
 
+/** Límite del texto de capacidades (el asistente acepta hasta 2000 caracteres). */
+export const LUMI_CAPABILITIES_MAX_CHARS = 2000
+
 /** Solo envía lo que se pidió: sin opciones, el cuerpo es el de siempre. */
-function turnOptionsBody(options: LumiTurnOptions): { think?: true; max_tokens?: number } {
+function turnOptionsBody(options: LumiTurnOptions): { think?: true; max_tokens?: number; capabilities?: string } {
   return {
     ...(options.think ? { think: true as const } : {}),
     ...(options.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
+    ...(options.capabilities ? { capabilities: options.capabilities.slice(0, LUMI_CAPABILITIES_MAX_CHARS) } : {}),
   }
 }
 

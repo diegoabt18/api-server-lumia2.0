@@ -68,7 +68,14 @@ describe('parser de instrucciones de recordatorio', () => {
     expect(parseAutomationCommand('¿Qué tareas tengo pendientes?', NOW, TZ)).toEqual({ kind: 'list' })
     expect(parseAutomationCommand('Pausa esta rutina una semana', NOW, TZ)).toMatchObject({ kind: 'unsupported' })
     expect(parseAutomationCommand('Reactiva mis recordatorios', NOW, TZ)).toEqual({ kind: 'resume' })
-    expect(parseAutomationCommand('Elimina la revisión diaria', NOW, TZ)).toEqual({ kind: 'delete' })
+    expect(parseAutomationCommand('Elimina la revisión diaria', NOW, TZ)).toEqual({
+      kind: 'delete',
+      target: 'initiative_review',
+    })
+    expect(parseAutomationCommand('Borra el recordatorio de tomar agua', NOW, TZ)).toEqual({
+      kind: 'delete',
+      target: null,
+    })
   })
 
   it('no toma como orden una pregunta general', () => {
@@ -172,6 +179,9 @@ function setup() {
     worker,
     setNow(value: string) {
       now = new Date(value)
+    },
+    advance(ms: number) {
+      now = new Date(now.getTime() + ms)
     },
   }
 }
@@ -279,18 +289,24 @@ describe('revisión diaria: cancelación del segundo aviso', () => {
     expect(await t.commands.handle('u1', 'Reactiva mis recordatorios')).toBe('Reactivé 2 avisos.')
     expect(t.store.tasks.get(followUp.id)!.status).toBe('active')
 
+    // Borrar pide confirmación: nada se elimina hasta "sí, elimínala".
     expect(await t.commands.handle('u1', 'Elimina la revisión diaria')).toBe(
+      '¿Elimino «Revisar iniciativas pendientes» y su segundo aviso? Esta acción no se puede deshacer. Responde «sí, elimínala» para confirmar o «no» para cancelar.',
+    )
+    expect(t.store.tasks.size).toBe(2)
+    expect(await t.commands.handle('u1', 'Sí, elimínala')).toBe(
       'Eliminé «Revisar iniciativas pendientes» y su segundo aviso.',
     )
     expect(t.store.tasks.size).toBe(0)
   })
 
-  it('no elimina nada si hay varias rutinas: pide cuál', async () => {
+  it('con varias rutinas elige la que se nombra o pregunta cuál', async () => {
     const t = setup()
     await createDailyReviewRoutine(t)
     await t.commands.handle('u1', 'Todos los días a las 9 de la mañana recuérdame tomar agua')
-    expect(await t.commands.handle('u1', 'Elimina la revisión diaria')).toContain('Dime cuál quieres eliminar')
-    expect(t.store.tasks.size).toBeGreaterThan(1)
+    expect(await t.commands.handle('u1', 'Elimina la revisión diaria')).toContain('¿Elimino «Revisar iniciativas pendientes»')
+    expect(await t.commands.handle('u1', 'Elimina mi rutina')).toContain('Dime cuál quieres eliminar')
+    expect(t.store.tasks.size).toBe(3)
   })
 
   it('una orden ambigua no crea nada y devuelve la pregunta', async () => {
@@ -303,6 +319,78 @@ describe('revisión diaria: cancelación del segundo aviso', () => {
   it('un mensaje que no es orden devuelve null para que siga al modelo', async () => {
     const t = setup()
     expect(await t.commands.handle('u1', '¿Cuál es el clima en Bogotá?')).toBeNull()
+  })
+})
+
+describe('reglas seguras (A2)', () => {
+  it('las frases sobre datos de la tienda no son órdenes de rutina', () => {
+    for (const phrase of [
+      'Cancela la revisión del pedido 1234',
+      'Dame un resumen de las tareas pendientes de producción',
+      'Elimina el producto Vela Vainilla',
+      'Pausa la promoción de navidad',
+      'Reactiva el producto de lavanda',
+      'Marca la revisión del pedido como hecha',
+    ]) {
+      expect(parseAutomationCommand(phrase, NOW, TZ), phrase).toEqual({ kind: 'none' })
+    }
+  })
+
+  it('las órdenes con objeto explícito siguen funcionando', () => {
+    expect(parseAutomationCommand('Elimina la rutina del pedido diario', NOW, TZ)).toMatchObject({ kind: 'delete' })
+    expect(parseAutomationCommand('Pausa mis recordatorios', NOW, TZ)).toEqual({ kind: 'pause' })
+    expect(parseAutomationCommand('Muéstrame mis recordatorios', NOW, TZ)).toEqual({ kind: 'list' })
+  })
+
+  it('reconoce sinónimos de recordatorio (A3)', () => {
+    const cmd = parseAutomationCommand(
+      'Ponme una alarma mañana a las 9 de la mañana para llamar al proveedor',
+      NOW,
+      TZ,
+    )
+    expect(cmd).toMatchObject({ kind: 'create_reminder', title: 'llamar al proveedor' })
+    expect(cmd.kind === 'create_reminder' && cmd.runAt.toISOString()).toBe('2026-11-14T14:00:00.000Z')
+    expect(parseAutomationCommand('Agenda un recordatorio hoy a las 5 de la tarde para cerrar caja', NOW, TZ)).toMatchObject({
+      kind: 'create_reminder',
+    })
+  })
+
+  it('un aviso por evento no se programa como recordatorio con hora', () => {
+    expect(parseAutomationCommand('Avísame cuando se agote la vela de vainilla', NOW, TZ)).toMatchObject({
+      kind: 'unsupported',
+    })
+  })
+
+  it('"sí" o "no" sin acción pendiente no son órdenes', async () => {
+    const t = setup()
+    expect(await t.commands.handle('u1', 'Sí')).toBeNull()
+    expect(await t.commands.handle('u1', 'No')).toBeNull()
+  })
+
+  it('"no" descarta el borrado pendiente y la rutina sigue', async () => {
+    const t = setup()
+    await createDailyReviewRoutine(t)
+    await t.commands.handle('u1', 'Elimina la revisión diaria')
+    expect(await t.commands.handle('u1', 'No, déjala')).toBe('De acuerdo, no eliminé nada.')
+    expect(await t.commands.handle('u1', 'Sí, elimínala')).toBeNull()
+    expect(t.store.tasks.size).toBe(2)
+  })
+
+  it('la confirmación caduca a los 10 minutos', async () => {
+    const t = setup()
+    await createDailyReviewRoutine(t)
+    await t.commands.handle('u1', 'Elimina la revisión diaria')
+    t.advance(11 * 60_000)
+    expect(await t.commands.handle('u1', 'Sí, elimínala')).toBeNull()
+    expect(t.store.tasks.size).toBe(2)
+  })
+
+  it('la confirmación de un usuario no borra la rutina de otro', async () => {
+    const t = setup()
+    await createDailyReviewRoutine(t)
+    await t.commands.handle('u1', 'Elimina la revisión diaria')
+    expect(await t.commands.handle('u2', 'Sí, elimínala')).toBeNull()
+    expect(t.store.tasks.size).toBe(2)
   })
 })
 

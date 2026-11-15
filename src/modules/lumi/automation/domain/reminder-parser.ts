@@ -24,7 +24,7 @@ export type AutomationCommand =
   | { kind: 'list' }
   | { kind: 'pause' }
   | { kind: 'resume' }
-  | { kind: 'delete' }
+  | { kind: 'delete'; target: 'initiative_review' | null }
 
 export function normalizeText(text: string): string {
   return text
@@ -71,6 +71,42 @@ export function findTimes(normalized: string): FoundTime[] {
   return found
 }
 
+/**
+ * Palabras de datos de la tienda. Una frase que habla de pedidos, productos o ventas no es una orden
+ * sobre las rutinas de Lumi aunque contenga "revisión", "tareas" o "cancela": va al modelo o a las
+ * herramientas. Solo se acepta como orden si además nombra de forma explícita una rutina o un recordatorio.
+ */
+const BUSINESS_SUBJECT =
+  /\b(pedidos?|ordenes?|productos?|produccion|clientes?|promociones?|ventas?|inventario|stock|categorias?|envios?|pagos?|facturas?|cupones?|banners?|recetas?|materiales?|proveedores?)\b/
+const EXPLICIT_AUTOMATION_OBJECT =
+  /\b(rutinas?|recordatorios?|segundo aviso|avisos de lumi|revision diaria|revision de (las )?iniciativas)\b/
+
+/** ¿La frase trata de datos de la tienda sin nombrar explícitamente una rutina o recordatorio? */
+export function isAboutBusinessData(normalized: string): boolean {
+  return BUSINESS_SUBJECT.test(normalized) && !EXPLICIT_AUTOMATION_OBJECT.test(normalized)
+}
+
+/** Respuestas que confirman una acción pendiente ("sí, elimínala"). Solo cuentan si hay una pendiente. */
+export function isConfirmation(normalized: string): boolean {
+  return /^(si|confirmo|confirmar|adelante|hazlo)([ ,.!]+(eliminala|eliminalo|borrala|borralo|elimina|borra|confirmo|adelante|por favor|hazlo))*[ .!]*$/.test(
+    normalized,
+  )
+}
+
+/** Respuestas que descartan una acción pendiente. Solo cuentan si hay una pendiente. */
+export function isRejection(normalized: string): boolean {
+  return /^(no|cancela|cancelar|mejor no|no la elimines|no lo elimines|dejala|dejalo)([ ,.!]+(gracias|mejor no|cancela|dejala|dejalo))*[ .!]*$/.test(
+    normalized,
+  )
+}
+
+const UNSUPPORTED_EVENT_REMINDER =
+  'Por ahora solo programo recordatorios con fecha y hora (por ejemplo: «Recuérdame mañana a las 9 de la mañana revisar el stock»). Las alertas de stock bajo y de pedidos atrasados aparecen solas en Iniciativas.'
+
+/** Frases de recordatorio: "recuérdame", "avísame", "ponme una alarma", "agenda un recordatorio"... */
+const REMINDER_TRIGGER =
+  /recuerd|avis(a|e)me|recordatorio|\balarma\b|\bponme un aviso\b|\bagendame\b|\bagenda(r)? (un|una) (recordatorio|aviso|alarma)/
+
 const AMBIGUOUS_QUESTION = '¿Esa hora es de la mañana o de la tarde?'
 const UNSUPPORTED_PAUSE =
   'Por ahora puedo pausar y reanudar tus recordatorios, pero todavía no programo pausas por días o semanas. ¿Quieres que los pause hasta que los reanudes?'
@@ -78,12 +114,17 @@ const UNSUPPORTED_PAUSE =
 function cleanTitle(original: string): string {
   // Conserva el texto original (con tildes) quitando la orden y la expresión de hora/fecha.
   const stripped = original
-    .replace(/^\s*(recu[eé]rdame|recuerda|recu[eé]rdeme|av[ií]same|av[ií]seme)\s*/i, '')
+    .replace(
+      /^\s*((recu[eé]rdame|recuerda|recu[eé]rdeme|av[ií]same|av[ií]seme)|((p[oó]n(me)?|programa(me)?|crea(me)?|ag[eé]nda(me)?)\s+(una?\s+)?(alarma|recordatorio|aviso)))\s*(para\s+)?/i,
+      '',
+    )
     .replace(/\b(a las?)\s*\d{1,2}(:\d{2})?\s*(de la (ma[nñ]ana|tarde|noche)|a\.?\s?m\.?|p\.?\s?m\.?)?/gi, '')
     .replace(/\ben (\d+|una|un|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez) horas?\b/gi, '')
     .replace(/\b(hoy|ma[nñ]ana)\b/gi, '')
     .replace(/\s+/g, ' ')
     .replace(/^[\s,.;:]+|[\s,.;:]+$/g, '')
+    // "Ponme una alarma mañana a las 9 para llamar…": tras quitar la fecha queda "para llamar…".
+    .replace(/^(para|de)\s+/i, '')
   return stripped.length > 0 ? stripped.slice(0, 120) : 'Recordatorio'
 }
 
@@ -98,7 +139,11 @@ export function parseAutomationCommand(
   const text = normalizeText(message)
   if (!text) return { kind: 'none' }
 
-  if (/como revisad[oa]|ya (las |lo |la )?(revise|he revisado)|marca (la )?revision/.test(text)) {
+  // Las órdenes de gestión (revisar, listar, pausar, reanudar, borrar) no se aplican a frases sobre
+  // datos de la tienda: "Cancela la revisión del pedido 1234" no es borrar una rutina.
+  const businessData = isAboutBusinessData(text)
+
+  if (!businessData && /como revisad[oa]|ya (las |lo |la )?(revise|he revisado)|marca (la )?revision/.test(text)) {
     return { kind: 'mark_reviewed' }
   }
   if (/hoy no me recuerdes|no me recuerdes (mas )?hoy|no me recuerdes mas/.test(text)) {
@@ -110,17 +155,24 @@ export function parseAutomationCommand(
     if (!first.time) return { kind: 'ask', question: AMBIGUOUS_QUESTION }
     return { kind: 'set_followup_time', time: first.time }
   }
-  if (/(muestrame|mostrame|muestra|lista|dame).*(rutinas|recordatorios|tareas)|(que|cuales) (rutinas|recordatorios|tareas).*(activ|pendient|tengo)|rutinas activas|recordatorios activos|tareas pendientes/.test(text)) {
+  if (!businessData && !/\bresumen\b/.test(text) && /(muestrame|mostrame|muestra|lista|dame).*(rutinas|recordatorios|tareas)|(que|cuales) (rutinas|recordatorios|tareas).*(activ|pendient|tengo)|rutinas activas|recordatorios activos|tareas pendientes/.test(text)) {
     return { kind: 'list' }
   }
-  if (/\bpausa\w*\b.*(rutina|recordatorio|revision)/.test(text)) {
+  if (!businessData && /\bpausa\w*\b.*(rutina|recordatorio|revision)/.test(text)) {
     if (/durante|una semana|\d+ dias?|(dos|tres|cuatro|cinco|seis|siete) dias?|un dia/.test(text)) {
       return { kind: 'unsupported', reason: UNSUPPORTED_PAUSE }
     }
     return { kind: 'pause' }
   }
-  if (/(reactiva|reanuda)\w*\b.*(recordatorio|rutina|revision)/.test(text)) return { kind: 'resume' }
-  if (/(elimina|borra|quita|cancela)\w*\b.*(revision|rutina|recordatorio)/.test(text)) return { kind: 'delete' }
+  if (!businessData && /(reactiva|reanuda)\w*\b.*(recordatorio|rutina|revision)/.test(text)) return { kind: 'resume' }
+  // Borrar exige nombrar el objeto ("la rutina", "el recordatorio", "la revisión diaria"). La ejecución
+  // siempre pide confirmación (ver AutomationCommands).
+  if (
+    !businessData &&
+    /(elimina|borra|quita|cancela)\w*\b.*\b(rutinas?|recordatorios?|revision diaria|revision de (las )?iniciativas|segundo aviso)\b/.test(text)
+  ) {
+    return { kind: 'delete', target: /iniciativ|revision diaria/.test(text) ? 'initiative_review' : null }
+  }
 
   const isRoutine = /todos los dias|cada dia/.test(text)
   if (isRoutine) {
@@ -144,7 +196,11 @@ export function parseAutomationCommand(
     }
   }
 
-  if (/recuerd|avis(a|e)me|recordatorio/.test(text)) {
+  if (REMINDER_TRIGGER.test(text)) {
+    // "Avísame cuando se agote X" es un aviso por evento: no se programa como recordatorio con hora.
+    if (/\bcuando (se )?(agote|acabe|termine|llegue|haya|baje|suba|entre|pague|venda)/.test(text) && findTimes(text).length === 0) {
+      return { kind: 'unsupported', reason: UNSUPPORTED_EVENT_REMINDER }
+    }
     const relative = /en (\d+|una|un|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez) horas?/.exec(text)
     if (relative) {
       const raw = relative[1]!

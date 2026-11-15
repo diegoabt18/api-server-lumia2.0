@@ -105,9 +105,16 @@ export class LumiInitiativeRepository implements InitiativeStore {
     return doc ? initiativeFrom(doc) : null
   }
 
-  async listForUser(userId: string, options: { state?: InitiativeState; limit: number }): Promise<LumiInitiative[]> {
+  async listForUser(
+    userId: string,
+    options: { state?: InitiativeState; limit: number; kinds?: readonly InitiativeKind[] },
+  ): Promise<LumiInitiative[]> {
     const docs = await this.initiatives
-      .find({ userId, ...(options.state ? { state: options.state } : {}) })
+      .find({
+        userId,
+        ...(options.state ? { state: options.state } : {}),
+        ...(options.kinds ? { kind: { $in: [...options.kinds] } } : {}),
+      })
       .sort({ priority: -1, lastSeenAt: -1 })
       .limit(options.limit)
       .toArray()

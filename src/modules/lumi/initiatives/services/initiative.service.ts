@@ -1,6 +1,8 @@
 import { AppError } from '../../../../common/errors/app.error.js'
 import type { InitiativeStore } from '../domain/initiative.store.js'
+import type { PermissionId } from '../../../../common/permissions/registry.js'
 import {
+  allowedInitiativeKinds,
   canTransition,
   type InitiativeLevel,
   type InitiativeState,
@@ -14,13 +16,26 @@ export class LumiInitiativeService {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  list(userId: string, options: { state?: InitiativeState; limit: number }): Promise<LumiInitiative[]> {
-    return this.store.listForUser(userId, options)
+  /** Solo los tipos que el usuario puede ver con sus permisos actuales. */
+  list(
+    userId: string,
+    permissionKeys: readonly PermissionId[],
+    options: { state?: InitiativeState; limit: number },
+  ): Promise<LumiInitiative[]> {
+    return this.store.listForUser(userId, { ...options, kinds: allowedInitiativeKinds(permissionKeys) })
   }
 
-  async changeState(userId: string, id: string, to: InitiativeState): Promise<LumiInitiative> {
+  async changeState(
+    userId: string,
+    permissionKeys: readonly PermissionId[],
+    id: string,
+    to: InitiativeState,
+  ): Promise<LumiInitiative> {
     const item = await this.store.findForUser(id, userId)
-    if (!item) throw AppError.notFound('Iniciativa no encontrada')
+    // Una iniciativa de un tipo que ya no puede ver se trata como inexistente.
+    if (!item || !allowedInitiativeKinds(permissionKeys).includes(item.kind)) {
+      throw AppError.notFound('Iniciativa no encontrada')
+    }
     if (item.state === to) return item
     if (!canTransition(item.state, to)) {
       throw AppError.conflict(`No se puede pasar de «${item.state}» a «${to}».`)

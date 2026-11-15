@@ -1,15 +1,34 @@
 import type { InitiativeCandidate } from '../domain/initiative.detectors.js'
 import type { InitiativeStore } from '../domain/initiative.store.js'
 import { shouldNotify } from '../domain/initiative.rules.js'
-import { OPEN_INITIATIVE_STATES } from '../domain/initiative.types.js'
+import type { PermissionId } from '../../../../common/permissions/registry.js'
+import { PERMISSION_REGISTRY, hasPermission } from '../../../../common/permissions/registry.js'
+import {
+  allowedInitiativeKinds,
+  INITIATIVE_KINDS,
+  OPEN_INITIATIVE_STATES,
+  type InitiativeKind,
+} from '../domain/initiative.types.js'
+
+/**
+ * Resultado de una lectura de señales. `truncated` lista los tipos cuya lectura alcanzó el límite de
+ * filas: de esos tipos no se sabe qué quedó fuera, así que no se puede dar nada por resuelto.
+ */
+export interface CandidateBatch {
+  candidates: InitiativeCandidate[]
+  truncated: InitiativeKind[]
+}
 
 /** Fuentes de señales. El adaptador de infraestructura lee catálogo, pedidos y automatizaciones. */
 export interface InitiativeSources {
   /** Señales comunes a todos los usuarios (stock, pedidos). Una lectura por ejecución. */
-  globalCandidates(now: Date): Promise<InitiativeCandidate[]>
+  globalCandidates(now: Date): Promise<CandidateBatch>
   /** Señales propias de cada usuario (rutinas fallidas). */
-  userCandidates(userId: string, now: Date): Promise<InitiativeCandidate[]>
+  userCandidates(userId: string, now: Date): Promise<CandidateBatch>
 }
+
+/** Claves de permiso efectivas de un usuario (el servicio de autorización, con su caché). */
+export type PermissionLookup = (userId: string) => Promise<readonly PermissionId[]>
 
 /** Mismo contrato que NotificationSink del motor de automatización. */
 export interface InitiativeNotifier {
@@ -57,18 +76,36 @@ export class InitiativeEngine {
     private readonly notifier: InitiativeNotifier,
     private readonly now: () => Date = () => new Date(),
     private readonly onError: (err: unknown, userId?: string) => void = () => {},
+    private readonly permissionsOf: PermissionLookup | null = null,
   ) {}
+
+  /**
+   * Tipos que el usuario puede ver. Sin `lumi.use` no recibe ninguno: perder el acceso a Lumi detiene
+   * sus iniciativas aunque conserve la rutina. Sin consulta de permisos configurada, todos.
+   */
+  private async allowedKinds(userId: string): Promise<InitiativeKind[]> {
+    if (!this.permissionsOf) return [...INITIATIVE_KINDS]
+    const keys = await this.permissionsOf(userId)
+    if (!hasPermission([...keys], PERMISSION_REGISTRY.LUMI_USE)) return []
+    return allowedInitiativeKinds(keys)
+  }
 
   async runOnce(): Promise<InitiativeRunSummary> {
     const now = this.now()
-    const globalCandidates = await this.sources.globalCandidates(now)
+    const global = await this.sources.globalCandidates(now)
     const users = await this.store.listUsersWithReviewRoutine()
     const summary: InitiativeRunSummary = { users: users.length, created: 0, reopened: 0, completed: 0, notified: 0 }
 
     for (const userId of users) {
       try {
+        const allowed = new Set(await this.allowedKinds(userId))
+        if (allowed.size === 0) continue
         const personal = await this.sources.userCandidates(userId, now)
-        const result = await this.reconcileUser(userId, [...globalCandidates, ...personal], now)
+        const candidates = [...global.candidates, ...personal.candidates].filter((c) => allowed.has(c.kind))
+        const result = await this.reconcileUser(userId, candidates, now, {
+          allowed,
+          truncated: new Set([...global.truncated, ...personal.truncated]),
+        })
         summary.created += result.created
         summary.reopened += result.reopened
         summary.completed += result.completed
@@ -85,6 +122,7 @@ export class InitiativeEngine {
     userId: string,
     candidates: readonly InitiativeCandidate[],
     now: Date,
+    scope: { allowed?: ReadonlySet<InitiativeKind>; truncated?: ReadonlySet<InitiativeKind> } = {},
   ): Promise<Omit<InitiativeRunSummary, 'users'>> {
     const result = { created: 0, reopened: 0, completed: 0, notified: 0 }
     const level = await this.store.getLevel(userId)
@@ -166,9 +204,12 @@ export class InitiativeEngine {
       }
     }
 
-    // Lo que ya no aparece en las señales está resuelto.
+    // Lo que ya no aparece en las señales está resuelto. Excepciones: un tipo cuya lectura se truncó
+    // (lo que falta puede seguir vigente) y un tipo que el usuario ya no puede ver (no se sabe; se oculta).
     for (const item of existing) {
       if (!OPEN_INITIATIVE_STATES.includes(item.state) || seen.has(item.dedupKey)) continue
+      if (scope.truncated?.has(item.kind)) continue
+      if (scope.allowed && !scope.allowed.has(item.kind)) continue
       await this.store.update(item.id, {
         state: 'completada',
         stateChangedAt: now,

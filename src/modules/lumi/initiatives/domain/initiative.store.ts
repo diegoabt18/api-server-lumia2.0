@@ -1,5 +1,5 @@
 import type { InitiativeCandidate } from './initiative.detectors.js'
-import type { InitiativeLevel, InitiativeState, LumiInitiative } from './initiative.types.js'
+import type { InitiativeKind, InitiativeLevel, InitiativeState, LumiInitiative } from './initiative.types.js'
 
 export interface NewInitiative {
   userId: string
@@ -32,7 +32,11 @@ export interface InitiativeStore {
   /** Inserta una iniciativa. Devuelve null si ya existe la misma (userId, dedupKey). */
   insert(item: NewInitiative): Promise<LumiInitiative | null>
   findForUser(id: string, userId: string): Promise<LumiInitiative | null>
-  listForUser(userId: string, options: { state?: InitiativeState; limit: number }): Promise<LumiInitiative[]>
+  /** `kinds` restringe a los tipos que el usuario puede ver (ver INITIATIVE_KIND_PERMISSION). */
+  listForUser(
+    userId: string,
+    options: { state?: InitiativeState; limit: number; kinds?: readonly InitiativeKind[] },
+  ): Promise<LumiInitiative[]>
   update(id: string, patch: InitiativePatch): Promise<void>
   getLevel(userId: string): Promise<InitiativeLevel>
   setLevel(userId: string, level: InitiativeLevel): Promise<void>

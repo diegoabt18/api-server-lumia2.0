@@ -133,6 +133,7 @@ import { LumiTaskManager } from './modules/lumi/automation/services/task-manager
 import { AutomationCommands } from './modules/lumi/automation/services/automation-commands.js'
 import { NotificationStreamHub } from './modules/notifications/services/notification-stream.hub.js'
 import { createFollowUpHandler } from './modules/lumi/automation/services/reminder-handlers.js'
+import { MongoPendingActions } from './modules/lumi/actions/pending-action.js'
 import { LumiInitiativeRepository } from './modules/lumi/initiatives/infrastructure/lumi-initiative.repository.js'
 import { RepositoryInitiativeSources } from './modules/lumi/initiatives/infrastructure/initiative-sources.js'
 import { InitiativeEngine } from './modules/lumi/initiatives/services/initiative-engine.js'
@@ -587,7 +588,18 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     { ...DEFAULT_WORKER_OPTIONS, now: () => new Date() },
     { follow_up: createFollowUpHandler(lumiAutomationRepo, automationSink) },
   )
-  const lumiCommands = new AutomationCommands(lumiTasks, lumiAutomationRepo, () => new Date())
+  // Acciones de Lumi que esperan confirmación (p. ej. borrar una rutina). Caducan con un índice TTL.
+  const lumiPendingActions = new MongoPendingActions(identityDb)
+  await lumiPendingActions
+    .ensureIndexes()
+    .catch((err) => logger.warn({ err }, 'lumi pending action indexes skipped'))
+  const lumiCommands = new AutomationCommands(
+    lumiTasks,
+    lumiAutomationRepo,
+    () => new Date(),
+    undefined,
+    lumiPendingActions,
+  )
 
   // Iniciativas de Lumi (Fase 4): reglas sobre stock, pedidos y rutinas. Sin Qwen. Scheduler propio con lock.
   const initiativeRepo = new LumiInitiativeRepository(identityDb)
@@ -600,6 +612,8 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     automationSink,
     () => new Date(),
     (err, userId) => logger.error({ err, userId }, 'Lumi initiative run failed for user'),
+    // Cada usuario solo recibe iniciativas de los datos que puede ver (permisos efectivos, con caché).
+    (userId) => authorization.resolveEffectivePermissions(userId),
   )
   const initiatives = new InitiativeScheduler(
     initiativeEngine,

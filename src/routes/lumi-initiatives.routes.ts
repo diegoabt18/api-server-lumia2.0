@@ -21,6 +21,7 @@ export async function registerLumiInitiativeRoutes(api: FastifyInstance, ctx: Ap
   const initiatives = ctx.services.lumiInitiatives
   const base = '/admin/lumi/initiatives'
   const userIdOf = (request: unknown): string => (request as AuthenticatedRequest).auth.userId
+  const keysOf = (request: unknown) => (request as AuthenticatedRequest).permissionKeys ?? []
 
   const parse = <S extends z.ZodTypeAny>(schema: S, value: unknown): z.output<S> => {
     const parsed = schema.safeParse(value)
@@ -30,7 +31,7 @@ export async function registerLumiInitiativeRoutes(api: FastifyInstance, ctx: Ap
 
   api.get(base, { preHandler: g }, async (request) => {
     const query = parse(listInitiativesQuerySchema, request.query)
-    return { items: await initiatives.list(userIdOf(request), { state: query.state, limit: query.limit }) }
+    return { items: await initiatives.list(userIdOf(request), keysOf(request), { state: query.state, limit: query.limit }) }
   })
 
   api.get(`${base}/settings`, { preHandler: g }, async (request) => ({
@@ -46,6 +47,6 @@ export async function registerLumiInitiativeRoutes(api: FastifyInstance, ctx: Ap
   api.post(`${base}/:id/state`, { preHandler: g }, async (request) => {
     const { id } = parse(initiativeIdParamsSchema, request.params)
     const body = parse(changeInitiativeStateSchema, request.body)
-    return initiatives.changeState(userIdOf(request), id, body.state)
+    return initiatives.changeState(userIdOf(request), keysOf(request), id, body.state)
   })
 }

@@ -9,19 +9,17 @@ import {
   LumiAssistantClient,
   type LumiStreamEvent,
 } from '../modules/lumi/infrastructure/lumi-assistant.client.js'
-import {
-  type LumiMode,
-  type LumiRoute,
-  resolveLumiModes,
-  routeMessage,
-} from '../modules/lumi/services/lumi-intent-router.js'
-import { answerRecentOrders } from '../modules/lumi/services/lumi-orders-tool.js'
+import { type LumiMode, resolveLumiModes } from '../modules/lumi/services/lumi-intent-router.js'
+import { DEFAULT_AUTOMATION_TIMEZONE } from '../modules/lumi/automation/domain/schedule.js'
+import { capabilitiesFor, matchTool, runTool, type ToolMatch } from '../modules/lumi/tools/catalog.js'
+import { createLumiToolDeps } from '../modules/lumi/tools/tool-adapters.js'
 import {
   buildAssistRequest,
   lumiProductAssistSchema,
   sanitizeSuggestion,
 } from '../modules/lumi/services/lumi-product-assist.js'
 import {
+  LUMI_CONTEXT_MAX_CHARS,
   type LumiContextInput,
   summarizeAnalyticsContext,
   summarizeDashboardContext,
@@ -83,39 +81,60 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     }
   }
 
+  const keysOf = (request: unknown) => (request as AuthenticatedRequest).permissionKeys ?? []
+  const timezone = DEFAULT_AUTOMATION_TIMEZONE
+  const toolDeps = createLumiToolDeps({
+    orders: ctx.repos.orders,
+    products: ctx.repos.products,
+    notifications: ctx.repos.notifications,
+    initiatives: ctx.services.lumiInitiatives,
+  })
+
+  /** Herramienta del catálogo reconocida por reglas (consultas de datos reales, sin modelo). */
+  const findTool = (request: FastifyRequest, message: string): ToolMatch | null =>
+    matchTool(message, keysOf(request), { now: new Date(), timezone })
+
+  const executeTool = (request: FastifyRequest, match: ToolMatch) =>
+    runTool(match, {
+      userId: userIdOf(request),
+      permissionKeys: keysOf(request),
+      now: new Date(),
+      timezone,
+      deps: toolDeps,
+    })
+
+  const toolEvent = (match: ToolMatch, rows: number): LumiStreamEvent => ({
+    type: 'tool',
+    name: match.tool.name,
+    label: match.tool.label,
+    rows,
+    denied: match.denied,
+  })
+
   /**
-   * Pedidos recientes: herramienta de solo lectura. Usa el servicio de administración con el
-   * permiso del usuario y responde con texto determinista. No llama al modelo.
+   * Turno resuelto por una herramienta: la respuesta son los datos leídos, con texto determinista.
+   * No llama al modelo. El turno se guarda en el historial igual que uno del modelo.
    */
-  async function* ordersRecentStream(
+  async function* toolTurnStream(
     request: FastifyRequest,
-    limit: number,
+    match: ToolMatch,
     message: string,
     conversationId: string | undefined,
   ): AsyncGenerator<LumiStreamEvent> {
-    const keys = (request as AuthenticatedRequest).permissionKeys
-    const answer = await answerRecentOrders(
-      hasPermission(keys, PERMISSION_REGISTRY.ORDERS_READ),
-      limit,
-      async (n) => {
-        const page = await ctx.services.adminOrders.list({ limit: n, page: 1 })
-        return page.items.map((o) => ({
-          orderNumber: o.orderNumber ?? null,
-          createdAt: typeof o.createdAt === 'string' ? o.createdAt : null,
-          status: o.status ?? null,
-          paymentStatus: o.paymentStatus ?? null,
-          total: typeof o.total === 'number' ? o.total : null,
-        }))
-      },
-    )
-    const saved = await requireClient().recordExchange(
-      userIdOf(request),
-      message,
-      answer,
-      conversationId,
-    )
-    yield { type: 'token', text: answer }
+    const result = await executeTool(request, match)
+    yield toolEvent(match, result.rows)
+    const saved = await requireClient().recordExchange(userIdOf(request), message, result.text, conversationId)
+    yield { type: 'token', text: result.text }
     yield { type: 'done', conversationId: saved.conversationId }
+  }
+
+  /**
+   * "¿Por qué bajaron las ventas esta semana?": la herramienta lee los datos y el modelo los explica.
+   * Los datos viajan como contexto (rotulado como datos), nunca como instrucciones.
+   */
+  const toolDataContext = (match: ToolMatch, text: string): string => {
+    const body = `Datos consultados por el sistema (${match.tool.label.toLowerCase()}):\n${text}`
+    return body.length > LUMI_CONTEXT_MAX_CHARS ? `${body.slice(0, LUMI_CONTEXT_MAX_CHARS - 1)}…` : body
   }
 
   /**
@@ -168,8 +187,9 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       reasoningMode?: LumiMode
       webMode?: LumiMode
     },
-  ): Promise<{ context: string | undefined; webSearch: boolean; reasoning: boolean }> => {
+  ): Promise<{ context: string | undefined; webSearch: boolean; reasoning: boolean; capabilities: string }> => {
     const keys = (request as AuthenticatedRequest).permissionKeys
+    const capabilities = capabilitiesFor(keys, new Date(), timezone)
     const modes = resolveLumiModes({
       message: body.message,
       reasoningMode:
@@ -178,11 +198,12 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       canWeb: hasPermission(keys, PERMISSION_REGISTRY.LUMI_WEB),
     })
     if (modes.webDenied) throw AppError.forbidden('Sin permiso para la búsqueda web de Lumi')
-    if (modes.webSearch) return { context: undefined, webSearch: true, reasoning: modes.reasoning }
+    if (modes.webSearch) return { context: undefined, webSearch: true, reasoning: modes.reasoning, capabilities }
     return {
       context: await buildContext(request, body.context),
       webSearch: false,
       reasoning: modes.reasoning,
+      capabilities,
     }
   }
 
@@ -199,34 +220,34 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       }
     }
     // Mismas reglas que el streaming: lo que resuelve una herramienta del backend no usa el modelo.
-    const route = routeMessage(parsed.data.message)
-    if (route.kind === 'orders_recent') {
+    const match = findTool(request, parsed.data.message)
+    if (match && (!match.explain || match.denied)) {
       let response = ''
       let conversationId = parsed.data.conversationId ?? ''
-      for await (const event of ordersRecentStream(
-        request,
-        route.limit,
-        parsed.data.message,
-        parsed.data.conversationId,
-      )) {
+      let tool: { name: string; rows: number } | null = null
+      for await (const event of toolTurnStream(request, match, parsed.data.message, parsed.data.conversationId)) {
+        if (event.type === 'tool') tool = { name: event.name, rows: event.rows }
         if (event.type === 'token') response += event.text
         if (event.type === 'done') conversationId = event.conversationId
       }
-      return { conversationId, model: 'lumi-tools', response }
+      return { conversationId, model: 'lumi-tools', response, tool }
     }
     const turn = await resolveTurn(request, parsed.data)
+    // Petición de explicación sobre datos: la herramienta los lee y sustituyen al contexto de pantalla.
+    const toolResult = match ? await executeTool(request, match) : null
     const result = await requireClient().chat(
       userIdOf(request),
       parsed.data.message,
       parsed.data.conversationId,
-      turn.context,
-      turn.webSearch,
-      { think: turn.reasoning, maxTokens: parsed.data.maxTokens },
+      match && toolResult ? toolDataContext(match, toolResult.text) : turn.context,
+      match ? false : turn.webSearch,
+      { think: turn.reasoning, maxTokens: parsed.data.maxTokens, capabilities: turn.capabilities },
     )
     return {
       conversationId: result.conversationId,
       model: result.model,
       response: result.response,
+      tool: match && toolResult ? { name: match.tool.name, rows: toolResult.rows } : null,
     }
   })
 
@@ -266,24 +287,25 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       }
 
       const controller = new AbortController()
-      // Las reglas resuelven lo claro sin modelo. La búsqueda web no cambia esto: los pedidos son
-      // datos de la tienda, no una consulta a internet.
-      const route: LumiRoute = routeMessage(parsed.data.message)
-      const turn =
-        route.kind === 'model'
-          ? await resolveTurn(request, parsed.data)
-          : { context: undefined, webSearch: false, reasoning: false }
+      // Las reglas resuelven lo claro sin modelo. La búsqueda web no cambia esto: los pedidos o las
+      // ventas son datos de la tienda, no una consulta a internet.
+      const match = findTool(request, parsed.data.message)
+      const toolOnly = match !== null && (!match.explain || match.denied)
+      const turn = toolOnly ? null : await resolveTurn(request, parsed.data)
+      // Explicación sobre datos: primero la herramienta (datos reales), después el modelo los explica.
+      const toolResult = match && turn ? await executeTool(request, match) : null
+      const preface: LumiStreamEvent[] = match && toolResult ? [toolEvent(match, toolResult.rows)] : []
       const events = (
-        route.kind === 'orders_recent'
-          ? ordersRecentStream(request, route.limit, parsed.data.message, parsed.data.conversationId)
+        toolOnly || !turn
+          ? toolTurnStream(request, match!, parsed.data.message, parsed.data.conversationId)
           : requireClient().chatStream(
               userIdOf(request),
               parsed.data.message,
               parsed.data.conversationId,
               controller.signal,
-              turn.context,
-              turn.webSearch,
-              { think: turn.reasoning, maxTokens: parsed.data.maxTokens },
+              match && toolResult ? toolDataContext(match, toolResult.text) : turn.context,
+              match ? false : turn.webSearch,
+              { think: turn.reasoning, maxTokens: parsed.data.maxTokens, capabilities: turn.capabilities },
             )
       )[Symbol.asyncIterator]()
 
@@ -305,10 +327,11 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
         raw.write(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`)
       }
 
-      // Informa qué modo se usó, para que el chat lo muestre junto a la respuesta.
-      if (route.kind === 'model') {
-        write({ type: 'mode', webSearch: turn.webSearch, reasoning: turn.reasoning })
+      // Informa qué modo se usó y qué datos se consultaron, para que el chat lo muestre.
+      if (turn) {
+        write({ type: 'mode', webSearch: match ? false : turn.webSearch, reasoning: turn.reasoning })
       }
+      for (const event of preface) write(event)
 
       try {
         while (!current.done) {

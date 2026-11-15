@@ -46,9 +46,15 @@ function assertDisposableMongo(uri: string) {
 /** Ollama simulado: /api/tags, /api/chat (stream NDJSON o JSON). Cuenta las llamadas al modelo. */
 function startFakeOllama(): Promise<void> {
   let calls = 0
+  // Último cuerpo recibido en /api/chat: permite comprobar qué prompt llegó al modelo.
+  let last: unknown = null
   ollama = http.createServer((req, res) => {
     if (req.url === '/__calls') {
       res.end(JSON.stringify({ calls }))
+      return
+    }
+    if (req.url === '/__last') {
+      res.end(JSON.stringify({ last }))
       return
     }
     if (req.url === '/api/tags') {
@@ -61,6 +67,7 @@ function startFakeOllama(): Promise<void> {
       req.on('end', () => {
         calls += 1
         const payload = JSON.parse(body) as { stream?: boolean }
+        last = payload
         const done = { done: true, prompt_eval_count: 11, eval_count: 7 }
         if (payload.stream) {
           res.setHeader('Content-Type', 'application/x-ndjson')
@@ -125,6 +132,7 @@ async function seed(passwords: Record<string, string>) {
     const roles = {
       super: new ObjectId(),
       limited: new ObjectId(),
+      catalog: new ObjectId(),
     }
     await identity.collection('roles').insertMany([
       { _id: roles.super, key: 'e2e_super', name: 'E2E Super', permissionKeys: ['*'], createdAt: now, version: 1 },
@@ -136,12 +144,22 @@ async function seed(passwords: Record<string, string>) {
         createdAt: now,
         version: 1,
       },
+      {
+        // Lumi con catálogo, pero sin pedidos ni analítica: comprueba el filtrado por permisos.
+        _id: roles.catalog,
+        key: 'e2e_catalog',
+        name: 'E2E Catálogo',
+        permissionKeys: ['admin.access', 'lumi.use', 'products.read'],
+        createdAt: now,
+        version: 1,
+      },
     ])
     const users: Record<string, ObjectId> = {}
     for (const [key, role] of [
       ['admin', roles.super],
       ['limited', roles.limited],
       ['locked', roles.limited],
+      ['catalog', roles.catalog],
     ] as const) {
       const _id = new ObjectId()
       users[key] = _id
@@ -180,7 +198,7 @@ export default async function setup(project: TestProject) {
 
   // Valores de prueba generados en cada ejecución: nunca se imprimen ni se guardan.
   const secret = () => randomBytes(24).toString('base64url')
-  const passwords = { admin: secret(), limited: secret(), locked: secret() }
+  const passwords = { admin: secret(), limited: secret(), locked: secret(), catalog: secret() }
   const iaKey = secret()
   const edgeSecret = secret() + secret()
   const seeded = await seed(passwords)
@@ -273,7 +291,7 @@ declare module 'vitest' {
     e2e: {
       urls: { admin: string; server: string; ia: string; ollama: string }
       mongoUri: string
-      passwords: { admin: string; limited: string; locked: string }
+      passwords: { admin: string; limited: string; locked: string; catalog: string }
       iaKey: string
       edgeSecret: string
       roleIds: { super: string; limited: string }

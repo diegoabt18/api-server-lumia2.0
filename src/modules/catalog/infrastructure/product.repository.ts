@@ -10,6 +10,25 @@ import {
   type InventoryItemEntity,
 } from '../domain/catalog.entity.js'
 
+const ACCENT_CLASSES: Record<string, string> = {
+  a: '[aáàäâ]',
+  e: '[eéèëê]',
+  i: '[iíìïî]',
+  o: '[oóòöô]',
+  u: '[uúùüû]',
+  n: '[nñ]',
+}
+
+const SEARCH_STOPWORDS = new Set(['de', 'del', 'la', 'el', 'los', 'las', 'un', 'una', 'con', 'para', 'por', 'y'])
+
+/** Patrón ya escapado → coincide con y sin tildes ("ambar" encuentra "Ámbar"). */
+function accentInsensitive(escaped: string): string {
+  return escaped
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[aeioun]/gi, (ch) => ACCENT_CLASSES[ch.toLowerCase()] ?? ch)
+}
+
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -376,6 +395,58 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
       ])
       .toArray()
     return rows.map((row) => ({ slug: String(row._id), name: String(row.name ?? row._id), available: Number(row.available) }))
+  }
+
+  /**
+   * Búsqueda por nombre para el asistente Lumi: disponibilidad (cantidad menos reservado) y rango de
+   * precios de las variantes. Coincidencia por fragmento del nombre o del slug, acotada a `limit`.
+   */
+  async searchAvailability(
+    term: string,
+    limit: number,
+  ): Promise<Array<{ slug: string; name: string; status: string; available: number; minPrice: number | null; maxPrice: number | null }>> {
+    // Cada palabra significativa debe aparecer (en cualquier orden): "vela ambar" encuentra
+    // "Vela Vainilla Ámbar". Sin palabras útiles no se busca nada (nunca se lista todo el catálogo).
+    const words = term
+      .trim()
+      .slice(0, 80)
+      .split(/\s+/)
+      .filter((w) => w.length >= 2 && !SEARCH_STOPWORDS.has(w.toLowerCase()))
+      .slice(0, 5)
+    if (words.length === 0) return []
+    const clauses = words.map((w) => {
+      const pattern = accentInsensitive(escapeRegex(w))
+      return { $or: [{ name: { $regex: pattern, $options: 'i' } }, { slug: { $regex: pattern, $options: 'i' } }] }
+    })
+    const rows = await this.collection
+      .aggregate<{ _id: string; name: string; status: string; available: number; minPrice: number | null; maxPrice: number | null }>([
+        { $match: { $and: clauses } },
+        { $sort: { name: 1 } },
+        { $limit: limit },
+        { $lookup: { from: 'variants', localField: 'slug', foreignField: 'product_slug', as: 'variants' } },
+        { $unwind: { path: '$variants', preserveNullAndEmptyArrays: true } },
+        { $lookup: { from: 'inventory_items', localField: 'variants.sku', foreignField: 'sku', as: 'inv' } },
+        {
+          $group: {
+            _id: '$slug',
+            name: { $first: '$name' },
+            status: { $first: '$status' },
+            available: { $sum: { $subtract: [{ $sum: '$inv.quantity' }, { $sum: '$inv.reserved' }] } },
+            minPrice: { $min: '$variants.price' },
+            maxPrice: { $max: '$variants.price' },
+          },
+        },
+        { $sort: { name: 1 } },
+      ])
+      .toArray()
+    return rows.map((row) => ({
+      slug: String(row._id),
+      name: String(row.name ?? row._id),
+      status: String(row.status ?? 'active'),
+      available: Number(row.available ?? 0),
+      minPrice: typeof row.minPrice === 'number' ? row.minPrice : null,
+      maxPrice: typeof row.maxPrice === 'number' ? row.maxPrice : null,
+    }))
   }
 
   async findEmptyCategories(limit: number) {

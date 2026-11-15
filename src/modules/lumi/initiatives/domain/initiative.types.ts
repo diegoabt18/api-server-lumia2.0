@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { PERMISSION_REGISTRY, hasPermission, type PermissionId } from '../../../../common/permissions/registry.js'
 
 /**
  * Iniciativas de Lumi (Fase 4): propuestas de atención que el motor detecta por reglas. Lumi no ejecuta
@@ -7,6 +8,24 @@ import { z } from 'zod'
 
 export const INITIATIVE_KINDS = ['stock', 'order_attention', 'routine_failed'] as const
 export type InitiativeKind = (typeof INITIATIVE_KINDS)[number]
+
+/**
+ * Permiso que exige ver cada tipo de iniciativa. Las de stock y pedidos leen datos de la tienda: solo
+ * se generan y muestran a quien puede ver productos o pedidos. Las rutinas fallidas son del propio usuario.
+ */
+export const INITIATIVE_KIND_PERMISSION: Record<InitiativeKind, PermissionId | null> = {
+  stock: PERMISSION_REGISTRY.PRODUCTS_READ,
+  order_attention: PERMISSION_REGISTRY.ORDERS_READ,
+  routine_failed: null,
+}
+
+/** Tipos de iniciativa que puede ver un usuario con estas claves efectivas. */
+export function allowedInitiativeKinds(keys: readonly PermissionId[]): InitiativeKind[] {
+  return INITIATIVE_KINDS.filter((kind) => {
+    const required = INITIATIVE_KIND_PERMISSION[kind]
+    return required === null || hasPermission([...keys], required)
+  })
+}
 
 export const INITIATIVE_STATES = [
   'nueva',

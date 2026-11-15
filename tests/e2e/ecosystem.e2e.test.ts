@@ -94,6 +94,40 @@ async function auditEventually(client: Client, query: string, ready: (items: any
   return items
 }
 
+/** Último cuerpo que recibió el Ollama simulado (prompt completo enviado al modelo). */
+async function ollamaLast(): Promise<{ messages: Array<{ role: string; content: string }> } | null> {
+  return ((await (await fetch(`${env.urls.ollama}/__last`)).json()) as { last: any }).last
+}
+
+/** Turno de chat por el stream del BFF, como el navegador. Devuelve los eventos SSE ya parseados. */
+async function chatStream(client: Client, message: string): Promise<Array<{ event: string; data: any }>> {
+  const res = await fetch(`${ADMIN}/api/admin/lumi/chat/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+      Origin: ADMIN,
+      'User-Agent': client.userAgent,
+      'Accept-Language': 'es-CO',
+      Cookie: client.cookieHeader(),
+    },
+    body: JSON.stringify({ message }),
+  })
+  expect(res.status, await res.clone().text()).toBe(200)
+  const text = await res.text()
+  return text
+    .split('\n\n')
+    .filter((b) => b.trim())
+    .map((block) => {
+      const event = /^event: (.+)$/m.exec(block)?.[1] ?? ''
+      const data = /^data: (.+)$/m.exec(block)?.[1] ?? 'null'
+      return { event, data: JSON.parse(data) }
+    })
+}
+
+const answerOf = (events: Array<{ event: string; data: any }>) =>
+  events.filter((e) => e.event === 'token').map((e) => e.data.text).join('')
+
 async function ollamaCalls(): Promise<number> {
   return ((await (await fetch(`${env.urls.ollama}/__calls`)).json()) as { calls: number }).calls
 }
@@ -410,6 +444,134 @@ describe('6. Asistente Lumi (BFF → Server → local-ai-assistant → modelo)',
       headers: { 'X-API-Key': env.iaKey, 'X-User-Ref': env.userIds.limited },
     })
     expect(((await other.json()) as { items?: unknown[] }).items ?? []).toHaveLength(0)
+  })
+})
+
+describe('6b. Lumi fase 3: herramientas con datos reales y reglas seguras', () => {
+  /** Inicio del día de hoy en Bogotá (UTC-5, sin horario de verano). */
+  const bogotaDayStart = () => {
+    const now = new Date()
+    const local = new Date(now.getTime() - 5 * 3_600_000)
+    return new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate(), 5, 0, 0))
+  }
+
+  beforeAll(async () => {
+    // Pedidos de prueba con importes reconocibles, creados hoy (los de la sección 4 también cuentan).
+    const now = new Date()
+    await mongo.db('sales_db').collection('orders').insertMany([
+      {
+        _id: new ObjectId(), orderNumber: 'ORD-20991231-000000-E2E0F301', customerReference: 'ORD-E2E0F301',
+        status: 'paid', paymentStatus: 'paid', total: 123457, createdAt: now, updatedAt: now,
+        items: [{ productSlug: 'e2e-fase3', productName: 'Vela Fase Tres', quantity: 3, subtotal: 123457 }],
+        customerName: 'Cliente Privado Fase3', email: 'privado-fase3@e2e.test', phone: '3110000000',
+      },
+      {
+        _id: new ObjectId(), orderNumber: 'ORD-20991231-000001-E2E0F302', customerReference: 'ORD-E2E0F302',
+        status: 'pending', paymentStatus: 'pending', total: 5000, createdAt: now, updatedAt: now, items: [],
+      },
+    ])
+  })
+
+  it('"¿Cómo va el pedido …?" responde con datos reales, sin modelo y sin datos del cliente', async () => {
+    const before = await ollamaCalls()
+    const events = await chatStream(admin, '¿Cómo va el pedido ORD-E2E0F301?')
+    const tool = events.find((e) => e.event === 'tool')
+    expect(tool?.data).toMatchObject({ name: 'orders.lookup', rows: 1, denied: false })
+    const answer = answerOf(events)
+    expect(answer).toContain('Pedido ORD-E2E0F301')
+    expect(answer).toContain('- Estado: pagado, por despachar')
+    expect(answer).toContain('- Total: $123.457')
+    expect(answer).not.toMatch(/Cliente Privado|privado-fase3|3110000000/)
+    expect(events.at(-1)?.event).toBe('done')
+    expect(await ollamaCalls()).toBe(before)
+  })
+
+  it('"¿Cuántos pedidos hubo hoy?" devuelve una cifra que coincide con la base', async () => {
+    const orders = mongo.db('sales_db').collection('orders')
+    const expected = await orders.countDocuments({ createdAt: { $gte: bogotaDayStart() } })
+    const before = await ollamaCalls()
+    const answer = answerOf(await chatStream(admin, '¿Cuántos pedidos hubo hoy?'))
+    expect(answer).toMatch(new RegExp(`^Pedidos creados hoy: ${expected}\\.`))
+    expect(await ollamaCalls()).toBe(before)
+  })
+
+  it('"¿Cuánto vendimos hoy?" suma solo pedidos vendidos y coincide con la base', async () => {
+    const orders = mongo.db('sales_db').collection('orders')
+    const sold = await orders
+      .find({ createdAt: { $gte: bogotaDayStart() }, status: { $in: ['paid', 'shipped', 'delivered'] } })
+      .toArray()
+    const revenue = sold.reduce((sum, o) => sum + (Number(o.total) || 0), 0)
+    const answer = answerOf(await chatStream(admin, '¿Cuánto vendimos hoy?'))
+    expect(answer).toContain(`Ventas de hoy: $${Math.round(revenue).toLocaleString('es-CO')} en ${sold.length}`)
+  })
+
+  it('sin el permiso de analítica no se leen ventas y se avisa', async () => {
+    const catalog = await loginBff('catalog@e2e.test', env.passwords.catalog)
+    const events = await chatStream(catalog, '¿Cuánto vendimos hoy?')
+    expect(events.find((e) => e.event === 'tool')?.data).toMatchObject({ name: 'sales.summary', denied: true, rows: 0 })
+    expect(answerOf(events)).toBe('No tienes permiso para consultar ventas ni analítica.')
+  })
+
+  it('el modelo recibe la fecha, las capacidades según los permisos y la regla de no confirmar acciones', async () => {
+    const catalog = await loginBff('catalog@e2e.test', env.passwords.catalog)
+    const before = await ollamaCalls()
+    await chatStream(catalog, 'Hola, ¿qué puedes hacer por mí?')
+    expect(await ollamaCalls()).toBe(before + 1)
+    const system = (await ollamaLast())!.messages[0]!
+    expect(system.role).toBe('system')
+    expect(system.content).toContain('nunca digas que creaste, programaste')
+    expect(system.content).toMatch(/Hoy es [^,\s]+, \d{1,2} de \S+ de \d{4}/)
+    expect(system.content).toContain('Productos sin stock')
+    expect(system.content).not.toContain('Ventas, pedidos vendidos')
+    expect(system.content).not.toContain('estado de un pedido')
+  })
+
+  it('"¿Por qué …las ventas…?" consulta los datos y el modelo los recibe como contexto', async () => {
+    const before = await ollamaCalls()
+    const events = await chatStream(admin, '¿Por qué bajaron las ventas esta semana?')
+    expect(events.find((e) => e.event === 'tool')?.data).toMatchObject({ name: 'sales.summary', denied: false })
+    expect(await ollamaCalls()).toBe(before + 1)
+    const messages = (await ollamaLast())!.messages
+    expect(messages.some((m) => m.role === 'system' && m.content.includes('Datos consultados por el sistema'))).toBe(true)
+  })
+
+  it('"Cancela la revisión del pedido …" no borra la rutina; borrar exige confirmación', async () => {
+    const tasks = mongo.db('identity_db').collection('lumi_tasks')
+    const create = await admin.post('/api/admin/lumi/chat', {
+      message: 'Todos los días a las 8 de la mañana revisa mis iniciativas pendientes',
+    })
+    expect(create.status, JSON.stringify(create.json)).toBe(200)
+    const routine = await tasks.findOne({ userId: env.userIds.admin, kind: 'initiative_review' })
+    expect(routine, 'la rutina existe').toBeTruthy()
+
+    await admin.post('/api/admin/lumi/chat', { message: 'Cancela la revisión del pedido 1234' })
+    expect(await tasks.countDocuments({ _id: routine!._id })).toBe(1)
+
+    const ask = await admin.post('/api/admin/lumi/chat', { message: 'Elimina la revisión diaria' })
+    expect(ask.json.response).toContain('¿Elimino «Revisar iniciativas pendientes»')
+    expect(await tasks.countDocuments({ _id: routine!._id })).toBe(1)
+
+    const done = await admin.post('/api/admin/lumi/chat', { message: 'Sí, elimínala' })
+    expect(done.json.response).toBe('Eliminé «Revisar iniciativas pendientes».')
+    expect(await tasks.countDocuments({ _id: routine!._id })).toBe(0)
+  })
+
+  it('las iniciativas de pedidos no se muestran a quien no puede ver pedidos', async () => {
+    const coll = mongo.db('identity_db').collection('lumi_initiatives')
+    const now = new Date()
+    const common = { userId: env.userIds.catalog, state: 'nueva', openCount: 1, firstSeenAt: now, lastSeenAt: now, stateChangedAt: now, resolvedAt: null, createdAt: now, updatedAt: now }
+    await coll.insertMany([
+      { ...common, kind: 'stock', subjectKey: 'e2e-a', dedupKey: 'stock:e2e-a', title: 'Producto sin stock', detail: 'E2E sin stock', priority: 3 },
+      { ...common, kind: 'order_attention', subjectKey: 'e2e-o', dedupKey: 'order_attention:e2e-o', title: 'Pedido pagado sin despachar', detail: 'E2E pedido', priority: 3 },
+    ])
+    const catalog = await loginBff('catalog@e2e.test', env.passwords.catalog)
+    const list = await catalog.get('/api/admin/lumi/initiatives')
+    expect(list.status, JSON.stringify(list.json)).toBe(200)
+    const kinds = (list.json.items as Array<{ kind: string }>).map((i) => i.kind)
+    expect(kinds).toEqual(['stock'])
+    const answer = answerOf(await chatStream(catalog, '¿Qué iniciativas tengo pendientes?'))
+    expect(answer).toContain('E2E sin stock')
+    expect(answer).not.toContain('E2E pedido')
   })
 })
 

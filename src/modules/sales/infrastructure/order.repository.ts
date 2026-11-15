@@ -337,6 +337,36 @@ export class OrderRepository extends BaseRepository<OrderDocument> {
     return docs.map((d) => toEntity(d))
   }
 
+  /**
+   * Búsqueda por referencia para el asistente Lumi: solo número de pedido o referencia del cliente
+   * (nunca por nombre, correo o teléfono). Más reciente primero.
+   */
+  async findByReference(term: string, limit: number): Promise<OrderEntity[]> {
+    const upper = term.trim().toUpperCase().slice(0, 40)
+    if (upper.length < 4) return []
+    const escaped = escapeRegex(upper)
+    const or: Record<string, unknown>[] = [
+      { orderNumber: { $regex: `^${escaped}` } },
+      { customerReference: { $regex: `^${escaped}` } },
+    ]
+    if (/^ORD-[0-9A-F]{8}$/.test(upper)) or.unshift({ customerReference: upper })
+    else if (/^[0-9A-F]{8}$/.test(upper)) or.unshift({ customerReference: `ORD-${upper}` })
+    const docs = await this.findMany({ $or: or } as never, { limit, sort: { createdAt: -1 } })
+    return docs.map((d) => toEntity(d))
+  }
+
+  /** Pedidos por estado, opcionalmente dentro de un rango de creación (asistente Lumi). */
+  async countByStatus(range?: { from: Date; to: Date }): Promise<Record<string, number>> {
+    const match = range ? { createdAt: { $gte: range.from, $lt: range.to } } : {}
+    const rows = await this.collection
+      .aggregate<{ _id: string | null; count: number }>([
+        { $match: match },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ])
+      .toArray()
+    return Object.fromEntries(rows.map((r) => [String(r._id ?? 'unknown'), r.count]))
+  }
+
   async countAllAdmin(search?: string, channel?: string): Promise<number> {
     return this.count(this.buildAdminSearchFilter(search, channel) as never)
   }

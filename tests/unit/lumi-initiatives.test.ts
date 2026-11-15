@@ -9,6 +9,7 @@ import {
 import { shouldNotify } from '../../src/modules/lumi/initiatives/domain/initiative.rules.js'
 import {
   canTransition,
+  type InitiativeKind,
   type InitiativeLevel,
   type InitiativeState,
   type LumiInitiative,
@@ -21,6 +22,8 @@ import {
 } from '../../src/modules/lumi/initiatives/services/initiative-engine.js'
 import { InitiativeScheduler } from '../../src/modules/lumi/initiatives/services/initiative-scheduler.js'
 import type { AutomationLock } from '../../src/modules/lumi/automation/domain/automation.store.js'
+import { LumiInitiativeService } from '../../src/modules/lumi/initiatives/services/initiative.service.js'
+import { PERMISSION_REGISTRY as P, type PermissionId } from '../../src/common/permissions/registry.js'
 
 const NOW = new Date('2026-06-10T15:00:00.000Z')
 
@@ -109,8 +112,18 @@ class MemoryInitiatives implements InitiativeStore {
     return this.items.find((i) => i.id === id && i.userId === userId) ?? null
   }
 
-  async listForUser(userId: string, options: { state?: InitiativeState; limit: number }) {
-    return this.items.filter((i) => i.userId === userId && (!options.state || i.state === options.state)).slice(0, options.limit)
+  async listForUser(
+    userId: string,
+    options: { state?: InitiativeState; limit: number; kinds?: readonly InitiativeKind[] },
+  ) {
+    return this.items
+      .filter(
+        (i) =>
+          i.userId === userId &&
+          (!options.state || i.state === options.state) &&
+          (!options.kinds || options.kinds.includes(i.kind)),
+      )
+      .slice(0, options.limit)
   }
 
   async update(id: string, patch: InitiativePatch) {
@@ -136,17 +149,18 @@ function fakeSources() {
   const state = {
     global: [] as InitiativeCandidate[],
     personal: new Map<string, InitiativeCandidate[]>(),
+    truncated: [] as InitiativeKind[],
     failGlobal: false,
     failUsers: new Set<string>(),
   }
   const sources: InitiativeSources = {
     async globalCandidates() {
       if (state.failGlobal) throw new Error('catalog unavailable')
-      return [...state.global]
+      return { candidates: [...state.global], truncated: [...state.truncated] }
     },
     async userCandidates(userId) {
       if (state.failUsers.has(userId)) throw new Error('boom')
-      return state.personal.get(userId) ?? []
+      return { candidates: state.personal.get(userId) ?? [], truncated: [] }
     },
   }
   return { state, sources }
@@ -160,7 +174,7 @@ const outOfStock = (slug: string, priority: 2 | 3 = 3): InitiativeCandidate => (
   priority,
 })
 
-function setup(level: InitiativeLevel = 'equilibrada') {
+function setup(level: InitiativeLevel = 'equilibrada', permissions?: Record<string, PermissionId[]>) {
   const store = new MemoryInitiatives()
   store.reviewUsers = ['u1']
   store.levels.set('u1', level)
@@ -173,7 +187,14 @@ function setup(level: InitiativeLevel = 'equilibrada') {
   }
   const errors: Array<{ userId?: string }> = []
   let clock = NOW
-  const engine = new InitiativeEngine(store, sources, notifier, () => clock, (_err, userId) => errors.push({ userId }))
+  const engine = new InitiativeEngine(
+    store,
+    sources,
+    notifier,
+    () => clock,
+    (_err, userId) => errors.push({ userId }),
+    permissions ? async (userId) => permissions[userId] ?? [] : null,
+  )
   return {
     store,
     state,
@@ -300,6 +321,101 @@ describe('motor de iniciativas', () => {
   })
 })
 
+const staleOrder = (id: string): InitiativeCandidate => ({
+  kind: 'order_attention',
+  subjectKey: id,
+  title: 'Pedido pagado sin despachar',
+  detail: `El pedido ${id} lleva 7 días pagado y sin despachar.`,
+  priority: 3,
+})
+
+describe('iniciativas y permisos (A1)', () => {
+  it('cada usuario solo recibe los tipos de datos que puede ver', async () => {
+    const t = setup('proactiva', {
+      catalog: [P.LUMI_USE, P.PRODUCTS_READ],
+      sales: [P.LUMI_USE, P.ORDERS_READ],
+      none: [P.LUMI_USE],
+    })
+    t.store.reviewUsers = ['catalog', 'sales', 'none']
+    t.state.global = [outOfStock('a', 3), staleOrder('o1')]
+    await t.engine.runOnce()
+    const kindsOf = (u: string) => t.store.items.filter((i) => i.userId === u).map((i) => i.kind)
+    expect(kindsOf('catalog')).toEqual(['stock'])
+    expect(kindsOf('sales')).toEqual(['order_attention'])
+    expect(kindsOf('none')).toEqual([])
+    expect(t.sent.map((n) => n.userId).sort()).toEqual(['catalog', 'sales'])
+  })
+
+  it('sin lumi.use no se generan iniciativas aunque la rutina siga activa', async () => {
+    const t = setup('proactiva', { u1: [P.PRODUCTS_READ, P.ORDERS_READ] })
+    t.state.global = [outOfStock('a', 3)]
+    await t.engine.runOnce()
+    expect(t.store.items).toHaveLength(0)
+    expect(t.sent).toHaveLength(0)
+  })
+
+  it('el comodín da acceso a todos los tipos', async () => {
+    const t = setup('proactiva', { u1: ['*' as PermissionId] })
+    t.state.global = [outOfStock('a', 3), staleOrder('o1')]
+    await t.engine.runOnce()
+    expect(t.store.items).toHaveLength(2)
+  })
+
+  it('perder el permiso no marca como completadas las iniciativas existentes', async () => {
+    const perms: Record<string, PermissionId[]> = { u1: [P.LUMI_USE, P.ORDERS_READ] }
+    const t = setup('proactiva', perms)
+    t.state.global = [staleOrder('o1')]
+    await t.engine.runOnce()
+    perms.u1 = [P.LUMI_USE]
+    await t.engine.runOnce()
+    expect(t.store.items[0]!.state).toBe('nueva')
+  })
+
+  it('el listado y los cambios de estado ocultan los tipos sin permiso', async () => {
+    const t = setup('proactiva')
+    t.state.global = [outOfStock('a', 3), staleOrder('o1')]
+    await t.engine.runOnce()
+    const service = new LumiInitiativeService(t.store, () => NOW)
+    const visible = await service.list('u1', [P.LUMI_USE, P.PRODUCTS_READ], { limit: 50 })
+    expect(visible.map((i) => i.kind)).toEqual(['stock'])
+    const order = t.store.items.find((i) => i.kind === 'order_attention')!
+    await expect(service.changeState('u1', [P.LUMI_USE, P.PRODUCTS_READ], order.id, 'descartada')).rejects.toThrow(
+      'Iniciativa no encontrada',
+    )
+    const updated = await service.changeState('u1', [P.LUMI_USE, P.ORDERS_READ], order.id, 'descartada')
+    expect(updated.state).toBe('descartada')
+  })
+})
+
+describe('lecturas truncadas (A5)', () => {
+  it('un tipo truncado no completa las iniciativas que no aparecieron', async () => {
+    const t = setup('proactiva')
+    t.state.global = [outOfStock('a', 3), outOfStock('b', 3), staleOrder('o1')]
+    await t.engine.runOnce()
+    // Siguiente pasada: la lectura de stock llegó al límite y solo trae "a"; la de pedidos está completa.
+    t.state.global = [outOfStock('a', 3)]
+    t.state.truncated = ['stock']
+    const summary = await t.engine.runOnce()
+    const byKey = Object.fromEntries(t.store.items.map((i) => [i.subjectKey, i.state]))
+    expect(byKey).toEqual({ a: 'nueva', b: 'nueva', o1: 'completada' })
+    expect(summary.completed).toBe(1)
+  })
+
+  it('cuando la lectura vuelve a estar completa, lo resuelto se completa sin reabrir en bucle', async () => {
+    const t = setup('proactiva')
+    t.state.global = [outOfStock('a', 3), outOfStock('b', 3)]
+    await t.engine.runOnce()
+    t.state.global = [outOfStock('a', 3)]
+    t.state.truncated = ['stock']
+    await t.engine.runOnce()
+    t.state.truncated = []
+    await t.engine.runOnce()
+    const b = t.store.items.find((i) => i.subjectKey === 'b')!
+    expect(b.state).toBe('completada')
+    expect(b.openCount).toBe(1)
+  })
+})
+
 describe('scheduler de iniciativas', () => {
   class FixedLock implements AutomationLock {
     held = false
@@ -327,5 +443,26 @@ describe('scheduler de iniciativas', () => {
     expect(await scheduler.tick()).toBe(true)
     expect(t.store.items).toHaveLength(1)
     expect(lock.held).toBe(false)
+  })
+})
+
+describe('fuentes de iniciativas (A5)', () => {
+  it('marca como truncado el tipo cuya lectura llega al límite', async () => {
+    const { RepositoryInitiativeSources, INITIATIVE_THRESHOLDS } = await import(
+      '../../src/modules/lumi/initiatives/infrastructure/initiative-sources.js'
+    )
+    const thresholds = { ...INITIATIVE_THRESHOLDS, scanLimit: 2, executionsPerUser: 2 }
+    const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ slug: `p${i}`, name: `P${i}`, available: 0 }))
+    let stockRows = rows(2)
+    const sources = new RepositoryInitiativeSources(
+      { findStockAlerts: async () => stockRows } as never,
+      { findPaidBefore: async () => [] } as never,
+      { listExecutionsForUser: async () => [{}, {}].map(() => ({ taskId: 't', status: 'succeeded', finishedAt: NOW })) } as never,
+      thresholds,
+    )
+    expect((await sources.globalCandidates(NOW)).truncated).toEqual(['stock'])
+    stockRows = rows(1)
+    expect((await sources.globalCandidates(NOW)).truncated).toEqual([])
+    expect((await sources.userCandidates('u1', NOW)).truncated).toEqual(['routine_failed'])
   })
 })

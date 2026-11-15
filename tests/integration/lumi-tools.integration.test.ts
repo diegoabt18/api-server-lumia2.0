@@ -1,0 +1,192 @@
+/**
+ * Fase 3 de Lumi: consultas nuevas del catálogo de herramientas, confirmaciones pendientes y filtro de
+ * iniciativas por permisos, contra un MongoDB real y desechable.
+ *
+ *   MONGO_TEST_URI=mongodb://127.0.0.1:27018 npm run test:integration
+ */
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { MongoClient, ObjectId, type Db } from 'mongodb'
+import { PERMISSION_REGISTRY as P } from '../../src/common/permissions/registry.js'
+import { ProductRepository } from '../../src/modules/catalog/infrastructure/product.repository.js'
+import { NotificationRepository } from '../../src/modules/notifications/infrastructure/notification.repository.js'
+import { OrderRepository } from '../../src/modules/sales/infrastructure/order.repository.js'
+import { MongoPendingActions } from '../../src/modules/lumi/actions/pending-action.js'
+import { LumiInitiativeRepository } from '../../src/modules/lumi/initiatives/infrastructure/lumi-initiative.repository.js'
+import { LumiInitiativeService } from '../../src/modules/lumi/initiatives/services/initiative.service.js'
+import { matchTool, runTool } from '../../src/modules/lumi/tools/catalog.js'
+import { createLumiToolDeps } from '../../src/modules/lumi/tools/tool-adapters.js'
+
+const uri = process.env.MONGO_TEST_URI
+const describeIfDb = uri ? describe : describe.skip
+
+describeIfDb('Lumi fase 3 (MongoDB real)', () => {
+  let client: MongoClient
+  let db: Db
+  let orders: OrderRepository
+  let products: ProductRepository
+  let notifications: NotificationRepository
+  let pending: MongoPendingActions
+  let initiatives: LumiInitiativeRepository
+  const NOW = new Date()
+  const hoursAgo = (h: number) => new Date(NOW.getTime() - h * 3_600_000)
+
+  beforeAll(async () => {
+    client = await new MongoClient(uri!).connect()
+    db = client.db(`lumi_tools_it_${Date.now()}`)
+    orders = new OrderRepository(db)
+    products = new ProductRepository(db)
+    notifications = new NotificationRepository(db)
+    pending = new MongoPendingActions(db)
+    await pending.ensureIndexes()
+    initiatives = new LumiInitiativeRepository(db)
+    await initiatives.ensureIndexes()
+
+    await db.collection('orders').insertMany([
+      {
+        _id: new ObjectId(), orderNumber: 'ORD-20261114-100000-CB07203E', customerReference: 'ORD-CB07203E',
+        status: 'paid', paymentStatus: 'paid', total: 50000, createdAt: hoursAgo(1),
+        items: [{ productSlug: 'vela-ambar', quantity: 2, subtotal: 50000 }],
+        customerName: 'Ana Pérez', email: 'ana@example.com', phone: '3000000000',
+      },
+      {
+        _id: new ObjectId(), orderNumber: 'ORD-20261113-090000-AA11BB22', customerReference: 'ORD-AA11BB22',
+        status: 'pending', paymentStatus: 'pending', total: 20000, createdAt: hoursAgo(30), items: [],
+        customerName: 'CB07 Cliente', email: 'cb07@example.com',
+      },
+      {
+        _id: new ObjectId(), orderNumber: 'ORD-20261001-090000-DD33EE44', customerReference: 'ORD-DD33EE44',
+        status: 'delivered', paymentStatus: 'paid', total: 70000, createdAt: hoursAgo(24 * 40), items: [],
+      },
+    ])
+    await db.collection('products').insertMany([
+      { _id: new ObjectId(), slug: 'vela-ambar', name: 'Vela Vainilla Ámbar', status: 'active' },
+      { _id: new ObjectId(), slug: 'difusor-citrico', name: 'Difusor (Cítrico)', status: 'active' },
+      { _id: new ObjectId(), slug: 'vela-vieja', name: 'Vela Vieja', status: 'inactive' },
+    ])
+    await db.collection('variants').insertMany([
+      { product_slug: 'vela-ambar', sku: 'VA-S', price: 45000 },
+      { product_slug: 'vela-ambar', sku: 'VA-L', price: 52000 },
+      { product_slug: 'difusor-citrico', sku: 'DC-1', price: 30000 },
+    ])
+    await db.collection('inventory_items').insertMany([
+      { sku: 'VA-S', quantity: 3, reserved: 1 },
+      { sku: 'VA-L', quantity: 5, reserved: 0 },
+      { sku: 'DC-1', quantity: 1, reserved: 1 },
+    ])
+    await db.collection('notifications').insertMany([
+      { _id: new ObjectId(), userId: 'u1', type: 'lumi_automation', title: 'Antigua', message: 'x', read: false, createdAt: hoursAgo(5) },
+      { _id: new ObjectId(), userId: 'u1', type: 'lumi_automation', title: 'Reciente', message: 'x', read: false, createdAt: hoursAgo(1) },
+      { _id: new ObjectId(), userId: 'u1', type: 'lumi_automation', title: 'Leída', message: 'x', read: true, createdAt: hoursAgo(0.5) },
+      { _id: new ObjectId(), userId: 'u2', type: 'lumi_automation', title: 'De otro', message: 'x', read: false, createdAt: hoursAgo(0.5) },
+    ])
+  })
+
+  afterAll(async () => {
+    await db?.dropDatabase()
+    await client?.close()
+  })
+
+  describe('pedidos', () => {
+    it('busca por referencia corta, por sufijo y por prefijo del número interno', async () => {
+      expect((await orders.findByReference('ORD-CB07203E', 3)).map((o) => o.customerReference)).toEqual(['ORD-CB07203E'])
+      expect((await orders.findByReference('cb07203e', 3)).map((o) => o.customerReference)).toEqual(['ORD-CB07203E'])
+      expect((await orders.findByReference('ORD-20261113', 3)).map((o) => o.customerReference)).toEqual(['ORD-AA11BB22'])
+    })
+
+    it('nunca busca por nombre, correo ni teléfono del cliente', async () => {
+      expect(await orders.findByReference('CB07 Cliente', 3)).toEqual([])
+      expect(await orders.findByReference('ana@example.com', 3)).toEqual([])
+      expect(await orders.findByReference('3000000000', 3)).toEqual([])
+    })
+
+    it('cuenta por estado, en total y dentro de un rango', async () => {
+      expect(await orders.countByStatus()).toEqual({ paid: 1, pending: 1, delivered: 1 })
+      expect(await orders.countByStatus({ from: hoursAgo(48), to: NOW })).toEqual({ paid: 1, pending: 1 })
+    })
+  })
+
+  describe('productos', () => {
+    it('busca sin distinguir tildes y calcula disponible y precios', async () => {
+      expect(await products.searchAvailability('ambar', 5)).toEqual([
+        { slug: 'vela-ambar', name: 'Vela Vainilla Ámbar', status: 'active', available: 7, minPrice: 45000, maxPrice: 52000 },
+      ])
+    })
+
+    it('escapa los caracteres especiales de la búsqueda', async () => {
+      expect((await products.searchAvailability('(cítrico)', 5)).map((p) => p.name)).toEqual(['Difusor (Cítrico)'])
+      expect(await products.searchAvailability('.*', 5)).toEqual([])
+    })
+
+    it('muestra los inactivos marcados como tales (el administrador puede verlos)', async () => {
+      expect((await products.searchAvailability('vieja', 5))[0]).toMatchObject({ status: 'inactive', available: 0 })
+    })
+  })
+
+  describe('notificaciones', () => {
+    it('las sin leer del propio usuario, más recientes primero', async () => {
+      expect((await notifications.recentUnread('u1', 5)).map((n) => n.title)).toEqual(['Reciente', 'Antigua'])
+      expect(await notifications.countUnread('u1')).toBe(2)
+    })
+  })
+
+  describe('acciones pendientes de confirmación', () => {
+    const base = (expiresAt: Date) => ({
+      userId: 'u1',
+      kind: 'delete_routine' as const,
+      payload: { taskId: 't1' },
+      summary: 'Eliminar «Rutina»',
+      createdAt: NOW,
+      expiresAt,
+    })
+
+    it('una nueva sustituye a la anterior y solo se consume una vez, aunque lleguen dos confirmaciones a la vez', async () => {
+      await pending.put(base(new Date(NOW.getTime() + 60_000)))
+      await pending.put({ ...base(new Date(NOW.getTime() + 60_000)), payload: { taskId: 't2' } })
+      expect(await db.collection('lumi_pending_actions').countDocuments({ userId: 'u1' })).toBe(1)
+      const [a, b] = await Promise.all([pending.take('u1', 'delete_routine', NOW), pending.take('u1', 'delete_routine', NOW)])
+      const taken = [a, b].filter(Boolean)
+      expect(taken).toHaveLength(1)
+      expect(taken[0]!.payload.taskId).toBe('t2')
+    })
+
+    it('una acción caducada no se ejecuta', async () => {
+      await pending.put(base(new Date(NOW.getTime() - 1)))
+      expect(await pending.hasPending('u1', NOW)).toBe(false)
+      expect(await pending.take('u1', 'delete_routine', NOW)).toBeNull()
+    })
+
+    it('descartar borra solo las del usuario', async () => {
+      await pending.put(base(new Date(NOW.getTime() + 60_000)))
+      await pending.put({ ...base(new Date(NOW.getTime() + 60_000)), userId: 'u2' })
+      expect(await pending.discard('u1', NOW)).toBe(1)
+      expect(await pending.hasPending('u2', NOW)).toBe(true)
+    })
+  })
+
+  describe('iniciativas por permisos', () => {
+    it('el listado del servicio solo devuelve los tipos que el usuario puede ver', async () => {
+      const common = { openCount: 1, firstSeenAt: NOW, lastSeenAt: NOW, stateChangedAt: NOW, state: 'nueva' as const, userId: 'u1' }
+      await initiatives.insert({ ...common, kind: 'stock', subjectKey: 'a', dedupKey: 'stock:a', title: 'S', detail: 'd', priority: 3 })
+      await initiatives.insert({ ...common, kind: 'order_attention', subjectKey: 'o', dedupKey: 'order_attention:o', title: 'O', detail: 'd', priority: 2 })
+      const service = new LumiInitiativeService(initiatives)
+      expect((await service.list('u1', [P.LUMI_USE, P.PRODUCTS_READ], { limit: 10 })).map((i) => i.kind)).toEqual(['stock'])
+      expect((await service.list('u1', [P.LUMI_USE], { limit: 10 })).map((i) => i.kind)).toEqual([])
+      expect((await service.list('u1', ['*' as never], { limit: 10 })).length).toBe(2)
+    })
+  })
+
+  describe('catálogo completo sobre Mongo', () => {
+    it('"¿Cuánto stock queda de la vela ambar?" responde con datos reales', async () => {
+      const deps = createLumiToolDeps({ orders, products, notifications, initiatives: new LumiInitiativeService(initiatives) })
+      const keys = [P.LUMI_USE, P.PRODUCTS_READ, P.ORDERS_READ, P.ANALYTICS_READ]
+      const ctx = { userId: 'u1', permissionKeys: keys, now: NOW, timezone: 'America/Bogota', deps }
+      const stock = matchTool('¿Cuánto stock queda de la vela ambar?', keys, ctx)!
+      expect((await runTool(stock, ctx)).text).toContain('- Vela Vainilla Ámbar: 7 disponibles · $45.000–$52.000')
+      const lookup = matchTool('¿Cómo va el pedido ORD-CB07203E?', keys, ctx)!
+      const text = (await runTool(lookup, ctx)).text
+      expect(text).toContain('- Estado: pagado, por despachar')
+      expect(text).toContain('- Artículos: 2')
+      expect(text).not.toMatch(/Ana|example|3000000000/)
+    })
+  })
+})

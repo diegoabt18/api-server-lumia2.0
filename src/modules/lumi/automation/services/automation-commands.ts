@@ -1,7 +1,17 @@
 import { AppError } from '../../../../common/errors/app.error.js'
 import type { AutomationStore } from '../domain/automation.store.js'
 import type { LumiTask } from '../domain/automation.types.js'
-import { parseAutomationCommand } from '../domain/reminder-parser.js'
+import {
+  isConfirmation,
+  isRejection,
+  normalizeText,
+  parseAutomationCommand,
+} from '../domain/reminder-parser.js'
+import {
+  MemoryPendingActions,
+  PENDING_ACTION_TTL_MS,
+  type PendingActionStore,
+} from '../../actions/pending-action.js'
 import { DEFAULT_AUTOMATION_TIMEZONE, localDateKey } from '../domain/schedule.js'
 import type { LumiTaskManager } from './task-manager.service.js'
 
@@ -28,9 +38,17 @@ export class AutomationCommands {
     private readonly store: AutomationStore,
     private readonly now: () => Date = () => new Date(),
     private readonly timezone: string = DEFAULT_AUTOMATION_TIMEZONE,
+    private readonly pending: PendingActionStore = new MemoryPendingActions(),
   ) {}
 
   async handle(userId: string, message: string): Promise<string | null> {
+    // Una respuesta corta ("sí, elimínala", "no") solo es una orden si hay una acción esperando
+    // confirmación. Sin acción pendiente, sigue su camino normal (modelo o herramientas).
+    const normalized = normalizeText(message)
+    if (isConfirmation(normalized) || isRejection(normalized)) {
+      const resolved = await this.resolvePending(userId, isConfirmation(normalized))
+      if (resolved !== null) return resolved
+    }
     const cmd = parseAutomationCommand(message, this.now(), this.timezone)
     switch (cmd.kind) {
       case 'none':
@@ -81,7 +99,7 @@ export class AutomationCommands {
       case 'resume':
         return this.pauseOrResume(userId, 'resume')
       case 'delete':
-        return this.deleteRoutine(userId)
+        return this.proposeDelete(userId, message, cmd.target)
     }
   }
 
@@ -194,15 +212,57 @@ export class AutomationCommands {
       : `Reactivé ${count} ${count === 1 ? 'aviso' : 'avisos'}.`
   }
 
-  private async deleteRoutine(userId: string): Promise<string> {
+  /**
+   * Borrar nunca se ejecuta en el mismo turno: se identifica la rutina, se describe qué se borrará y se
+   * guarda como acción pendiente. Solo "sí, elimínala" (dentro del plazo) la ejecuta.
+   */
+  private async proposeDelete(
+    userId: string,
+    message: string,
+    target: 'initiative_review' | null,
+  ): Promise<string> {
     const routines = await this.routines(userId)
     if (routines.length === 0) return 'No tienes rutinas que eliminar.'
-    if (routines.length > 1) {
-      const names = routines.map((r) => `«${r.title}»`).join(', ')
+    const text = normalizeText(message)
+    const byTitle = routines.filter((r) => text.includes(normalizeText(r.title)))
+    const byKind = target ? routines.filter((r) => r.kind === target) : []
+    const matches = byTitle.length > 0 ? byTitle : byKind.length > 0 ? byKind : routines
+    if (matches.length > 1) {
+      const names = matches.map((r) => `«${r.title}»`).join(', ')
       return `Tienes varias rutinas: ${names}. Dime cuál quieres eliminar.`
     }
-    await this.manager.remove(userId, routines[0]!.id)
-    return `Eliminé «${routines[0]!.title}» y su segundo aviso.`
+    const routine = matches[0]!
+    const followUps = await this.manager.followUpsOf(userId, routine.id)
+    const extra = followUps.length > 0 ? ' y su segundo aviso' : ''
+    const now = this.now()
+    await this.pending.put({
+      userId,
+      kind: 'delete_routine',
+      payload: { taskId: routine.id },
+      summary: `Eliminar «${routine.title}»${extra}`,
+      createdAt: now,
+      expiresAt: new Date(now.getTime() + PENDING_ACTION_TTL_MS),
+    })
+    return `¿Elimino «${routine.title}»${extra}? Esta acción no se puede deshacer. Responde «sí, elimínala» para confirmar o «no» para cancelar.`
+  }
+
+  /** Ejecuta o descarta la acción pendiente. Devuelve null si no había ninguna vigente. */
+  private async resolvePending(userId: string, confirmed: boolean): Promise<string | null> {
+    const now = this.now()
+    if (!confirmed) {
+      const discarded = await this.pending.discard(userId, now)
+      return discarded > 0 ? 'De acuerdo, no eliminé nada.' : null
+    }
+    const action = await this.pending.take(userId, 'delete_routine', now)
+    if (!action) return null
+    const taskId = action.payload.taskId
+    const task = taskId ? await this.store.findTaskForUser(taskId, userId) : null
+    if (!task) return 'Esa rutina ya no existe; no había nada que eliminar.'
+    await this.manager.remove(userId, task.id)
+    // Comprobación posterior: la operación se da por hecha solo si la rutina ya no está.
+    const still = await this.store.findTaskForUser(task.id, userId)
+    if (still) return `No pude eliminar «${task.title}». Inténtalo de nuevo.`
+    return `Eliminé «${task.title}»${action.summary.endsWith('segundo aviso') ? ' y su segundo aviso' : ''}.`
   }
 
   private timezoneOf(task: LumiTask): string {

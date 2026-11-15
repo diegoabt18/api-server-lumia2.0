@@ -71,6 +71,15 @@ export class NotificationRepository extends BaseRepository<NotificationDocument>
     }
   }
 
+  /** Últimas notificaciones sin leer (título y fecha), para el asistente Lumi. */
+  async recentUnread(userId: string, limit: number): Promise<Array<{ title: string; createdAt: string }>> {
+    const docs = await this.findMany({ userId, read: false } as never, { limit, sort: { createdAt: -1 } })
+    return docs.map((d) => {
+      const entity = toEntity(d)
+      return { title: entity.title, createdAt: entity.createdAt.toISOString() }
+    })
+  }
+
   async countUnread(userId: string): Promise<number> {
     return this.count({ userId, read: false } as never)
   }
