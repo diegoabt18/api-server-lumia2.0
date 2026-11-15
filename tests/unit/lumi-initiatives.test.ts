@@ -332,7 +332,7 @@ const staleOrder = (id: string): InitiativeCandidate => ({
 describe('iniciativas y permisos (A1)', () => {
   it('cada usuario solo recibe los tipos de datos que puede ver', async () => {
     const t = setup('proactiva', {
-      catalog: [P.LUMI_USE, P.PRODUCTS_READ],
+      catalog: [P.LUMI_USE, P.INVENTORY_READ],
       sales: [P.LUMI_USE, P.ORDERS_READ],
       none: [P.LUMI_USE],
     })
@@ -346,8 +346,15 @@ describe('iniciativas y permisos (A1)', () => {
     expect(t.sent.map((n) => n.userId).sort()).toEqual(['catalog', 'sales'])
   })
 
+  it('products.read ya no basta para ver iniciativas de stock: hace falta inventory.read', async () => {
+    const t = setup('proactiva', { u1: [P.LUMI_USE, P.PRODUCTS_READ, P.PRODUCTS_UPDATE] })
+    t.state.global = [outOfStock('a', 3)]
+    await t.engine.runOnce()
+    expect(t.store.items).toHaveLength(0)
+  })
+
   it('sin lumi.use no se generan iniciativas aunque la rutina siga activa', async () => {
-    const t = setup('proactiva', { u1: [P.PRODUCTS_READ, P.ORDERS_READ] })
+    const t = setup('proactiva', { u1: [P.INVENTORY_READ, P.ORDERS_READ] })
     t.state.global = [outOfStock('a', 3)]
     await t.engine.runOnce()
     expect(t.store.items).toHaveLength(0)
@@ -376,10 +383,10 @@ describe('iniciativas y permisos (A1)', () => {
     t.state.global = [outOfStock('a', 3), staleOrder('o1')]
     await t.engine.runOnce()
     const service = new LumiInitiativeService(t.store, () => NOW)
-    const visible = await service.list('u1', [P.LUMI_USE, P.PRODUCTS_READ], { limit: 50 })
+    const visible = await service.list('u1', [P.LUMI_USE, P.INVENTORY_READ], { limit: 50 })
     expect(visible.map((i) => i.kind)).toEqual(['stock'])
     const order = t.store.items.find((i) => i.kind === 'order_attention')!
-    await expect(service.changeState('u1', [P.LUMI_USE, P.PRODUCTS_READ], order.id, 'descartada')).rejects.toThrow(
+    await expect(service.changeState('u1', [P.LUMI_USE, P.INVENTORY_READ], order.id, 'descartada')).rejects.toThrow(
       'Iniciativa no encontrada',
     )
     const updated = await service.changeState('u1', [P.LUMI_USE, P.ORDERS_READ], order.id, 'descartada')

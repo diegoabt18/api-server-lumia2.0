@@ -162,6 +162,11 @@ const PERM_MODULE: Record<string, string> = {
   production: 'production',
   units: 'production',
   equivalences: 'production',
+  store: 'store-settings',
+  promotions: 'promotions',
+  banners: 'store-banners',
+  inventory: 'inventory',
+  feedback: 'feedback',
 }
 
 function permissionType(key: string): PermissionSeed['type'] {

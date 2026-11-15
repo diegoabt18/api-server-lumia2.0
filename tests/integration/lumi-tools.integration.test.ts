@@ -106,19 +106,60 @@ describeIfDb('Lumi fase 3 (MongoDB real)', () => {
   })
 
   describe('productos', () => {
+    const search = async (query: string, extra: Record<string, unknown> = {}) =>
+      (await products.searchProducts({ query, pageSize: 5, ...extra })).items
+
     it('busca sin distinguir tildes y calcula disponible y precios', async () => {
-      expect(await products.searchAvailability('ambar', 5)).toEqual([
-        { slug: 'vela-ambar', name: 'Vela Vainilla Ámbar', status: 'active', available: 7, minPrice: 45000, maxPrice: 52000 },
+      expect(await search('ambar')).toEqual([
+        {
+          id: expect.any(String), slug: 'vela-ambar', name: 'Vela Vainilla Ámbar', status: 'active', categorySlug: null,
+          available: 7, minPrice: 45000, maxPrice: 52000, variantCount: 2,
+        },
       ])
     })
 
     it('escapa los caracteres especiales de la búsqueda', async () => {
-      expect((await products.searchAvailability('(cítrico)', 5)).map((p) => p.name)).toEqual(['Difusor (Cítrico)'])
-      expect(await products.searchAvailability('.*', 5)).toEqual([])
+      expect((await search('(cítrico)')).map((p) => p.name)).toEqual(['Difusor (Cítrico)'])
+      expect(await search('.*')).toEqual([])
     })
 
     it('muestra los inactivos marcados como tales (el administrador puede verlos)', async () => {
-      expect((await products.searchAvailability('vieja', 5))[0]).toMatchObject({ status: 'inactive', available: 0 })
+      expect((await search('vieja'))[0]).toMatchObject({ status: 'inactive', available: 0 })
+    })
+
+    it('modo exact: el nombre completo, sin tildes ni mayúsculas; un fragmento no basta', async () => {
+      expect((await search('vela vainilla ambar', { mode: 'exact' })).map((p) => p.slug)).toEqual(['vela-ambar'])
+      expect(await search('vela', { mode: 'exact' })).toEqual([])
+    })
+
+    it('pagina con orden estable y total, y filtra por estado', async () => {
+      const page1 = await products.searchProducts({ query: 'vel', pageSize: 1, page: 1 })
+      const page2 = await products.searchProducts({ query: 'vel', pageSize: 1, page: 2 })
+      expect(page1.total).toBe(2)
+      expect([page1.items[0]!.name, page2.items[0]!.name]).toEqual(['Vela Vainilla Ámbar', 'Vela Vieja'])
+      expect((await search('vel', { status: 'inactive' })).map((p) => p.slug)).toEqual(['vela-vieja'])
+    })
+
+    it('sin texto no devuelve el catálogo', async () => {
+      expect(await products.searchProducts({ query: '   ' })).toMatchObject({ items: [], total: 0 })
+    })
+  })
+
+  describe('búsqueda común en las cuatro superficies (tienda, panel, POS, Lumi)', () => {
+    it('la tienda encuentra sin tildes y solo productos activos', async () => {
+      const found = await products.findActivePaged(10, 0, 'ambar')
+      expect(found.map((p) => p.slug)).toEqual(['vela-ambar'])
+    })
+
+    it('el panel encuentra palabra por palabra, incluidos inactivos', async () => {
+      expect((await products.listAdmin(10, 0, 'vainilla vela')).map((p) => p.slug)).toEqual(['vela-ambar'])
+      expect((await products.listAdmin(10, 0, 'vieja')).map((p) => p.slug)).toEqual(['vela-vieja'])
+      expect(await products.countAllAdmin('vainilla vela')).toBe(1)
+    })
+
+    it('el POS encuentra por nombre sin tildes y por SKU de la variante', async () => {
+      expect((await products.searchForPos('citrico', 1, 10)).items.map((p) => p.slug)).toEqual(['difusor-citrico'])
+      expect((await products.searchForPos('va-l', 1, 10)).items.map((p) => p.slug)).toEqual(['vela-ambar'])
     })
   })
 
@@ -169,7 +210,7 @@ describeIfDb('Lumi fase 3 (MongoDB real)', () => {
       await initiatives.insert({ ...common, kind: 'stock', subjectKey: 'a', dedupKey: 'stock:a', title: 'S', detail: 'd', priority: 3 })
       await initiatives.insert({ ...common, kind: 'order_attention', subjectKey: 'o', dedupKey: 'order_attention:o', title: 'O', detail: 'd', priority: 2 })
       const service = new LumiInitiativeService(initiatives)
-      expect((await service.list('u1', [P.LUMI_USE, P.PRODUCTS_READ], { limit: 10 })).map((i) => i.kind)).toEqual(['stock'])
+      expect((await service.list('u1', [P.LUMI_USE, P.INVENTORY_READ], { limit: 10 })).map((i) => i.kind)).toEqual(['stock'])
       expect((await service.list('u1', [P.LUMI_USE], { limit: 10 })).map((i) => i.kind)).toEqual([])
       expect((await service.list('u1', ['*' as never], { limit: 10 })).length).toBe(2)
     })
@@ -178,7 +219,7 @@ describeIfDb('Lumi fase 3 (MongoDB real)', () => {
   describe('catálogo completo sobre Mongo', () => {
     it('"¿Cuánto stock queda de la vela ambar?" responde con datos reales', async () => {
       const deps = createLumiToolDeps({ orders, products, notifications, initiatives: new LumiInitiativeService(initiatives) })
-      const keys = [P.LUMI_USE, P.PRODUCTS_READ, P.ORDERS_READ, P.ANALYTICS_READ]
+      const keys = [P.LUMI_USE, P.PRODUCTS_READ, P.INVENTORY_READ, P.ORDERS_READ, P.ANALYTICS_READ]
       const ctx = { userId: 'u1', permissionKeys: keys, now: NOW, timezone: 'America/Bogota', deps }
       const stock = matchTool('¿Cuánto stock queda de la vela ambar?', keys, ctx)!
       expect((await runTool(stock, ctx)).text).toContain('- Vela Vainilla Ámbar: 7 disponibles · $45.000–$52.000')

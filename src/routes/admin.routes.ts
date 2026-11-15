@@ -159,7 +159,7 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
 
   api.put(
     '/admin/products/:id/inventory/:sku',
-    { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_UPDATE) },
+    { preHandler: g(PERMISSION_REGISTRY.INVENTORY_UPDATE) },
     async (request) => {
       const { id, sku } = request.params as { id: string; sku: string }
       const parsed = adminInventoryUpsertSchema.safeParse(request.body)
@@ -433,13 +433,13 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
   // ─── Store settings (4.6) ───
   api.get(
     '/admin/store-shipping-settings',
-    { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) },
+    { preHandler: g(PERMISSION_REGISTRY.STORE_SETTINGS_READ) },
     async () => services.adminStore.getShippingSettings(),
   )
 
   api.put(
     '/admin/store-shipping-settings',
-    { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) },
+    { preHandler: g(PERMISSION_REGISTRY.STORE_SETTINGS_MANAGE) },
     async (request) => {
       const parsed = shippingSettingsBodySchema.safeParse(request.body)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
@@ -452,19 +452,19 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
 
   api.post(
     '/admin/store-shipping-settings/reset',
-    { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) },
+    { preHandler: g(PERMISSION_REGISTRY.STORE_SETTINGS_MANAGE) },
     async () => services.adminStore.resetShippingSettings(),
   )
 
   api.get(
     '/admin/store-currency-settings',
-    { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) },
+    { preHandler: g(PERMISSION_REGISTRY.STORE_SETTINGS_READ) },
     async () => services.adminStore.getCurrencySettings(),
   )
 
   api.patch(
     '/admin/store-currency-settings',
-    { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) },
+    { preHandler: g(PERMISSION_REGISTRY.STORE_SETTINGS_MANAGE) },
     async (request) => {
       const parsed = currencySettingsPatchSchema.safeParse(request.body)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
@@ -474,13 +474,13 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
 
   api.get(
     '/admin/store-customer-settings',
-    { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) },
+    { preHandler: g(PERMISSION_REGISTRY.STORE_SETTINGS_READ) },
     async () => services.adminStore.getCustomerSettings(),
   )
 
   api.patch(
     '/admin/store-customer-settings',
-    { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) },
+    { preHandler: g(PERMISSION_REGISTRY.STORE_SETTINGS_MANAGE) },
     async (request) => {
       const parsed = customerSettingsPatchSchema.safeParse(request.body)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
@@ -490,13 +490,13 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
 
   api.get(
     '/admin/store-payment-settings',
-    { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) },
+    { preHandler: g(PERMISSION_REGISTRY.STORE_SETTINGS_READ) },
     async () => services.adminStore.getPaymentSettings(),
   )
 
   api.patch(
     '/admin/store-payment-settings',
-    { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) },
+    { preHandler: g(PERMISSION_REGISTRY.STORE_PAYMENTS_MANAGE) },
     async (request) => {
       const parsed = adminPaymentMethodsSchema.safeParse(request.body)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
@@ -510,20 +510,20 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
   // ─── Promotions (4.3) ───
   api.get(
     '/admin/promotions',
-    { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_READ) },
+    { preHandler: g(PERMISSION_REGISTRY.PROMOTIONS_READ) },
     async (request) => services.adminPromotions.list(request.query as Record<string, unknown>),
   )
 
   api.get(
     '/admin/promotions/products',
-    { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_READ) },
+    { preHandler: g(PERMISSION_REGISTRY.PROMOTIONS_READ) },
     async (request) =>
       services.adminProducts.listPromotionProducts(request.query as Record<string, unknown>),
   )
 
   api.get(
     '/admin/promotions/:id',
-    { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_READ) },
+    { preHandler: g(PERMISSION_REGISTRY.PROMOTIONS_READ) },
     async (request) => {
       const { id } = request.params as { id: string }
       return services.adminPromotions.get(id)
@@ -532,7 +532,7 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
 
   api.post(
     '/admin/promotions',
-    { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_UPDATE) },
+    { preHandler: g(PERMISSION_REGISTRY.PROMOTIONS_CREATE) },
     async (request) => {
       const parsed = promotionUpsertSchema.safeParse(request.body)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
@@ -542,7 +542,7 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
 
   api.patch(
     '/admin/promotions/:id',
-    { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_UPDATE) },
+    { preHandler: g(PERMISSION_REGISTRY.PROMOTIONS_UPDATE) },
     async (request) => {
       const { id } = request.params as { id: string }
       const parsed = promotionUpsertSchema.safeParse(request.body)
@@ -553,7 +553,7 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
 
   api.delete(
     '/admin/promotions/:id',
-    { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_UPDATE) },
+    { preHandler: g(PERMISSION_REGISTRY.PROMOTIONS_DELETE) },
     async (request) => {
       const { id } = request.params as { id: string }
       return services.adminPromotions.delete(id)
@@ -562,7 +562,7 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
 
   api.patch(
     '/admin/promotions/:id/active',
-    { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_UPDATE) },
+    { preHandler: g(PERMISSION_REGISTRY.PROMOTIONS_UPDATE) },
     async (request) => {
       const { id } = request.params as { id: string }
       const parsed = adminPromotionActiveSchema.safeParse(request.body)
@@ -572,13 +572,13 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
   )
 
   // ─── Banners (4.3) ───
-  api.get('/admin/store-banners', { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_READ) }, async () =>
+  api.get('/admin/store-banners', { preHandler: g(PERMISSION_REGISTRY.BANNERS_READ) }, async () =>
     services.adminBanners.list(),
   )
 
   api.get(
     '/admin/store-banners/:id',
-    { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_READ) },
+    { preHandler: g(PERMISSION_REGISTRY.BANNERS_READ) },
     async (request) => {
       const { id } = request.params as { id: string }
       return services.adminBanners.get(id)
@@ -587,7 +587,7 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
 
   api.post(
     '/admin/store-banners',
-    { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_UPDATE) },
+    { preHandler: g(PERMISSION_REGISTRY.BANNERS_CREATE) },
     async (request) => {
       const parsed = storeBannerUpsertSchema.safeParse(request.body)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
@@ -597,7 +597,7 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
 
   api.patch(
     '/admin/store-banners/:id',
-    { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_UPDATE) },
+    { preHandler: g(PERMISSION_REGISTRY.BANNERS_UPDATE) },
     async (request) => {
       const { id } = request.params as { id: string }
       const parsed = storeBannerUpsertSchema.safeParse(request.body)
@@ -608,7 +608,7 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
 
   api.delete(
     '/admin/store-banners/:id',
-    { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_UPDATE) },
+    { preHandler: g(PERMISSION_REGISTRY.BANNERS_DELETE) },
     async (request) => {
       const { id } = request.params as { id: string }
       return services.adminBanners.delete(id)
@@ -618,13 +618,13 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
   // ─── Inventory (4.5) ───
   api.get(
     '/admin/inventory',
-    { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_READ) },
+    { preHandler: g(PERMISSION_REGISTRY.INVENTORY_READ) },
     async (request) => services.adminInventory.list(request.query as Record<string, unknown>),
   )
 
   api.get(
     '/admin/inventory/:sku/deposit-policy/history',
-    { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_READ) },
+    { preHandler: g(PERMISSION_REGISTRY.INVENTORY_READ) },
     async (request) => {
       const { sku } = request.params as { sku: string }
       return services.adminInventory.depositPolicyHistory(decodeURIComponent(sku))
@@ -633,7 +633,7 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
 
   api.put(
     '/admin/inventory/:sku',
-    { preHandler: g(PERMISSION_REGISTRY.PRODUCTS_UPDATE) },
+    { preHandler: g(PERMISSION_REGISTRY.INVENTORY_UPDATE) },
     async (request) => {
       const { sku } = request.params as { sku: string }
       const parsed = adminInventoryUpsertSchema.safeParse(request.body)
@@ -708,13 +708,13 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
   // ─── Feedback moderation ───
   api.get(
     '/admin/feedback/reports',
-    { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) },
+    { preHandler: g(PERMISSION_REGISTRY.FEEDBACK_READ) },
     async (request) => services.adminFeedback.listReports(request.query as Record<string, unknown>),
   )
 
   api.patch(
     '/admin/feedback/reviews/:id',
-    { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) },
+    { preHandler: g(PERMISSION_REGISTRY.FEEDBACK_MODERATE) },
     async (request) => {
       const { id } = request.params as { id: string }
       const parsed = adminFeedbackReviewPatchSchema.safeParse(request.body)
@@ -725,7 +725,7 @@ export async function registerAdminRoutes(api: FastifyInstance, ctx: AppContext)
 
   api.patch(
     '/admin/feedback/questions/:id',
-    { preHandler: g(PERMISSION_REGISTRY.ADMIN_ACCESS) },
+    { preHandler: g(PERMISSION_REGISTRY.FEEDBACK_MODERATE) },
     async (request) => {
       const { id } = request.params as { id: string }
       const parsed = adminFeedbackQuestionPatchSchema.safeParse(request.body)

@@ -16,7 +16,7 @@ import type { OrderEntity } from '../../src/modules/sales/domain/order.entity.js
 const NOW = new Date('2026-11-14T20:00:00.000Z')
 const TZ = 'America/Bogota'
 const CTX = { now: NOW, timezone: TZ }
-const ALL: PermissionId[] = [P.LUMI_USE, P.ORDERS_READ, P.PRODUCTS_READ, P.ANALYTICS_READ]
+const ALL: PermissionId[] = [P.LUMI_USE, P.ORDERS_READ, P.PRODUCTS_READ, P.INVENTORY_READ, P.ANALYTICS_READ]
 
 const order = (n: number, extra: Partial<AssistantOrderRow> = {}): AssistantOrderRow => ({
   orderNumber: `ORD-20261114-1000${n}-0000000${n}`,
@@ -212,7 +212,7 @@ describe('permisos', () => {
   })
 
   it('las capacidades del modelo solo listan lo que el usuario puede pedir', () => {
-    const limited = capabilitiesFor([P.LUMI_USE, P.PRODUCTS_READ], NOW, TZ)
+    const limited = capabilitiesFor([P.LUMI_USE, P.PRODUCTS_READ, P.INVENTORY_READ], NOW, TZ)
     expect(limited).toContain('Productos sin stock')
     expect(limited).not.toContain('Ventas')
     expect(limited).not.toContain('Contar pedidos')
@@ -225,6 +225,21 @@ describe('permisos', () => {
   it('cada herramienta declara su permiso (null solo para datos propios del usuario)', () => {
     const open = LUMI_TOOLS.filter((t) => t.permission === null).map((t) => t.name)
     expect(open.sort()).toEqual(['initiatives.list', 'notifications.unread'])
+  })
+})
+
+describe('inventario separado de productos', () => {
+  it('sin inventory.read la búsqueda de productos no muestra existencias', async () => {
+    const { text } = await ask('¿Cuánto stock queda de la vela de vainilla?', [P.LUMI_USE, P.PRODUCTS_READ])
+    expect(text).toContain('- Vela Vainilla Ámbar: $45.000–$52.000')
+    expect(text).not.toContain('disponibles')
+  })
+
+  it('«¿qué se está agotando?» exige inventory.read y no lee nada sin él', async () => {
+    const { text, deps, match } = await ask('¿Qué productos se están agotando?', [P.LUMI_USE, P.PRODUCTS_READ])
+    expect(match?.denied).toBe(true)
+    expect(text).toBe('No tienes permiso para consultar el inventario.')
+    expect(deps.calls).toEqual([])
   })
 })
 

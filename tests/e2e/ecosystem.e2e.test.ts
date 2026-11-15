@@ -575,6 +575,28 @@ describe('6b. Lumi fase 3: herramientas con datos reales y reglas seguras', () =
   })
 })
 
+describe('6c. Permisos por módulo (Fase 0)', () => {
+  it('products.read ya no abre promociones, banners ni inventario; admin.access ya no abre ajustes ni moderación', async () => {
+    // Rol "limitado": admin.access + products.read (sin los permisos nuevos).
+    const limited = await loginBff('limited@e2e.test', env.passwords.limited)
+    for (const path of ['/api/admin/promotions', '/api/admin/banners', '/api/admin/inventory', '/api/admin/settings/payments', '/api/admin/feedback/reports']) {
+      const res = await limited.get(path)
+      expect(res.status, `${path} → ${JSON.stringify(res.json)}`).toBe(403)
+    }
+    expect((await limited.get('/api/admin/products')).status).toBe(200)
+    // Escritura directa al Server: la guarda actúa antes de leer el cuerpo.
+    const limitedApi = await loginServer('limited@e2e.test', env.passwords.limited)
+    const write = await limitedApi.request('PATCH', '/api/admin/store-payment-settings', {})
+    expect(write.status, JSON.stringify(write.json)).toBe(403)
+  })
+
+  it('el superadministrador (*) conserva todos los módulos', async () => {
+    for (const path of ['/api/admin/promotions', '/api/admin/banners', '/api/admin/inventory', '/api/admin/settings/payments', '/api/admin/feedback/reports']) {
+      expect((await admin.get(path)).status, path).toBe(200)
+    }
+  })
+})
+
 describe('7. Integridad de la auditoría', () => {
   it('una modificación directa en la base se detecta', async () => {
     const coll = mongo.db('identity_db').collection('admin_activity_audit')

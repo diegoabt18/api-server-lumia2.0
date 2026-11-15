@@ -28,8 +28,8 @@ ya leyó.
 | `orders.count` | `orders.read` | «¿Cuántos pedidos tengo por despachar?», «¿Cuántos pedidos hubo en los últimos 30 días?» |
 | `orders.recent` | `orders.read` | «Muéstrame los últimos 5 pedidos» |
 | `sales.summary` | `analytics.read` | «¿Cuánto vendimos esta semana?», «productos más vendidos este mes» |
-| `products.search` | `products.read` | «¿Cuánto stock queda de la vela ambar?» |
-| `inventory.low` | `products.read` | «¿Qué productos se están agotando?» |
+| `products.search` | `products.read` (las existencias solo se muestran con `inventory.read`) | «¿Cuánto stock queda de la vela ambar?» |
+| `inventory.low` | `inventory.read` | «¿Qué productos se están agotando?» |
 | `initiatives.list` | `lumi.use` (y el permiso de cada tipo) | «¿Qué iniciativas urgentes tengo?» |
 | `notifications.unread` | `lumi.use` | «¿Tengo notificaciones sin leer?» |
 
@@ -48,12 +48,25 @@ Garantías:
 ## Iniciativas y permisos
 
 - **Qué se genera:** cada tipo de iniciativa exige un permiso (`INITIATIVE_KIND_PERMISSION`):
-  `stock` → `products.read`, `order_attention` → `orders.read`; `routine_failed` es del propio
+  `stock` → `inventory.read`, `order_attention` → `orders.read`; `routine_failed` es del propio
   usuario. El motor solo genera y notifica los tipos permitidos. Sin `lumi.use` no genera nada.
 - **Qué se ve:** el listado y los cambios de estado ocultan los tipos sin permiso.
 - **Lecturas truncadas:** si una lectura llega al límite de filas (200), ese tipo se marca como
   truncado y no se completa ninguna iniciativa de él en esa pasada. Así se evitan cierres falsos y
   reaperturas en bucle.
+
+## Búsqueda de productos
+
+`products.search` usa la **búsqueda común** del Server:
+- **Constructor de filtros:** `src/modules/catalog/domain/product-search.ts`, compartido con la tienda, el panel y el POS.
+- **Consulta paginada:** `ProductRepository.searchProducts`, que devuelve id, slug, estado, disponibilidad y precios.
+
+| Modo | Comportamiento |
+|---|---|
+| `contains` | Cada palabra en cualquier orden |
+| `exact` | El nombre o el slug completos |
+
+En ambos modos no se distinguen tildes ni mayúsculas, y el texto del usuario se escapa: nunca se interpreta como expresión regular. No hay relevancia ni búsqueda semántica (requieren un índice de texto o embeddings; pendiente de aprobación).
 
 ## Añadir una herramienta
 

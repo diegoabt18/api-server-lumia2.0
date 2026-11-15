@@ -62,6 +62,32 @@ export const PERMISSION_REGISTRY = {
   LUMI_USE: 'lumi.use',
   /** Lumi con búsqueda web. Solo la pregunta sale a internet, nunca datos de la API ni contexto. */
   LUMI_WEB: 'lumi.web',
+  /**
+   * Permisos por módulo (2026-11). Antes estos módulos reutilizaban admin.access o products.*.
+   * La migración scripts/migrate-module-permissions.ts los concede a quien ya tenía el acceso.
+   */
+  /** Ajustes de envío, moneda, atención al cliente y pagos: lectura. */
+  STORE_SETTINGS_READ: 'store.settings.read',
+  /** Ajustes de envío, moneda y atención al cliente: escritura. */
+  STORE_SETTINGS_MANAGE: 'store.settings.manage',
+  /** Ajustes de pagos (métodos y datos de cobro): escritura. Separado por ser sensible. */
+  STORE_PAYMENTS_MANAGE: 'store.payments.manage',
+  PROMOTIONS_READ: 'promotions.read',
+  PROMOTIONS_CREATE: 'promotions.create',
+  PROMOTIONS_UPDATE: 'promotions.update',
+  PROMOTIONS_DELETE: 'promotions.delete',
+  BANNERS_READ: 'banners.read',
+  BANNERS_CREATE: 'banners.create',
+  BANNERS_UPDATE: 'banners.update',
+  BANNERS_DELETE: 'banners.delete',
+  /** Reseñas, preguntas y reportes de la tienda: lectura. */
+  FEEDBACK_READ: 'feedback.read',
+  /** Moderar reseñas y preguntas (aprobar, ocultar, responder). */
+  FEEDBACK_MODERATE: 'feedback.moderate',
+  /** Existencias y política de anticipo por SKU: lectura. */
+  INVENTORY_READ: 'inventory.read',
+  /** Ajustar existencias y la política de anticipo por SKU. */
+  INVENTORY_UPDATE: 'inventory.update',
 } as const
 
 export type PermissionId = (typeof PERMISSION_REGISTRY)[keyof typeof PERMISSION_REGISTRY]

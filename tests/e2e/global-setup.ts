@@ -149,7 +149,7 @@ async function seed(passwords: Record<string, string>) {
         _id: roles.catalog,
         key: 'e2e_catalog',
         name: 'E2E Catálogo',
-        permissionKeys: ['admin.access', 'lumi.use', 'products.read'],
+        permissionKeys: ['admin.access', 'lumi.use', 'products.read', 'inventory.read'],
         createdAt: now,
         version: 1,
       },

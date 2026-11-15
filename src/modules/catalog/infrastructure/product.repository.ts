@@ -9,49 +9,40 @@ import {
   type VariantEntity,
   type InventoryItemEntity,
 } from '../domain/catalog.entity.js'
+import {
+  PRODUCT_SEARCH_FIELDS,
+  productTextFilter,
+  type ProductSearchMode,
+} from '../domain/product-search.js'
 
-const ACCENT_CLASSES: Record<string, string> = {
-  a: '[aáàäâ]',
-  e: '[eéèëê]',
-  i: '[iíìïî]',
-  o: '[oóòöô]',
-  u: '[uúùüû]',
-  n: '[nñ]',
+/** Producto encontrado por la búsqueda común: identificación inequívoca (id y slug) y datos mínimos. */
+export interface ProductSearchItem {
+  id: string
+  slug: string
+  name: string
+  status: string
+  categorySlug: string | null
+  /** Unidades disponibles (cantidad menos reservado) de todas las variantes. */
+  available: number
+  minPrice: number | null
+  maxPrice: number | null
+  variantCount: number
 }
 
-const SEARCH_STOPWORDS = new Set(['de', 'del', 'la', 'el', 'los', 'las', 'un', 'una', 'con', 'para', 'por', 'y'])
-
-/** Patrón ya escapado → coincide con y sin tildes ("ambar" encuentra "Ámbar"). */
-function accentInsensitive(escaped: string): string {
-  return escaped
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[aeioun]/gi, (ch) => ACCENT_CLASSES[ch.toLowerCase()] ?? ch)
+export interface ProductSearchQuery {
+  query: string
+  mode?: ProductSearchMode
+  status?: 'active' | 'inactive' | 'draft'
+  categorySlug?: string
+  page?: number
+  pageSize?: number
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
+export const PRODUCT_SEARCH_MAX_PAGE_SIZE = 50
 
-/** Cada palabra debe aparecer en nombre, slug, descripción o marca (sin distinguir mayúsculas). */
+/** Tienda: cada palabra en nombre, slug, descripción o marca (búsqueda común, modo contains). */
 function buildProductSearchClause(search: string): Record<string, unknown> | null {
-  const tokens = search
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map(escapeRegex)
-  if (!tokens.length) return null
-
-  const tokenClauses = tokens.map((token) => ({
-    $or: [
-      { name: { $regex: token, $options: 'i' } },
-      { slug: { $regex: token, $options: 'i' } },
-      { description: { $regex: token, $options: 'i' } },
-      { brand: { $regex: token, $options: 'i' } },
-    ],
-  }))
-
-  return tokenClauses.length === 1 ? tokenClauses[0]! : { $and: tokenClauses }
+  return productTextFilter(search, PRODUCT_SEARCH_FIELDS.storefront, 'contains')
 }
 
 export class ProductRepository extends BaseRepository<ProductEntity> {
@@ -215,16 +206,10 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     return docs.map((d) => d.slug)
   }
 
+  /** Panel: cada palabra en nombre, slug o descripción (búsqueda común, modo contains). */
   private buildAdminSearchFilter(search?: string): Record<string, unknown> {
-    if (typeof search !== 'string' || !search.trim()) return {}
-    const term = escapeRegex(search.trim().slice(0, 120))
-    return {
-      $or: [
-        { name: { $regex: term, $options: 'i' } },
-        { slug: { $regex: term, $options: 'i' } },
-        { description: { $regex: term, $options: 'i' } },
-      ],
-    }
+    if (typeof search !== 'string') return {}
+    return productTextFilter(search, PRODUCT_SEARCH_FIELDS.admin, 'contains') ?? {}
   }
 
   /** Filtro admin: búsqueda + jerarquía (categoría y/o subcategoría ya resueltas). Históricos incluidos. */
@@ -398,55 +383,62 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
   }
 
   /**
-   * Búsqueda por nombre para el asistente Lumi: disponibilidad (cantidad menos reservado) y rango de
-   * precios de las variantes. Coincidencia por fragmento del nombre o del slug, acotada a `limit`.
+   * Búsqueda común de productos (modo `exact` o `contains`), paginada, con identificación inequívoca
+   * (id y slug), disponibilidad (cantidad menos reservado) y rango de precios. Busca en nombre y slug.
+   * Sin texto no busca nada: nunca devuelve el catálogo entero.
    */
-  async searchAvailability(
-    term: string,
-    limit: number,
-  ): Promise<Array<{ slug: string; name: string; status: string; available: number; minPrice: number | null; maxPrice: number | null }>> {
-    // Cada palabra significativa debe aparecer (en cualquier orden): "vela ambar" encuentra
-    // "Vela Vainilla Ámbar". Sin palabras útiles no se busca nada (nunca se lista todo el catálogo).
-    const words = term
-      .trim()
-      .slice(0, 80)
-      .split(/\s+/)
-      .filter((w) => w.length >= 2 && !SEARCH_STOPWORDS.has(w.toLowerCase()))
-      .slice(0, 5)
-    if (words.length === 0) return []
-    const clauses = words.map((w) => {
-      const pattern = accentInsensitive(escapeRegex(w))
-      return { $or: [{ name: { $regex: pattern, $options: 'i' } }, { slug: { $regex: pattern, $options: 'i' } }] }
-    })
-    const rows = await this.collection
-      .aggregate<{ _id: string; name: string; status: string; available: number; minPrice: number | null; maxPrice: number | null }>([
-        { $match: { $and: clauses } },
-        { $sort: { name: 1 } },
-        { $limit: limit },
-        { $lookup: { from: 'variants', localField: 'slug', foreignField: 'product_slug', as: 'variants' } },
-        { $unwind: { path: '$variants', preserveNullAndEmptyArrays: true } },
-        { $lookup: { from: 'inventory_items', localField: 'variants.sku', foreignField: 'sku', as: 'inv' } },
-        {
-          $group: {
-            _id: '$slug',
-            name: { $first: '$name' },
-            status: { $first: '$status' },
-            available: { $sum: { $subtract: [{ $sum: '$inv.quantity' }, { $sum: '$inv.reserved' }] } },
-            minPrice: { $min: '$variants.price' },
-            maxPrice: { $max: '$variants.price' },
+  async searchProducts(input: ProductSearchQuery): Promise<{ items: ProductSearchItem[]; total: number; page: number; pageSize: number }> {
+    const page = Math.max(1, Math.floor(input.page ?? 1))
+    const pageSize = Math.min(Math.max(1, Math.floor(input.pageSize ?? 10)), PRODUCT_SEARCH_MAX_PAGE_SIZE)
+    const text = productTextFilter(input.query, PRODUCT_SEARCH_FIELDS.assistant, input.mode ?? 'contains')
+    if (!text) return { items: [], total: 0, page, pageSize }
+    const clauses: Record<string, unknown>[] = [text]
+    if (input.status) clauses.push({ status: input.status })
+    if (input.categorySlug) clauses.push({ category_slug: input.categorySlug })
+    const match = (clauses.length === 1 ? clauses[0]! : { $and: clauses }) as never
+    const [total, rows] = await Promise.all([
+      this.collection.countDocuments(match),
+      this.collection
+        .aggregate<{ _id: ObjectId; slug: string; name: string; status?: string; category_slug?: string | null; available: number; minPrice: number | null; maxPrice: number | null; variantCount: number }>([
+          { $match: match },
+          // Orden estable: por nombre y, a igualdad, por slug (único).
+          { $sort: { name: 1, slug: 1 } },
+          { $skip: (page - 1) * pageSize },
+          { $limit: pageSize },
+          { $lookup: { from: 'variants', localField: 'slug', foreignField: 'product_slug', as: 'variants' } },
+          { $lookup: { from: 'inventory_items', localField: 'variants.sku', foreignField: 'sku', as: 'inv' } },
+          {
+            $project: {
+              slug: 1,
+              name: 1,
+              status: 1,
+              category_slug: 1,
+              available: { $subtract: [{ $sum: '$inv.quantity' }, { $sum: '$inv.reserved' }] },
+              minPrice: { $min: '$variants.price' },
+              maxPrice: { $max: '$variants.price' },
+              variantCount: { $size: '$variants' },
+            },
           },
-        },
-        { $sort: { name: 1 } },
-      ])
-      .toArray()
-    return rows.map((row) => ({
-      slug: String(row._id),
-      name: String(row.name ?? row._id),
-      status: String(row.status ?? 'active'),
-      available: Number(row.available ?? 0),
-      minPrice: typeof row.minPrice === 'number' ? row.minPrice : null,
-      maxPrice: typeof row.maxPrice === 'number' ? row.maxPrice : null,
-    }))
+          { $sort: { name: 1, slug: 1 } },
+        ])
+        .toArray(),
+    ])
+    return {
+      items: rows.map((row) => ({
+        id: String(row._id),
+        slug: String(row.slug),
+        name: String(row.name ?? row.slug),
+        status: String(row.status ?? 'active'),
+        categorySlug: row.category_slug ?? null,
+        available: Number(row.available ?? 0),
+        minPrice: typeof row.minPrice === 'number' ? row.minPrice : null,
+        maxPrice: typeof row.maxPrice === 'number' ? row.maxPrice : null,
+        variantCount: Number(row.variantCount ?? 0),
+      })),
+      total,
+      page,
+      pageSize,
+    }
   }
 
   async findEmptyCategories(limit: number) {
@@ -516,13 +508,13 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
 
     let match: Record<string, unknown> = { ...hierarchyClause }
     if (trimmed) {
-      const rx = new RegExp(escapeRegex(trimmed), 'i')
+      // Búsqueda común (modo contains): producto por nombre/slug/marca o variante por SKU/código/descripción.
+      const productFilter = productTextFilter(trimmed, PRODUCT_SEARCH_FIELDS.posProduct, 'contains') ?? {}
+      const variantFilter = productTextFilter(trimmed, PRODUCT_SEARCH_FIELDS.posVariant, 'contains') ?? {}
       // Distinct slugs keep the match set small: only slugs are transferred, not documents.
       const [productSlugs, variantSlugs] = await Promise.all([
-        this.collection.distinct('slug', { $or: [{ name: rx }, { slug: rx }, { brand: rx }] } as never),
-        this.variants.distinct('product_slug', {
-          $or: [{ sku: rx }, { barcode: rx }, { description: rx }],
-        } as never),
+        this.collection.distinct('slug', productFilter as never),
+        this.variants.distinct('product_slug', variantFilter as never),
       ])
       const slugs = [...new Set([...productSlugs, ...variantSlugs].map(String))]
       if (!slugs.length) return { items: [], total: 0 }

@@ -238,7 +238,7 @@ const salesSummary: LumiTool<{ range: TimeRange; top: boolean }> = {
 const productsSearch: LumiTool<{ term: string }> = {
   name: 'products.search',
   label: 'Buscando productos',
-  capability: 'Buscar un producto y ver su stock disponible y su precio',
+  capability: 'Buscar un producto y ver su precio (y su stock si puedes ver el inventario)',
   example: '¿Cuánto stock queda de la vela de vainilla?',
   permission: PERMISSION_REGISTRY.PRODUCTS_READ,
   match(text) {
@@ -255,11 +255,14 @@ const productsSearch: LumiTool<{ term: string }> = {
   async run(ctx, input) {
     const rows = await ctx.deps.products.search(input.term, 8)
     if (rows.length === 0) return result(`No encontré productos que coincidan con «${input.term}».`, 0)
+    const canSeeStock = hasPermission([...ctx.permissionKeys], PERMISSION_REGISTRY.INVENTORY_READ)
     const lines = rows.map((p) => {
       const price =
         p.minPrice === null ? 'sin precio' : p.maxPrice !== null && p.maxPrice !== p.minPrice ? `${formatMoney(p.minPrice)}–${formatMoney(p.maxPrice)}` : formatMoney(p.minPrice)
       const state = p.status === 'inactive' ? ' (inactivo)' : p.status === 'draft' ? ' (borrador)' : ''
-      return `- ${p.name}${state}: ${Math.max(0, p.available)} disponibles · ${price}`
+      // Las existencias son del módulo de inventario: solo se muestran con inventory.read.
+      const stock = canSeeStock ? `${Math.max(0, p.available)} disponibles · ` : ''
+      return `- ${p.name}${state}: ${stock}${price}`
     })
     return result([`Productos que coinciden con «${input.term}»:`, ...lines].join('\n'), rows.length)
   },
@@ -272,7 +275,7 @@ const inventoryLow: LumiTool<Record<string, never>> = {
   label: 'Revisando el inventario',
   capability: `Productos sin stock o con stock bajo (${LOW_STOCK_THRESHOLD} unidades o menos)`,
   example: '¿Qué productos se están agotando?',
-  permission: PERMISSION_REGISTRY.PRODUCTS_READ,
+  permission: PERMISSION_REGISTRY.INVENTORY_READ,
   match(text) {
     return INVENTORY_WORD.test(text) ? {} : null
   },
@@ -384,7 +387,8 @@ export function matchTool(
 
 const DENIED_TEXT: Record<string, string> = {
   [PERMISSION_REGISTRY.ORDERS_READ]: 'No tienes permiso para consultar pedidos.',
-  [PERMISSION_REGISTRY.PRODUCTS_READ]: 'No tienes permiso para consultar productos ni inventario.',
+  [PERMISSION_REGISTRY.PRODUCTS_READ]: 'No tienes permiso para consultar productos.',
+  [PERMISSION_REGISTRY.INVENTORY_READ]: 'No tienes permiso para consultar el inventario.',
   [PERMISSION_REGISTRY.ANALYTICS_READ]: 'No tienes permiso para consultar ventas ni analítica.',
 }
 

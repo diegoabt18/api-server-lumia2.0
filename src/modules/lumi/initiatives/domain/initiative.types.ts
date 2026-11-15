@@ -11,10 +11,10 @@ export type InitiativeKind = (typeof INITIATIVE_KINDS)[number]
 
 /**
  * Permiso que exige ver cada tipo de iniciativa. Las de stock y pedidos leen datos de la tienda: solo
- * se generan y muestran a quien puede ver productos o pedidos. Las rutinas fallidas son del propio usuario.
+ * se generan y muestran a quien puede ver el inventario o los pedidos. Las rutinas fallidas son del propio usuario.
  */
 export const INITIATIVE_KIND_PERMISSION: Record<InitiativeKind, PermissionId | null> = {
-  stock: PERMISSION_REGISTRY.PRODUCTS_READ,
+  stock: PERMISSION_REGISTRY.INVENTORY_READ,
   order_attention: PERMISSION_REGISTRY.ORDERS_READ,
   routine_failed: null,
 }
