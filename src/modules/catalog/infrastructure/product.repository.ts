@@ -416,6 +416,30 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
   }
 
   /**
+   * Productos sin IVA configurado: `tax_rate` ausente, null o no numérico (el Server nunca asume una
+   * tasa). Un 0 % es una tasa configurada y no cuenta. Solo lectura, para Lumi.
+   */
+  async findUntaxed(limit: number): Promise<{ items: Array<{ slug: string; name: string; status: string }>; total: number }> {
+    const filter = { tax_rate: { $not: { $type: 'number' } } } as never
+    const [total, docs] = await Promise.all([
+      this.collection.countDocuments(filter),
+      this.collection
+        .find(filter, { projection: { slug: 1, name: 1, status: 1 } })
+        .sort({ name: 1, slug: 1 })
+        .limit(limit)
+        .toArray(),
+    ])
+    return {
+      items: docs.map((doc) => ({
+        slug: String(doc.slug),
+        name: String(doc.name ?? doc.slug),
+        status: String(doc.status ?? 'active'),
+      })),
+      total,
+    }
+  }
+
+  /**
    * Búsqueda común de productos (modo `exact` o `contains`), paginada, con identificación inequívoca
    * (id y slug), disponibilidad (cantidad menos reservado) y rango de precios. Busca en nombre y slug.
    * Sin texto no busca nada: nunca devuelve el catálogo entero.

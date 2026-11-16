@@ -36,6 +36,7 @@ function fakeDeps(): LumiToolDeps & { calls: string[] } {
       salesSummary: t('orders.salesSummary', async () => ({ orders: 2, soldOrders: 2, revenue: 100_000, refunds: 0, topProducts: [] })),
     },
     products: {
+      untaxed: t('products.untaxed', async () => ({ items: [{ name: 'Vela Sin IVA', status: 'active' }], total: 1 })),
       unpriced: t('products.unpriced', async () => ({ items: [{ name: 'Vela Sin Precio', status: 'active', variantCount: 1 }], total: 1 })),
       lowStock: t('products.lowStock', async () => [{ name: 'Vela Lavanda', available: 0 }]),
       search: t('products.search', async () => []),

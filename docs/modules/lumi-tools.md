@@ -259,3 +259,10 @@ Se registra en cada turno del chat, sin bloquearlo. `GET /api/admin/lumi/capabil
 - **latencia y tokens medios.**
 
 Lumia Admin lo muestra en Lumi → Capacidades («Cómo resuelve Lumi»).
+
+### `products.untaxed` (productos sin IVA configurado)
+
+Implementa la capacidad que se detectó en producción desde el chat («ver los productos sin iva configurado», 4 peticiones). Su `capabilityKey`, `none-confi-impuesto-sin-f4ef0d`, es la clave que asignó el Capability Manager, así que al desplegar el Server se enlaza con esa ficha y conserva sus peticiones.
+- Lista los productos cuyo `tax_rate` falta o no es un número. Un 0 % está configurado y no aparece.
+- Solo lectura; exige `products.read`.
+- Nace deshabilitada.

@@ -61,6 +61,9 @@ export function createLumiToolDeps(repos: {
       unpriced(limit) {
         return repos.products.findUnpriced(limit)
       },
+      untaxed(limit) {
+        return repos.products.findUntaxed(limit)
+      },
       async search(term, limit) {
         // Búsqueda común del Server (modo contains, sin tildes, palabra por palabra).
         return (await repos.products.searchProducts({ query: term, pageSize: limit })).items

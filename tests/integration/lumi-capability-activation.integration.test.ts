@@ -84,6 +84,24 @@ describeIfDb('Lumi fase E: activación (MongoDB real)', () => {
     expect(items[0]).toMatchObject({ status: 'draft', variantCount: 0 })
   })
 
+  it('findUntaxed: sin tasa numérica cuenta; 0 % es una tasa configurada', async () => {
+    const repo = new ProductRepository(db)
+    await db.collection('products').updateOne({ slug: 'vela-ok' }, { $set: { tax_rate: 19 } })
+    await db.collection('products').updateOne({ slug: 'vela-cero' }, { $set: { tax_rate: 0 } })
+    await db.collection('products').updateOne({ slug: 'kit-nuevo' }, { $set: { tax_rate: null } })
+    await db.collection('products').insertMany([
+      { _id: new ObjectId(), slug: 'jabon-sin-campo', name: 'Jabón Sin Campo', status: 'active' },
+      { _id: new ObjectId(), slug: 'difusor-texto', name: 'Difusor Texto', status: 'inactive', tax_rate: '19' },
+    ])
+    const { items, total } = await repo.findUntaxed(10)
+    expect(total).toBe(3)
+    expect(items.map((i) => i.name)).toEqual(['Difusor Texto', 'Jabón Sin Campo', 'Kit Nuevo'])
+    expect(items[0]).toMatchObject({ status: 'inactive' })
+    expect((await repo.findUntaxed(1)).items).toHaveLength(1)
+    // Deja el catálogo como estaba: las pruebas siguientes cuentan productos sin precio.
+    await db.collection('products').deleteMany({ slug: { $in: ['jabon-sin-campo', 'difusor-texto'] } })
+  })
+
   it('sincroniza el registro una sola vez y solo habilita las 8 herramientas anteriores', async () => {
     await activation.syncRegistry()
     await activation.syncRegistry()

@@ -22,6 +22,7 @@ export type LumiToolName =
   | 'initiatives.list'
   | 'notifications.unread'
   | 'products.unpriced'
+  | 'products.untaxed'
 
 /** Fila de pedido sin datos del cliente. */
 export interface AssistantOrderRow {
@@ -68,6 +69,8 @@ export interface LumiToolDeps {
     lowStock(threshold: number, limit: number): Promise<Array<{ name: string; available: number }>>
     /** Productos sin ninguna variante con precio mayor que cero (fase E). */
     unpriced(limit: number): Promise<{ items: Array<{ name: string; status: string; variantCount: number }>; total: number }>
+    /** Productos sin IVA configurado (tax_rate ausente o no numérico). */
+    untaxed(limit: number): Promise<{ items: Array<{ name: string; status: string }>; total: number }>
     search(term: string, limit: number): Promise<AssistantProductRow[]>
   }
   initiatives: {

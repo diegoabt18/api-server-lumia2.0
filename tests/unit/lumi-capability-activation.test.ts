@@ -19,7 +19,12 @@ function deps(unpriced = { items: [{ name: 'Vela Sin Precio', status: 'active', 
   const none = async () => []
   return {
     orders: { recent: none, findByReference: none, countByStatus: async () => ({}), salesSummary: async () => ({ orders: 0, soldOrders: 0, revenue: 0, refunds: 0, topProducts: [] }) },
-    products: { lowStock: none, search: none, unpriced: async () => unpriced },
+    products: {
+      lowStock: none,
+      search: none,
+      unpriced: async () => unpriced,
+      untaxed: async () => ({ items: [{ name: 'Vela Sin IVA', status: 'active' }, { name: 'Kit Viejo', status: 'inactive' }], total: 2 }),
+    },
     initiatives: { list: none },
     notifications: { countUnread: async () => 0, recentUnread: none },
   }
@@ -52,6 +57,39 @@ describe('products.unpriced (primer caso real)', () => {
 
   it('sin products.read no lee datos', () => {
     expect(matchTool('productos sin precio', [P.LUMI_USE], ctx)).toMatchObject({ denied: true })
+  })
+})
+
+describe('products.untaxed (capacidad detectada en producción)', () => {
+  const ctx = { now: NOW, timezone: TZ }
+
+  it('reconoce las frases que se pidieron y no se cruza con otras consultas', () => {
+    for (const text of [
+      'productos sin iva',
+      'ver los productos sin iva configurado',
+      'dame los productos que no tienen configurado iva',
+      '¿qué productos no tienen el IVA?',
+      'productos con iva sin configurar',
+    ]) {
+      expect(matchTool(text, ALL, ctx)?.tool.name, text).toBe('products.untaxed')
+    }
+    for (const text of ['productos sin precio', 'busca la vela de lavanda', '¿cuánto IVA pagamos este mes?']) {
+      expect(matchTool(text, ALL, ctx)?.tool.name, text).not.toBe('products.untaxed')
+    }
+  })
+
+  it('lista los productos sin IVA e indica los inactivos; sin products.read no lee nada', async () => {
+    const match = matchTool('productos sin iva', ALL, ctx)!
+    const result = await runTool(match, { userId: 'u1', permissionKeys: ALL, now: NOW, timezone: TZ, deps: deps() })
+    expect(result).toEqual({ text: '2 productos no tienen el IVA configurado:\n- Vela Sin IVA\n- Kit Viejo (inactivo)', rows: 2 })
+    expect(matchTool('productos sin iva', [P.LUMI_USE], ctx)).toMatchObject({ denied: true })
+  })
+
+  it('nace deshabilitada y enlaza con la clave de la capacidad detectada', () => {
+    const tool = LUMI_TOOLS.find((t) => t.name === 'products.untaxed')!
+    expect(tool.enabledByDefault).toBeUndefined()
+    expect(tool.capabilityKey).toBe('none-confi-impuesto-sin-f4ef0d')
+    expect(matchTool('productos sin iva', ALL, { ...ctx, enabled: BUILTIN })?.tool.name).not.toBe('products.untaxed')
   })
 })
 
