@@ -41,6 +41,11 @@ export interface CapabilityTestStore {
   listPhrases(capabilityId: string): Promise<CapabilityPhrase[]>
   countPhrases(capabilityId: string): Promise<number>
   deletePhrase(capabilityId: string, phraseId: string): Promise<boolean>
+  updatePhrase(
+    capabilityId: string,
+    phraseId: string,
+    patch: Partial<Pick<CapabilityPhrase, 'role' | 'expectedStatus' | 'expectedTool' | 'critical'>>,
+  ): Promise<CapabilityPhrase | null>
   /** Fusión: las frases de la origen pasan al destino. */
   movePhrases(fromCapabilityId: string, toCapabilityId: string): Promise<void>
   createRun(run: NewRun): Promise<CapabilityTestRun>

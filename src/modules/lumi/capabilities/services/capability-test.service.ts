@@ -14,6 +14,7 @@ import {
   type ExpectedStatus,
   type PhraseResult,
   type StartRunInput,
+  type UpdatePhraseInput,
 } from '../domain/capability-test.types.js'
 import type { CapabilityStore } from '../domain/capability.store.js'
 import type { CapabilityStatus, LumiCapability } from '../domain/capability.types.js'
@@ -57,9 +58,15 @@ export class CapabilityTestService {
     if (input.expectedTool && (!withTool || !TOOL_NAMES.has(input.expectedTool))) {
       throw AppError.badRequest('Herramienta esperada no válida para ese resultado')
     }
+    const text = input.text.replace(/\s+/g, ' ').trim()
+    // La misma frase dos veces no aporta nada a la batería.
+    const key = text.toLowerCase()
+    if ((await this.tests.listPhrases(capabilityId)).some((p) => p.text.toLowerCase() === key)) {
+      throw AppError.conflict('Esa frase ya está en las pruebas')
+    }
     return this.tests.addPhrase({
       capabilityId,
-      text: input.text.replace(/\s+/g, ' '),
+      text,
       role: input.role,
       expectedStatus: input.expectedStatus,
       expectedTool: withTool ? input.expectedTool : null,
@@ -67,6 +74,27 @@ export class CapabilityTestService {
       createdBy: by,
       createdAt: this.clock(),
     })
+  }
+
+  /** Cambia el rol, el resultado esperado o si es crítica, sin borrar la frase. */
+  async updatePhrase(capabilityId: string, phraseId: string, input: UpdatePhraseInput): Promise<CapabilityPhrase> {
+    const capability = await this.require(capabilityId)
+    if (capability.status === 'duplicate') throw AppError.conflict('La capacidad está fusionada con otra')
+    const current = (await this.tests.listPhrases(capabilityId)).find((p) => p.id === phraseId)
+    if (!current) throw AppError.notFound('Frase no encontrada')
+    const status = input.expectedStatus ?? current.expectedStatus
+    const withTool = STATUSES_WITH_TOOL.includes(status)
+    let tool = input.expectedTool !== undefined ? input.expectedTool : current.expectedTool
+    if (!withTool) tool = null
+    if (tool && !TOOL_NAMES.has(tool)) throw AppError.badRequest('Herramienta esperada no válida para ese resultado')
+    const updated = await this.tests.updatePhrase(capabilityId, phraseId, {
+      ...(input.role ? { role: input.role } : {}),
+      ...(input.critical !== undefined ? { critical: input.critical } : {}),
+      expectedStatus: status,
+      expectedTool: tool || null,
+    })
+    if (!updated) throw AppError.notFound('Frase no encontrada')
+    return updated
   }
 
   async deletePhrase(capabilityId: string, phraseId: string): Promise<void> {

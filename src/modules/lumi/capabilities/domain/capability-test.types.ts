@@ -112,6 +112,19 @@ export const addPhraseSchema = z
   .strict()
 export type AddPhraseInput = z.infer<typeof addPhraseSchema>
 
+/** Cambiar una frase sin borrarla: rol, resultado esperado, herramienta y si es crítica. */
+export const updatePhraseSchema = z
+  .object({
+    role: z.enum(PHRASE_ROLES),
+    expectedStatus: z.enum(EXPECTED_STATUSES),
+    expectedTool: z.string().trim().max(60).nullable(),
+    critical: z.boolean(),
+  })
+  .partial()
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, 'Nothing to update')
+export type UpdatePhraseInput = z.infer<typeof updatePhraseSchema>
+
 export const phraseParamsSchema = z.object({
   id: z.string().regex(/^[a-f0-9]{24}$/),
   phraseId: z.string().regex(/^[a-f0-9]{24}$/),

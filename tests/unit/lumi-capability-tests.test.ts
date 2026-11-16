@@ -215,6 +215,12 @@ class MemoryStores implements CapabilityTestStore {
     this.phrases = this.phrases.filter((p) => !(p.id === phraseId && p.capabilityId === id))
     return this.phrases.length < before
   }
+  async updatePhrase(id: string, phraseId: string, patch: Partial<CapabilityPhrase>) {
+    const phrase = this.phrases.find((p) => p.id === phraseId && p.capabilityId === id)
+    if (!phrase) return null
+    Object.assign(phrase, patch)
+    return { ...phrase }
+  }
   async movePhrases() {}
   async createRun(run: NewRun) {
     const created: CapabilityTestRun = { ...run, id: this.id(), status: 'running', results: [], summary: null, error: null, finishedAt: null }
@@ -245,6 +251,19 @@ const add = (svc: CapabilityTestService, text: string, role: 'test' | 'validatio
   svc.addPhrase('c'.repeat(24), { text, role, expectedStatus, expectedTool, critical }, 'admin1')
 
 describe('CapabilityTestService', () => {
+  it('no duplica frases y permite cambiar rol, crítica y resultado sin borrarlas', async () => {
+    const { svc, stores } = service()
+    const phrase = await add(svc, 'productos sin iva', 'test', 'supported', 'inventory.low')
+    await expect(add(svc, '  Productos  sin IVA ', 'validation', 'supported')).rejects.toThrow(/ya está/)
+    const updated = await svc.updatePhrase('c'.repeat(24), phrase.id, { role: 'validation', critical: true })
+    expect(updated).toMatchObject({ role: 'validation', critical: true, expectedStatus: 'supported', expectedTool: 'inventory.low' })
+    // Un resultado sin herramienta borra la herramienta esperada.
+    expect(await svc.updatePhrase('c'.repeat(24), phrase.id, { expectedStatus: 'unsupported' })).toMatchObject({ expectedTool: null })
+    await expect(svc.updatePhrase('c'.repeat(24), phrase.id, { expectedStatus: 'supported', expectedTool: 'db.drop' })).rejects.toThrow(/no válida/)
+    await expect(svc.updatePhrase('c'.repeat(24), 'f'.repeat(24), { role: 'test' })).rejects.toThrow(/no encontrada/)
+    expect(stores.phrases).toHaveLength(1)
+  })
+
   it('validates phrases: known tool, only with a tool status, and a per-capability limit', async () => {
     const { svc } = service()
     await expect(add(svc, 'x', 'test', 'supported', 'db.drop')).rejects.toThrow(/no válida/)

@@ -18,6 +18,7 @@ import {
   phraseParamsSchema,
   runParamsSchema,
   startRunSchema,
+  updatePhraseSchema,
 } from '../modules/lumi/capabilities/domain/capability-test.types.js'
 
 const turnMetricsQuerySchema = z.object({ days: z.coerce.number().int().refine((d) => [1, 7, 30].includes(d)).default(7) })
@@ -89,6 +90,11 @@ export async function registerLumiCapabilityRoutes(api: FastifyInstance, ctx: Ap
     const phrase = await tests.addPhrase(id, parse(addPhraseSchema, request.body), userIdOf(request))
     reply.code(201)
     return { phrase }
+  })
+
+  api.patch(`${base}/:id/phrases/:phraseId`, { preHandler: manage }, async (request) => {
+    const { id, phraseId } = parse(phraseParamsSchema, request.params)
+    return { phrase: await tests.updatePhrase(id, phraseId, parse(updatePhraseSchema, request.body)) }
   })
 
   api.delete(`${base}/:id/phrases/:phraseId`, { preHandler: manage }, async (request) => {

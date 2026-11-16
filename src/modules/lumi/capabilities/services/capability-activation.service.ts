@@ -81,9 +81,11 @@ export class CapabilityActivationService {
         key: 'validated',
         label: 'La última batería de pruebas pasó',
         ok: passed && ENABLE_FROM.includes(capability.status),
-        detail: capability.lastTest
-          ? `${passed ? 'Pasó' : 'No pasó'}${capability.lastTest.validationAccuracy !== null ? ` (${Math.round(capability.lastTest.validationAccuracy * 100)} % en validación)` : ''}`
-          : 'Sin batería',
+        detail: !capability.lastTest
+          ? 'Sin batería'
+          : capability.lastTest.passed === null
+            ? 'La última batería no tenía frases de «Validación»'
+            : `${passed ? 'Pasó' : 'No pasó'}${capability.lastTest.validationAccuracy !== null ? ` (${Math.round(capability.lastTest.validationAccuracy * 100)} % en validación)` : ''}`,
       },
       { key: 'documented', label: 'Documentación confirmada', ok: documented, detail: null },
     ]

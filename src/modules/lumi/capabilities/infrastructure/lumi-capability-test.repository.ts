@@ -110,6 +110,18 @@ export class LumiCapabilityTestRepository implements CapabilityTestStore {
     return (await this.phrases.deleteOne({ _id: pid, capabilityId: id })).deletedCount === 1
   }
 
+  async updatePhrase(
+    capabilityId: string,
+    phraseId: string,
+    patch: Partial<Pick<CapabilityPhrase, 'role' | 'expectedStatus' | 'expectedTool' | 'critical'>>,
+  ): Promise<CapabilityPhrase | null> {
+    const id = oid(capabilityId)
+    const pid = oid(phraseId)
+    if (!id || !pid) return null
+    const doc = await this.phrases.findOneAndUpdate({ _id: pid, capabilityId: id }, { $set: patch }, { returnDocument: 'after' })
+    return doc ? phraseFrom(doc) : null
+  }
+
   async movePhrases(fromCapabilityId: string, toCapabilityId: string): Promise<void> {
     const from = oid(fromCapabilityId)
     const to = oid(toCapabilityId)
