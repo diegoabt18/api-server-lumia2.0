@@ -20,6 +20,9 @@ import {
   startRunSchema,
   updatePhraseSchema,
 } from '../modules/lumi/capabilities/domain/capability-test.types.js'
+import { buildSpecDraftRequest, parseSpecDraft } from '../modules/lumi/capabilities/services/capability-spec-draft.js'
+import { LumiAssistantClient } from '../modules/lumi/infrastructure/lumi-assistant.client.js'
+import { LUMI_TOOLS } from '../modules/lumi/tools/catalog.js'
 
 const turnMetricsQuerySchema = z.object({ days: z.coerce.number().int().refine((d) => [1, 7, 30].includes(d)).default(7) })
 
@@ -39,6 +42,14 @@ export async function registerLumiCapabilityRoutes(api: FastifyInstance, ctx: Ap
   const base = '/admin/lumi/capabilities'
   const userIdOf = (request: unknown): string => (request as AuthenticatedRequest).auth.userId
   const keysOf = (request: unknown) => (request as AuthenticatedRequest).permissionKeys ?? []
+  const assistant =
+    ctx.env.LUMI_ASSISTANT_URL && ctx.env.LUMI_ASSISTANT_API_KEY
+      ? new LumiAssistantClient({
+          baseUrl: ctx.env.LUMI_ASSISTANT_URL.replace(/\/+$/, ''),
+          apiKey: ctx.env.LUMI_ASSISTANT_API_KEY,
+          timeoutMs: ctx.env.LUMI_ASSISTANT_TIMEOUT_MS,
+        })
+      : null
 
   const parse = <S extends z.ZodTypeAny>(schema: S, value: unknown): z.output<S> => {
     const parsed = schema.safeParse(value)
@@ -70,6 +81,17 @@ export async function registerLumiCapabilityRoutes(api: FastifyInstance, ctx: Ap
     const { id } = parse(capabilityIdParamsSchema, request.params)
     const { status } = parse(changeCapabilityStatusSchema, request.body)
     return { capability: await capabilities.changeStatus(id, status, userIdOf(request)) }
+  })
+
+  // Borrador de especificación con IA. No guarda nada: el formulario lo muestra y se guarda con PATCH.
+  api.post(`${base}/:id/spec-draft`, { preHandler: manage }, async (request) => {
+    const { id } = parse(capabilityIdParamsSchema, request.params)
+    if (!assistant) throw new AppError(503, 'El asistente Lumi no está configurado', 'LUMI_NOT_CONFIGURED')
+    const { capability, recentRequests } = await capabilities.get(id)
+    if (capability.status === 'duplicate') throw AppError.conflict('La capacidad está fusionada con otra')
+    const plan = buildSpecDraftRequest(capability, recentRequests.map((r) => r.message), LUMI_TOOLS)
+    const generated = await assistant.generate(userIdOf(request), plan.instructions, plan.input, plan.maxTokens)
+    return { spec: parseSpecDraft(generated.text, LUMI_TOOLS), model: generated.model }
   })
 
   api.post(`${base}/:id/merge`, { preHandler: manage }, async (request) => {
