@@ -7,6 +7,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoClient, ObjectId, type Db } from 'mongodb'
 import { PERMISSION_REGISTRY as P } from '../../src/common/permissions/registry.js'
+import { CategoryRepository } from '../../src/modules/catalog/infrastructure/category.repository.js'
 import { ProductRepository } from '../../src/modules/catalog/infrastructure/product.repository.js'
 import { NotificationRepository } from '../../src/modules/notifications/infrastructure/notification.repository.js'
 import { OrderRepository } from '../../src/modules/sales/infrastructure/order.repository.js'
@@ -220,7 +221,7 @@ describeIfDb('Lumi fase 3 (MongoDB real)', () => {
 
   describe('catálogo completo sobre Mongo', () => {
     it('"¿Cuánto stock queda de la vela ambar?" responde con datos reales', async () => {
-      const deps = createLumiToolDeps({ orders, products, notifications, initiatives: new LumiInitiativeService(initiatives) })
+      const deps = createLumiToolDeps({ orders, products, categories: new CategoryRepository(db), notifications, initiatives: new LumiInitiativeService(initiatives) })
       const keys = [P.LUMI_USE, P.PRODUCTS_READ, P.INVENTORY_READ, P.ORDERS_READ, P.ANALYTICS_READ]
       const ctx = { userId: 'u1', permissionKeys: keys, now: NOW, timezone: 'America/Bogota', deps }
       const stock = matchTool('¿Cuánto stock queda de la vela ambar?', keys, ctx)!
@@ -235,7 +236,7 @@ describeIfDb('Lumi fase 3 (MongoDB real)', () => {
 
   describe('selector (fase A2) y entidad activa', () => {
     it('"¿qué productos contiene?" con el pedido de la respuesta anterior lee ese pedido', async () => {
-      const deps = createLumiToolDeps({ orders, products, notifications, initiatives: new LumiInitiativeService(initiatives) })
+      const deps = createLumiToolDeps({ orders, products, categories: new CategoryRepository(db), notifications, initiatives: new LumiInitiativeService(initiatives) })
       const keys = [P.LUMI_USE, P.ORDERS_READ]
       const ctx = { userId: 'u1', permissionKeys: keys, now: NOW, timezone: 'America/Bogota', deps }
       const store = new MongoActiveEntities(db)

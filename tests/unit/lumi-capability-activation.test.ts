@@ -25,6 +25,16 @@ function deps(unpriced = { items: [{ name: 'Vela Sin Precio', status: 'active', 
       unpriced: async () => unpriced,
       untaxed: async () => ({ items: [{ name: 'Vela Sin IVA', status: 'active' }, { name: 'Kit Viejo', status: 'inactive' }], total: 2 }),
     },
+    categories: {
+      list: async () => ({
+        items: [
+          { name: 'Aromas', status: 'active', productCount: 12 },
+          { name: 'Velas', status: 'active', productCount: 1 },
+          { name: 'Temporada', status: 'inactive', productCount: 0 },
+        ],
+        total: 3,
+      }),
+    },
     initiatives: { list: none },
     notifications: { countUnread: async () => 0, recentUnread: none },
   }
@@ -90,6 +100,47 @@ describe('products.untaxed (capacidad detectada en producción)', () => {
     expect(tool.enabledByDefault).toBeUndefined()
     expect(tool.capabilityKey).toBe('none-confi-impuesto-sin-f4ef0d')
     expect(matchTool('productos sin iva', ALL, { ...ctx, enabled: BUILTIN })?.tool.name).not.toBe('products.untaxed')
+  })
+})
+
+describe('categories.list (capacidad detectada en producción)', () => {
+  const ctx = { now: NOW, timezone: TZ }
+  const KEYS: PermissionId[] = [...ALL, P.CATEGORIES_READ]
+
+  it('reconoce las frases que se pidieron y no se cruza con otras consultas', () => {
+    for (const text of [
+      'que categorias tengo',
+      '¿Qué categorías tengo?',
+      'pedi lista de categorias, pero me entregas te lista de productos, y pedido',
+      'lista de todas las categorías',
+      'cuántas categorías hay',
+    ]) {
+      expect(matchTool(text, KEYS, ctx)?.tool.name, text).toBe('categories.list')
+    }
+    for (const text of ['productos de la categoría velas', 'qué subcategorías tiene velas', 'productos sin precio', 'busca la vela de lavanda']) {
+      expect(matchTool(text, KEYS, ctx)?.tool.name, text).not.toBe('categories.list')
+    }
+  })
+
+  it('lista las categorías con su número de productos y marca las inactivas; sin categories.read no lee nada', async () => {
+    const match = matchTool('que categorias tengo', KEYS, ctx)!
+    const result = await runTool(match, { userId: 'u1', permissionKeys: KEYS, now: NOW, timezone: TZ, deps: deps() })
+    expect(result).toEqual({
+      text: 'Tienes 3 categorías:\n- Aromas (12 productos)\n- Velas (1 producto)\n- Temporada (0 productos, inactiva)',
+      rows: 3,
+    })
+    const denied = matchTool('que categorias tengo', ALL, ctx)!
+    expect(denied).toMatchObject({ denied: true })
+    expect((await runTool(denied, { userId: 'u1', permissionKeys: ALL, now: NOW, timezone: TZ, deps: deps() })).text).toBe(
+      'No tienes permiso para consultar categorías.',
+    )
+  })
+
+  it('nace deshabilitada y enlaza con la clave de la capacidad detectada', () => {
+    const tool = LUMI_TOOLS.find((t) => t.name === 'categories.list')!
+    expect(tool.enabledByDefault).toBeUndefined()
+    expect(tool.capabilityKey).toBe('none-categ-42a0c3')
+    expect(matchTool('que categorias tengo', KEYS, { ...ctx, enabled: BUILTIN })?.tool.name).not.toBe('categories.list')
   })
 })
 

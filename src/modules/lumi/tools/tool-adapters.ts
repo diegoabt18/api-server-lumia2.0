@@ -1,3 +1,4 @@
+import type { CategoryRepository } from '../../catalog/infrastructure/category.repository.js'
 import type { ProductRepository } from '../../catalog/infrastructure/product.repository.js'
 import type { NotificationRepository } from '../../notifications/infrastructure/notification.repository.js'
 import type { OrderEntity } from '../../sales/domain/order.entity.js'
@@ -24,6 +25,7 @@ export function toAssistantOrderRow(order: OrderEntity): AssistantOrderRow {
 export function createLumiToolDeps(repos: {
   orders: OrderRepository
   products: ProductRepository
+  categories: CategoryRepository
   notifications: NotificationRepository
   initiatives: LumiInitiativeService
 }): LumiToolDeps {
@@ -67,6 +69,17 @@ export function createLumiToolDeps(repos: {
       async search(term, limit) {
         // Búsqueda común del Server (modo contains, sin tildes, palabra por palabra).
         return (await repos.products.searchProducts({ query: term, pageSize: limit })).items
+      },
+    },
+    categories: {
+      async list(limit) {
+        // Una tienda tiene pocas categorías: se leen todas para ordenar por nombre sin tildes.
+        const [all, counts] = await Promise.all([repos.categories.findAll(), repos.categories.productCountByCategorySlug()])
+        const sorted = [...all].sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }))
+        return {
+          items: sorted.slice(0, limit).map((c) => ({ name: c.name, status: c.status, productCount: counts.get(c.slug) ?? 0 })),
+          total: all.length,
+        }
       },
     },
     initiatives: {

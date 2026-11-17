@@ -67,6 +67,9 @@ function fakeDeps(): LumiToolDeps & { calls: string[] } {
           : [],
       ),
     },
+    categories: {
+      list: track('categories.list', async () => ({ items: [{ name: 'Velas', status: 'active', productCount: 4 }], total: 1 })),
+    },
     initiatives: {
       list: track('initiatives.list', async () => [
         {

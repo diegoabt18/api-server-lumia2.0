@@ -7,6 +7,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoClient, ObjectId, type Db } from 'mongodb'
 import { PERMISSION_REGISTRY as P } from '../../src/common/permissions/registry.js'
+import { CategoryRepository } from '../../src/modules/catalog/infrastructure/category.repository.js'
 import { ProductRepository } from '../../src/modules/catalog/infrastructure/product.repository.js'
 import { NotificationRepository } from '../../src/modules/notifications/infrastructure/notification.repository.js'
 import { OrderRepository } from '../../src/modules/sales/infrastructure/order.repository.js'
@@ -46,6 +47,7 @@ describeIfDb('Lumi fase D: probar capacidad (MongoDB real)', () => {
       toolDeps: createLumiToolDeps({
         orders: new OrderRepository(db),
         products: new ProductRepository(db),
+        categories: new CategoryRepository(db),
         notifications: new NotificationRepository(db),
         initiatives: new LumiInitiativeService(new LumiInitiativeRepository(db)),
       }),

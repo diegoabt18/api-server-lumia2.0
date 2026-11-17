@@ -97,6 +97,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
   const toolDeps = createLumiToolDeps({
     orders: ctx.repos.orders,
     products: ctx.repos.products,
+    categories: ctx.repos.categories,
     notifications: ctx.repos.notifications,
     initiatives: ctx.services.lumiInitiatives,
   })

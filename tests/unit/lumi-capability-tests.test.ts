@@ -41,6 +41,7 @@ function fakeDeps(): LumiToolDeps & { calls: string[] } {
       lowStock: t('products.lowStock', async () => [{ name: 'Vela Lavanda', available: 0 }]),
       search: t('products.search', async () => []),
     },
+    categories: { list: t('categories.list', async () => ({ items: [], total: 0 })) },
     initiatives: { list: t('initiatives.list', async () => []) },
     notifications: {
       countUnread: t('notifications.countUnread', async () => 0),

@@ -23,6 +23,7 @@ export type LumiToolName =
   | 'notifications.unread'
   | 'products.unpriced'
   | 'products.untaxed'
+  | 'categories.list'
 
 /** Fila de pedido sin datos del cliente. */
 export interface AssistantOrderRow {
@@ -72,6 +73,10 @@ export interface LumiToolDeps {
     /** Productos sin IVA configurado (tax_rate ausente o no numérico). */
     untaxed(limit: number): Promise<{ items: Array<{ name: string; status: string }>; total: number }>
     search(term: string, limit: number): Promise<AssistantProductRow[]>
+  }
+  categories: {
+    /** Categorías en orden alfabético (activas e inactivas) con su número de productos. */
+    list(limit: number): Promise<{ items: Array<{ name: string; status: string; productCount: number }>; total: number }>
   }
   initiatives: {
     list(userId: string, keys: readonly PermissionId[], limit: number): Promise<LumiInitiative[]>

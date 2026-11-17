@@ -10,6 +10,7 @@ import {
 } from './tool.types.js'
 import { productsUnpriced } from './products-unpriced.tool.js'
 import { productsUntaxed } from './products-untaxed.tool.js'
+import { categoriesList } from './categories-list.tool.js'
 
 /* ───────────────────────── Formato ───────────────────────── */
 
@@ -462,6 +463,7 @@ export const LUMI_TOOLS: ReadonlyArray<LumiTool<never>> = [
   ordersCount,
   ordersRecent,
   salesSummary,
+  categoriesList,
   // Antes de la búsqueda: «productos sin precio» no es buscar el texto «sin precio».
   productsUnpriced,
   productsUntaxed,
@@ -513,6 +515,7 @@ const DENIED_TEXT: Record<string, string> = {
   [PERMISSION_REGISTRY.PRODUCTS_READ]: 'No tienes permiso para consultar productos.',
   [PERMISSION_REGISTRY.INVENTORY_READ]: 'No tienes permiso para consultar el inventario.',
   [PERMISSION_REGISTRY.ANALYTICS_READ]: 'No tienes permiso para consultar ventas ni analítica.',
+  [PERMISSION_REGISTRY.CATEGORIES_READ]: 'No tienes permiso para consultar categorías.',
 }
 
 /** Ejecuta la herramienta. Sin permiso no se lee nada: se devuelve el aviso. */

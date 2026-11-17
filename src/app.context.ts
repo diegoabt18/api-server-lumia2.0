@@ -717,7 +717,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       // Las pruebas aplican lo aprendido por quien prueba y lo global, igual que su chat.
       learned: (userId, message, enabled) => lumiLearning.learnedTool(userId, message, enabled, false),
       examples: (userId, message, enabled) => lumiLearning.examples(userId, message, enabled),
-      toolDeps: createLumiToolDeps({ orders, products, notifications, initiatives: lumiInitiatives }),
+      toolDeps: createLumiToolDeps({ orders, products, categories, notifications, initiatives: lumiInitiatives }),
       timezone: DEFAULT_AUTOMATION_TIMEZONE,
     }),
   )
