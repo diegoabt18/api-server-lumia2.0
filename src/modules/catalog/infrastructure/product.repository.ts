@@ -354,7 +354,7 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
           },
         },
       },
-      { $group: { _id: '$slug', name: { $first: '$name' }, image_path: { $first: '$image_path' }, category_slug: { $first: '$category_slug' }, available: { $sum: '$variantAvailable' } } },
+      { $group: { _id: '$slug', productId: { $first: '$_id' }, name: { $first: '$name' }, image_path: { $first: '$image_path' }, category_slug: { $first: '$category_slug' }, available: { $sum: '$variantAvailable' } } },
     ]
   }
 
@@ -370,25 +370,30 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
   }
 
   /** Productos sin stock o con stock igual o menor al umbral (para iniciativas de Lumi). */
-  async findStockAlerts(lowThreshold: number, limit: number): Promise<Array<{ slug: string; name: string; available: number }>> {
+  async findStockAlerts(lowThreshold: number, limit: number): Promise<Array<{ id: string | null; slug: string; name: string; available: number }>> {
     const rows = await this.collection
-      .aggregate<{ _id: string; name: string; available: number }>([
+      .aggregate<{ _id: string; productId?: unknown; name: string; available: number }>([
         ...this.availabilityStages(),
         { $match: { available: { $lte: lowThreshold } } },
         { $sort: { available: 1 } },
         { $limit: limit },
       ])
       .toArray()
-    return rows.map((row) => ({ slug: String(row._id), name: String(row.name ?? row._id), available: Number(row.available) }))
+    return rows.map((row) => ({
+      id: row.productId ? String(row.productId) : null,
+      slug: String(row._id),
+      name: String(row.name ?? row._id),
+      available: Number(row.available),
+    }))
   }
 
   /**
    * Productos sin precio: ninguna de sus variantes tiene un precio mayor que cero (sin variantes,
    * precio nulo, ausente o 0). Solo lectura, para Lumi (capacidad «productos sin precio», fase E).
    */
-  async findUnpriced(limit: number): Promise<{ items: Array<{ slug: string; name: string; status: string; variantCount: number }>; total: number }> {
+  async findUnpriced(limit: number): Promise<{ items: Array<{ id: string; slug: string; name: string; status: string; variantCount: number }>; total: number }> {
     const [result] = await this.collection
-      .aggregate<{ items: Array<{ slug: string; name: string; status?: string; variantCount: number }>; total: Array<{ n: number }> }>([
+      .aggregate<{ items: Array<{ _id: unknown; slug: string; name: string; status?: string; variantCount: number }>; total: Array<{ n: number }> }>([
         { $lookup: { from: 'variants', localField: 'slug', foreignField: 'product_slug', as: 'variants' } },
         {
           $project: {
@@ -406,6 +411,7 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
       .toArray()
     return {
       items: (result?.items ?? []).map((row) => ({
+        id: String(row._id),
         slug: String(row.slug),
         name: String(row.name ?? row.slug),
         status: String(row.status ?? 'active'),
@@ -419,7 +425,7 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
    * Productos sin IVA configurado: `tax_rate` ausente, null o no numérico (el Server nunca asume una
    * tasa). Un 0 % es una tasa configurada y no cuenta. Solo lectura, para Lumi.
    */
-  async findUntaxed(limit: number): Promise<{ items: Array<{ slug: string; name: string; status: string }>; total: number }> {
+  async findUntaxed(limit: number): Promise<{ items: Array<{ id: string; slug: string; name: string; status: string }>; total: number }> {
     const filter = { tax_rate: { $not: { $type: 'number' } } } as never
     const [total, docs] = await Promise.all([
       this.collection.countDocuments(filter),
@@ -431,6 +437,7 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     ])
     return {
       items: docs.map((doc) => ({
+        id: String(doc._id),
         slug: String(doc.slug),
         name: String(doc.name ?? doc.slug),
         status: String(doc.status ?? 'active'),
@@ -443,7 +450,7 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
    * Productos con IVA configurado: `tax_rate` numérico (0 % incluido). Inversa de `findUntaxed`.
    * Orden alfabético. Solo lectura, para Lumi.
    */
-  async findTaxed(limit: number): Promise<{ items: Array<{ slug: string; name: string; status: string; taxRate: number }>; total: number }> {
+  async findTaxed(limit: number): Promise<{ items: Array<{ id: string; slug: string; name: string; status: string; taxRate: number }>; total: number }> {
     const filter = { tax_rate: { $type: 'number' } } as never
     const [total, docs] = await Promise.all([
       this.collection.countDocuments(filter),
@@ -455,6 +462,7 @@ export class ProductRepository extends BaseRepository<ProductEntity> {
     ])
     return {
       items: docs.map((doc) => ({
+        id: String(doc._id),
         slug: String(doc.slug),
         name: String(doc.name ?? doc.slug),
         status: String(doc.status ?? 'active'),

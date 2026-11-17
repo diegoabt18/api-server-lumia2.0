@@ -14,6 +14,7 @@ import { type LumiMode, resolveLumiModes } from '../modules/lumi/services/lumi-i
 import { DEFAULT_AUTOMATION_TIMEZONE } from '../modules/lumi/automation/domain/schedule.js'
 import { capabilitiesFor, runTool, type ToolMatch } from '../modules/lumi/tools/catalog.js'
 import type { LumiEntityRef } from '../modules/lumi/tools/tool.types.js'
+import type { LumiReference } from '../modules/lumi/references/lumi-references.js'
 import { missingCapabilityReply } from '../modules/lumi/selector/lumi-selector.js'
 import { planLumiTurn, type TurnPlan } from '../modules/lumi/turn/turn-plan.js'
 import { sampleFromTrace, type TurnSample } from '../modules/lumi/metrics/turn-metrics.js'
@@ -130,15 +131,18 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     conversationId: string | undefined,
   ): AsyncGenerator<LumiStreamEvent> {
     const texts: string[] = []
+    const references: LumiReference[] = []
     let entity: LumiEntityRef | undefined
     for (const match of matches) {
       const result = await executeTool(request, match)
       yield toolEvent(match, result.rows)
       texts.push(result.text)
+      references.push(...(result.references ?? []))
       entity = result.entity ?? entity
     }
     const text = texts.join('\n\n')
-    const saved = await requireClient().recordExchange(userIdOf(request), message, text, conversationId)
+    // Las referencias salen de los datos leídos (ids reales) y se guardan con la respuesta.
+    const saved = await requireClient().recordExchange(userIdOf(request), message, text, conversationId, references)
     // Context Manager: la entidad de la respuesta queda activa para el turno siguiente.
     if (entity) {
       await ctx.services.lumiActiveEntities
@@ -146,6 +150,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
         .catch((err) => request.log.warn({ err }, 'Lumi active entity not saved'))
     }
     yield { type: 'token', text }
+    if (references.length) yield { type: 'references', references }
     yield { type: 'done', conversationId: saved.conversationId }
   }
 
@@ -387,12 +392,14 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       let response = ''
       let conversationId = parsed.data.conversationId ?? ''
       let tool: { name: string; rows: number } | null = null
+      let references: LumiReference[] = []
       for await (const event of toolTurnStream(request, plan.matches, parsed.data.message, parsed.data.conversationId)) {
         if (event.type === 'tool') tool ??= { name: event.name, rows: event.rows }
         if (event.type === 'token') response += event.text
+        if (event.type === 'references') references = event.references
         if (event.type === 'done') conversationId = event.conversationId
       }
-      return { conversationId, model: 'lumi-tools', response, tool }
+      return { conversationId, model: 'lumi-tools', response, tool, references }
     }
     const match = plan.match
     const turn = await resolveTurn(request, parsed.data, plan.forceWeb)
@@ -404,13 +411,19 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       parsed.data.conversationId,
       match && toolResult ? toolDataContext(match, toolResult.text) : turn.context,
       match ? false : turn.webSearch,
-      { think: turn.reasoning, maxTokens: parsed.data.maxTokens, capabilities: turn.capabilities },
+      {
+        think: turn.reasoning,
+        maxTokens: parsed.data.maxTokens,
+        capabilities: turn.capabilities,
+        references: toolResult?.references,
+      },
     )
     return {
       conversationId: result.conversationId,
       model: result.model,
       response: result.response,
       tool: match && toolResult ? { name: match.tool.name, rows: toolResult.rows } : null,
+      references: result.references,
     }
   })
 
@@ -477,7 +490,13 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
               controller.signal,
               match && toolResult ? toolDataContext(match, toolResult.text) : turn.context,
               match ? false : turn.webSearch,
-              { think: turn.reasoning, maxTokens: parsed.data.maxTokens, capabilities: turn.capabilities },
+              {
+                think: turn.reasoning,
+                maxTokens: parsed.data.maxTokens,
+                capabilities: turn.capabilities,
+                // Explicación sobre datos: las referencias de la herramienta se guardan con la respuesta.
+                references: toolResult?.references,
+              },
             )
       )[Symbol.asyncIterator]()
 

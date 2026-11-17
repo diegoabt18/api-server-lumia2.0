@@ -19,6 +19,7 @@ const CTX = { now: NOW, timezone: TZ }
 const ALL: PermissionId[] = [P.LUMI_USE, P.ORDERS_READ, P.PRODUCTS_READ, P.INVENTORY_READ, P.ANALYTICS_READ]
 
 const order = (n: number, extra: Partial<AssistantOrderRow> = {}): AssistantOrderRow => ({
+  id: `6b${String(n).padStart(22, '0')}`,
   orderNumber: `ORD-20261114-1000${n}-0000000${n}`,
   reference: `ORD-0000000${n}`,
   createdAt: '2026-11-14T15:00:00.000Z',
@@ -55,21 +56,21 @@ function fakeDeps(): LumiToolDeps & { calls: string[] } {
       })),
     },
     products: {
-      untaxed: track('products.untaxed', async () => ({ items: [{ name: 'Vela Sin IVA', status: 'active' }], total: 1 })),
-      taxed: track('products.taxed', async () => ({ items: [{ name: 'Vela Con IVA', status: 'active', taxRate: 19 }], total: 1 })),
-      unpriced: track('products.unpriced', async () => ({ items: [{ name: 'Vela Sin Precio', status: 'active', variantCount: 1 }], total: 1 })),
+      untaxed: track('products.untaxed', async () => ({ items: [{ id: '6a000000000000000000000e', name: 'Vela Sin IVA', status: 'active' }], total: 1 })),
+      taxed: track('products.taxed', async () => ({ items: [{ id: '6a000000000000000000000f', name: 'Vela Con IVA', status: 'active', taxRate: 19 }], total: 1 })),
+      unpriced: track('products.unpriced', async () => ({ items: [{ id: '6a0000000000000000000010', name: 'Vela Sin Precio', status: 'active', variantCount: 1 }], total: 1 })),
       lowStock: track('products.lowStock', async () => [
-        { name: 'Vela Lavanda', available: 0 },
-        { name: 'Difusor Cítrico', available: 2 },
+        { id: '6a0000000000000000000011', name: 'Vela Lavanda', available: 0 },
+        { id: '6a0000000000000000000012', name: 'Difusor Cítrico', available: 2 },
       ]),
       search: track('products.search', async (term: string) =>
         term.includes('vainilla')
-          ? [{ name: 'Vela Vainilla Ámbar', status: 'active', available: 4, minPrice: 45000, maxPrice: 52000 }]
+          ? [{ id: '6a0000000000000000000013', name: 'Vela Vainilla Ámbar', status: 'active', available: 4, minPrice: 45000, maxPrice: 52000 }]
           : [],
       ),
     },
     categories: {
-      list: track('categories.list', async () => ({ items: [{ name: 'Velas', status: 'active', productCount: 4 }], total: 1 })),
+      list: track('categories.list', async () => ({ items: [{ id: '6a0000000000000000000014', name: 'Velas', status: 'active', productCount: 4 }], total: 1 })),
     },
     initiatives: {
       list: track('initiatives.list', async () => [
@@ -168,6 +169,7 @@ describe('A4: conteos y listados de pedidos', () => {
     } as unknown as OrderEntity
     const row = toAssistantOrderRow(entity)
     expect(row).toEqual({
+      id: 'x',
       orderNumber: 'ORD-20261114-100001-ABCDEF12', reference: 'ORD-ABCDEF12', createdAt: NOW.toISOString(),
       status: 'paid', paymentStatus: 'paid', fulfillmentStatus: null, total: 1000, itemCount: 3,
     })

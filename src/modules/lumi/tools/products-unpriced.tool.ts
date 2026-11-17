@@ -1,5 +1,6 @@
 import { PERMISSION_REGISTRY } from '../../../common/permissions/registry.js'
 import { TOOL_TEXT_MAX_CHARS, type LumiTool, type LumiToolResult } from './tool.types.js'
+import { compactRefs, entityRef, moduleRef } from '../references/lumi-references.js'
 
 /**
  * «Productos sin precio» (primera capacidad del ciclo completo, fase E): productos cuyo precio de
@@ -38,6 +39,7 @@ export const productsUnpriced: LumiTool<Record<string, never>> = {
     const head = `${total} ${total === 1 ? 'producto no tiene' : 'productos no tienen'} precio:`
     const more = total > items.length ? `\n(Se muestran ${items.length}.)` : ''
     const text = [head, ...lines].join('\n') + more
-    return { text: text.length > TOOL_TEXT_MAX_CHARS ? `${text.slice(0, TOOL_TEXT_MAX_CHARS - 1)}…` : text, rows: total }
+    const references = compactRefs([...items.map((p) => entityRef('product', p.id, p.name)), moduleRef('products', 'Productos')])
+    return { text: text.length > TOOL_TEXT_MAX_CHARS ? `${text.slice(0, TOOL_TEXT_MAX_CHARS - 1)}…` : text, rows: total, references }
   },
 }

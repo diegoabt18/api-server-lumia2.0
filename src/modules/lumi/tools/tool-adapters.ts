@@ -10,6 +10,7 @@ import type { AssistantOrderRow, LumiToolDeps } from './tool.types.js'
 export function toAssistantOrderRow(order: OrderEntity): AssistantOrderRow {
   const created = order.createdAt as unknown
   return {
+    id: order._id ? String(order._id) : null,
     orderNumber: order.orderNumber ?? null,
     reference: order.customerReference ?? order.orderNumber ?? null,
     createdAt: created instanceof Date ? created.toISOString() : typeof created === 'string' ? created : null,
@@ -80,7 +81,7 @@ export function createLumiToolDeps(repos: {
         const [all, counts] = await Promise.all([repos.categories.findAll(), repos.categories.productCountByCategorySlug()])
         const sorted = [...all].sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }))
         return {
-          items: sorted.slice(0, limit).map((c) => ({ name: c.name, status: c.status, productCount: counts.get(c.slug) ?? 0 })),
+          items: sorted.slice(0, limit).map((c) => ({ id: c.id, name: c.name, status: c.status, productCount: counts.get(c.slug) ?? 0 })),
           total: all.length,
         }
       },

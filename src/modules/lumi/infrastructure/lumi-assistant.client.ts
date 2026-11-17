@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { AppError } from '../../../common/errors/app.error.js'
+import { parseLumiReferences, type LumiReference } from '../references/lumi-references.js'
 
 /**
  * Cliente backend-to-backend hacia ia-asistente (Local AI Assistant).
@@ -23,6 +24,8 @@ const chatUpstreamSchema = z.object({
   conversation_id: z.string(),
   model: z.string(),
   response: z.string(),
+  /** Referencias guardadas con la respuesta (versiones anteriores de ia-asistente no la envían). */
+  references: z.unknown().optional(),
 })
 
 const exchangeUpstreamSchema = z.object({ conversation_id: z.string() })
@@ -46,6 +49,7 @@ const messageUpstreamSchema = z.object({
   id: z.number(),
   role: z.string(),
   content: z.string(),
+  references: z.unknown().optional(),
   created_at: z.string(),
 })
 
@@ -61,6 +65,7 @@ export interface LumiChatResult {
   conversationId: string
   model: string
   response: string
+  references: LumiReference[]
 }
 
 export interface LumiUsage {
@@ -83,7 +88,7 @@ export interface LumiConversationDetail {
   title: string
   createdAt: string
   updatedAt: string
-  messages: Array<{ id: number; role: string; content: string; createdAt: string }>
+  messages: Array<{ id: number; role: string; content: string; references: LumiReference[]; createdAt: string }>
 }
 
 /** Convierte un estado HTTP de ia-asistente en un error de la API de Lumi (sin detalles internos). */
@@ -108,6 +113,8 @@ export type LumiStreamEvent =
   | { type: 'tool'; name: string; label: string; rows: number; denied: boolean }
   | { type: 'thinking'; text: string }
   | { type: 'token'; text: string }
+  /** Registros, módulos o fuentes web de la respuesta. Llega antes de `done` y solo si hay alguno. */
+  | { type: 'references'; references: LumiReference[] }
   | { type: 'done'; conversationId: string }
   | { type: 'error'; message: string }
 
@@ -152,6 +159,26 @@ const streamStartSchema = z.object({ conversation_id: z.string() })
 const streamTokenSchema = z.object({ text: z.string() })
 const streamThinkingSchema = z.object({ text: z.string() })
 const streamDoneSchema = z.object({ conversation_id: z.string() })
+
+/**
+ * Referencias que ia-asistente guardó con la respuesta (fuentes web o las que envió el Server) y
+ * devuelve en su evento `done`. Si `references` falta (versión anterior), se usan sus `sources`.
+ */
+export function doneReferences(rawData: string): LumiReference[] {
+  let json: unknown
+  try {
+    json = JSON.parse(rawData)
+  } catch {
+    return []
+  }
+  if (typeof json !== 'object' || json === null) return []
+  const data = json as { references?: unknown; sources?: unknown }
+  if (data.references !== undefined) return parseLumiReferences(data.references)
+  if (!Array.isArray(data.sources)) return []
+  return parseLumiReferences(
+    data.sources.map((s) => (typeof s === 'object' && s !== null ? { type: 'web_source', ...s } : s)),
+  )
+}
 
 /** Separa bloques SSE completos (terminados en línea vacía). Lo incompleto queda en `rest`. */
 export function splitSseBuffer(buffer: string): { blocks: string[]; rest: string } {
@@ -214,17 +241,25 @@ export interface LumiTurnOptions {
   maxTokens?: number
   /** Qué puede hacer el sistema por este usuario (lo escribe el Server según sus permisos). */
   capabilities?: string
+  /** Referencias de los datos que la herramienta leyó para este turno: se guardan con la respuesta. */
+  references?: LumiReference[]
 }
 
 /** Límite del texto de capacidades (el asistente acepta hasta 2000 caracteres). */
 export const LUMI_CAPABILITIES_MAX_CHARS = 2000
 
 /** Solo envía lo que se pidió: sin opciones, el cuerpo es el de siempre. */
-function turnOptionsBody(options: LumiTurnOptions): { think?: true; max_tokens?: number; capabilities?: string } {
+function turnOptionsBody(options: LumiTurnOptions): {
+  think?: true
+  max_tokens?: number
+  capabilities?: string
+  references?: LumiReference[]
+} {
   return {
     ...(options.think ? { think: true as const } : {}),
     ...(options.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
     ...(options.capabilities ? { capabilities: options.capabilities.slice(0, LUMI_CAPABILITIES_MAX_CHARS) } : {}),
+    ...(options.references?.length ? { references: options.references } : {}),
   }
 }
 
@@ -256,20 +291,26 @@ export class LumiAssistantClient {
       conversationId: parsed.conversation_id,
       model: parsed.model,
       response: parsed.response,
+      references: parseLumiReferences(parsed.references),
     }
   }
 
-  /** Guarda un turno que el backend resolvió sin modelo (p. ej. pedidos recientes). */
+  /**
+   * Guarda un turno que el backend resolvió sin modelo (p. ej. pedidos recientes), con las
+   * referencias de sus datos para que el historial las conserve.
+   */
   async recordExchange(
     userRef: string,
     message: string,
     answer: string,
     conversationId?: string,
+    references: LumiReference[] = [],
   ): Promise<{ conversationId: string }> {
     const body = await this.request(userRef, 'POST', '/chat/exchange', {
       message,
       answer,
       conversation_id: conversationId ?? null,
+      ...(references.length ? { references } : {}),
     })
     const parsed = exchangeUpstreamSchema.parse(body)
     return { conversationId: parsed.conversation_id }
@@ -313,6 +354,8 @@ export class LumiAssistantClient {
         id: m.id,
         role: m.role,
         content: m.content,
+        // Mensajes antiguos: sin referencias. Las inválidas se descartan una a una.
+        references: parseLumiReferences(m.references),
         createdAt: m.created_at,
       })),
     }
@@ -426,7 +469,13 @@ export class LumiAssistantClient {
           const parsed = parseSseBlock(block)
           if (!parsed) continue
           const event = toLumiStreamEvent(parsed.event, parsed.data)
-          if (event) yield event
+          if (!event) continue
+          if (event.type === 'done') {
+            // Las referencias van antes del cierre: el chat las asocia al mensaje que termina.
+            const references = doneReferences(parsed.data)
+            if (references.length) yield { type: 'references', references }
+          }
+          yield event
         }
       }
     } finally {

@@ -16,9 +16,9 @@ const ALL: PermissionId[] = [P.LUMI_USE, P.ORDERS_READ, P.PRODUCTS_READ, P.INVEN
 const BUILTIN = new Set(LUMI_TOOLS.filter((t) => t.enabledByDefault).map((t) => t.name))
 
 function deps(
-  unpriced = { items: [{ name: 'Vela Sin Precio', status: 'active', variantCount: 1 }, { name: 'Kit Nuevo', status: 'draft', variantCount: 0 }], total: 2 },
-  taxed: { items: Array<{ name: string; status: string; taxRate: number }>; total: number } = {
-    items: [{ name: 'Difusor Exento', status: 'inactive', taxRate: 0 }, { name: 'Vela Ámbar', status: 'active', taxRate: 19 }],
+  unpriced = { items: [{ id: '6a0000000000000000000001', name: 'Vela Sin Precio', status: 'active', variantCount: 1 }, { id: '6a0000000000000000000002', name: 'Kit Nuevo', status: 'draft', variantCount: 0 }], total: 2 },
+  taxed: { items: Array<{ id: string; name: string; status: string; taxRate: number }>; total: number } = {
+    items: [{ id: '6a0000000000000000000003', name: 'Difusor Exento', status: 'inactive', taxRate: 0 }, { id: '6a0000000000000000000004', name: 'Vela Ámbar', status: 'active', taxRate: 19 }],
     total: 2,
   },
 ): LumiToolDeps {
@@ -29,15 +29,15 @@ function deps(
       lowStock: none,
       search: none,
       unpriced: async () => unpriced,
-      untaxed: async () => ({ items: [{ name: 'Vela Sin IVA', status: 'active' }, { name: 'Kit Viejo', status: 'inactive' }], total: 2 }),
+      untaxed: async () => ({ items: [{ id: '6a0000000000000000000005', name: 'Vela Sin IVA', status: 'active' }, { id: '6a0000000000000000000006', name: 'Kit Viejo', status: 'inactive' }], total: 2 }),
       taxed: async () => taxed,
     },
     categories: {
       list: async () => ({
         items: [
-          { name: 'Aromas', status: 'active', productCount: 12 },
-          { name: 'Velas', status: 'active', productCount: 1 },
-          { name: 'Temporada', status: 'inactive', productCount: 0 },
+          { id: '6a0000000000000000000007', name: 'Aromas', status: 'active', productCount: 12 },
+          { id: '6a0000000000000000000008', name: 'Velas', status: 'active', productCount: 1 },
+          { id: '6a0000000000000000000009', name: 'Temporada', status: 'inactive', productCount: 0 },
         ],
         total: 3,
       }),
@@ -67,7 +67,7 @@ describe('products.unpriced (primer caso real)', () => {
     expect(matchTool('busca la vela de lavanda', ALL, ctx)?.tool.name).not.toBe('products.unpriced')
     const match = matchTool('productos sin precio', ALL, ctx)!
     const result = await runTool(match, { userId: 'u1', permissionKeys: ALL, now: NOW, timezone: TZ, deps: deps() })
-    expect(result).toEqual({ text: '2 productos no tienen precio:\n- Vela Sin Precio\n- Kit Nuevo (sin variantes, draft)', rows: 2 })
+    expect(result).toMatchObject({ text: '2 productos no tienen precio:\n- Vela Sin Precio\n- Kit Nuevo (sin variantes, draft)', rows: 2 })
     const empty = await runTool(match, { userId: 'u1', permissionKeys: ALL, now: NOW, timezone: TZ, deps: deps({ items: [], total: 0 }) })
     expect(empty.rows).toBe(0)
   })
@@ -98,7 +98,7 @@ describe('products.untaxed (capacidad detectada en producción)', () => {
   it('lista los productos sin IVA e indica los inactivos; sin products.read no lee nada', async () => {
     const match = matchTool('productos sin iva', ALL, ctx)!
     const result = await runTool(match, { userId: 'u1', permissionKeys: ALL, now: NOW, timezone: TZ, deps: deps() })
-    expect(result).toEqual({ text: '2 productos no tienen el IVA configurado:\n- Vela Sin IVA\n- Kit Viejo (inactivo)', rows: 2 })
+    expect(result).toMatchObject({ text: '2 productos no tienen el IVA configurado:\n- Vela Sin IVA\n- Kit Viejo (inactivo)', rows: 2 })
     expect(matchTool('productos sin iva', [P.LUMI_USE], ctx)).toMatchObject({ denied: true })
   })
 
@@ -133,7 +133,7 @@ describe('products.taxed (capacidad detectada en producción)', () => {
   it('lista los productos con su tasa (0 % incluido) y responde el texto pedido si no hay ninguno', async () => {
     const match = matchTool('ver productos con iva', ALL, ctx)!
     const result = await runTool(match, { userId: 'u1', permissionKeys: ALL, now: NOW, timezone: TZ, deps: deps() })
-    expect(result).toEqual({ text: '2 productos tienen el IVA configurado:\n- Difusor Exento (0 %, inactivo)\n- Vela Ámbar (19 %)', rows: 2 })
+    expect(result).toMatchObject({ text: '2 productos tienen el IVA configurado:\n- Difusor Exento (0 %, inactivo)\n- Vela Ámbar (19 %)', rows: 2 })
     const empty = await runTool(match, { userId: 'u1', permissionKeys: ALL, now: NOW, timezone: TZ, deps: deps(undefined, { items: [], total: 0 }) })
     expect(empty).toEqual({ text: 'No hay productos con IVA configurado.', rows: 0 })
     expect(matchTool('ver productos con iva', [P.LUMI_USE], ctx)).toMatchObject({ denied: true })
@@ -169,10 +169,17 @@ describe('categories.list (capacidad detectada en producción)', () => {
   it('lista las categorías con su número de productos y marca las inactivas; sin categories.read no lee nada', async () => {
     const match = matchTool('que categorias tengo', KEYS, ctx)!
     const result = await runTool(match, { userId: 'u1', permissionKeys: KEYS, now: NOW, timezone: TZ, deps: deps() })
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       text: 'Tienes 3 categorías:\n- Aromas (12 productos)\n- Velas (1 producto)\n- Temporada (0 productos, inactiva)',
       rows: 3,
     })
+    // Una referencia por categoría (id real, misma etiqueta que su línea) y el acceso al módulo.
+    expect(result.references?.map((r) => (r.type === 'admin_entity' ? `${r.entity}:${r.label}` : r.type))).toEqual([
+      'category:Aromas',
+      'category:Velas',
+      'category:Temporada',
+      'admin_module',
+    ])
     const denied = matchTool('que categorias tengo', ALL, ctx)!
     expect(denied).toMatchObject({ denied: true })
     expect((await runTool(denied, { userId: 'u1', permissionKeys: ALL, now: NOW, timezone: TZ, deps: deps() })).text).toBe(

@@ -1,5 +1,6 @@
 import { PERMISSION_REGISTRY } from '../../../common/permissions/registry.js'
 import { TOOL_TEXT_MAX_CHARS, type LumiTool, type LumiToolResult } from './tool.types.js'
+import { compactRefs, entityRef, moduleRef } from '../references/lumi-references.js'
 
 /**
  * «Categorías de la tienda»: todas las categorías en orden alfabético, con su número de productos
@@ -42,6 +43,7 @@ export const categoriesList: LumiTool<Record<string, never>> = {
     const head = total === 1 ? 'Tienes 1 categoría:' : `Tienes ${total} categorías:`
     const more = total > items.length ? `\n(Se muestran ${items.length}.)` : ''
     const text = [head, ...lines].join('\n') + more
-    return { text: text.length > TOOL_TEXT_MAX_CHARS ? `${text.slice(0, TOOL_TEXT_MAX_CHARS - 1)}…` : text, rows: total }
+    const references = compactRefs([...items.map((c) => entityRef('category', c.id, c.name)), moduleRef('categories', 'Categorías')])
+    return { text: text.length > TOOL_TEXT_MAX_CHARS ? `${text.slice(0, TOOL_TEXT_MAX_CHARS - 1)}…` : text, rows: total, references }
   },
 }

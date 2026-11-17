@@ -12,6 +12,7 @@ import { productsUnpriced } from './products-unpriced.tool.js'
 import { productsUntaxed } from './products-untaxed.tool.js'
 import { productsTaxed } from './products-taxed.tool.js'
 import { categoriesList } from './categories-list.tool.js'
+import { compactRefs, entityRef, moduleRef, type LumiReference } from '../references/lumi-references.js'
 
 /* ───────────────────────── Formato ───────────────────────── */
 
@@ -42,8 +43,28 @@ function clipText(text: string): string {
   return text.length > TOOL_TEXT_MAX_CHARS ? `${text.slice(0, TOOL_TEXT_MAX_CHARS - 1)}…` : text
 }
 
-function result(text: string, rows: number, entity?: LumiToolResult['entity']): LumiToolResult {
-  return entity ? { text: clipText(text), rows, entity } : { text: clipText(text), rows }
+function result(
+  text: string,
+  rows: number,
+  entity?: LumiToolResult['entity'],
+  references: Array<LumiReference | null> = [],
+): LumiToolResult {
+  const refs = compactRefs(references)
+  return {
+    text: clipText(text),
+    rows,
+    ...(entity ? { entity } : {}),
+    ...(refs.length ? { references: refs } : {}),
+  }
+}
+
+/** Referencia del pedido con la misma etiqueta que muestra el texto (así el chat la ubica en su línea). */
+function orderRef(row: AssistantOrderRow): LumiReference | null {
+  return entityRef('order', row.id, orderLabel(row))
+}
+
+function orderLabel(row: AssistantOrderRow): string {
+  return row.reference ?? row.orderNumber ?? '—'
 }
 
 /** Texto que propone el modelo: se acepta como cadena corta, nunca como otro tipo. */
@@ -57,7 +78,7 @@ const PERIOD_VALUES = ['today', 'yesterday', 'this_week', 'last_week', 'this_mon
 const STATUS_VALUES = ['pending', 'paid', 'shipped', 'delivered', 'cancelled', 'expired', 'open'] as const
 
 function orderLine(row: AssistantOrderRow, index?: number): string {
-  const ref = row.reference ?? row.orderNumber ?? '—'
+  const ref = orderLabel(row)
   const prefix = index === undefined ? '' : `${index + 1}. `
   const items = row.itemCount === 1 ? '1 artículo' : `${row.itemCount} artículos`
   return `${prefix}${ref} · ${formatDay(row.createdAt)} · ${statusLabel(row.status)} · pago: ${row.paymentStatus ?? '—'} · ${items} · total ${formatMoney(row.total)}`
@@ -163,9 +184,15 @@ const ordersLookup: LumiTool<{ term: string }> = {
         ].join('\n'),
         1,
         { kind: 'order', label: o.reference ?? o.orderNumber ?? input.term.toUpperCase() },
+        [orderRef(o)],
       )
     }
-    return result([`Encontré ${rows.length} pedidos que empiezan por «${input.term.toUpperCase()}»:`, ...rows.map((r, i) => orderLine(r, i))].join('\n'), rows.length)
+    return result(
+      [`Encontré ${rows.length} pedidos que empiezan por «${input.term.toUpperCase()}»:`, ...rows.map((r, i) => orderLine(r, i))].join('\n'),
+      rows.length,
+      undefined,
+      [...rows.map(orderRef), moduleRef('orders', 'Pedidos')],
+    )
   },
 }
 
@@ -209,7 +236,7 @@ const ordersCount: LumiTool<{ statuses: string[] | null; range: TimeRange | null
         input.statuses.length === 1
           ? `Pedidos ${statusLabel(input.statuses[0]!)}${when}: ${total}.`
           : `Pedidos abiertos${when}: ${total}.`
-      return result(input.statuses.length === 1 ? head : [head, ...lines].join('\n'), 1)
+      return result(input.statuses.length === 1 ? head : [head, ...lines].join('\n'), 1, undefined, [moduleRef('orders', 'Pedidos')])
     }
     const total = Object.values(counts).reduce((a, b) => a + b, 0)
     const order = ['pending', 'paid', 'shipped', 'delivered', 'cancelled', 'expired']
@@ -217,7 +244,7 @@ const ordersCount: LumiTool<{ statuses: string[] | null; range: TimeRange | null
     const other = Object.keys(counts)
       .filter((s) => !order.includes(s))
       .map((s) => `- ${s}: ${counts[s]}`)
-    return result([`Pedidos${when || ' en total'}: ${total}.`, ...known, ...other].join('\n'), 1)
+    return result([`Pedidos${when || ' en total'}: ${total}.`, ...known, ...other].join('\n'), 1, undefined, [moduleRef('orders', 'Pedidos')])
   },
 }
 
@@ -252,7 +279,10 @@ const ordersRecent: LumiTool<{ limit: number; customerFilter: boolean }> = {
     const note = input.customerFilter ? '\n\nNota: no filtro pedidos por cliente; esta es la lista general.' : ''
     if (rows.length === 0) return result(`No hay pedidos registrados.${note}`, 0)
     const head = rows.length < input.limit ? `Pedidos (${rows.length}):` : `Últimos ${rows.length} pedidos:`
-    return result([head, ...rows.map((r, i) => orderLine(r, i))].join('\n') + note, rows.length)
+    return result([head, ...rows.map((r, i) => orderLine(r, i))].join('\n') + note, rows.length, undefined, [
+      ...rows.map(orderRef),
+      moduleRef('orders', 'Pedidos'),
+    ])
   },
 }
 
@@ -305,7 +335,7 @@ const salesSummary: LumiTool<{ range: TimeRange; top: boolean }> = {
         lines.push('No hay productos vendidos en ese periodo.')
       }
     }
-    return result(lines.join('\n'), 1)
+    return result(lines.join('\n'), 1, undefined, [{ type: 'report', report: 'sales', label: 'Analítica de ventas' }])
   },
 }
 
@@ -353,7 +383,10 @@ const productsSearch: LumiTool<{ term: string }> = {
       return `- ${p.name}${state}: ${stock}${price}`
     })
     const only = rows.length === 1 ? { kind: 'product' as const, label: rows[0]!.name } : undefined
-    return result([`Productos que coinciden con «${input.term}»:`, ...lines].join('\n'), rows.length, only)
+    return result([`Productos que coinciden con «${input.term}»:`, ...lines].join('\n'), rows.length, only, [
+      ...rows.map((p) => entityRef('product', p.id, p.name)),
+      moduleRef('products', 'Productos'),
+    ])
   },
 }
 
@@ -385,7 +418,11 @@ const inventoryLow: LumiTool<Record<string, never>> = {
     if (out.length) lines.push(`Sin stock (${out.length}):`, ...out.map((r) => `- ${r.name}`))
     if (low.length) lines.push(`Stock bajo (${low.length}):`, ...low.map((r) => `- ${r.name}: ${r.available} disponibles`))
     if (rows.length >= 15) lines.push('(Se muestran los 15 más urgentes.)')
-    return result(lines.join('\n'), rows.length)
+    // Sin stock primero, igual que en el texto: cada referencia queda en el orden de su línea.
+    return result(lines.join('\n'), rows.length, undefined, [
+      ...[...out, ...low].map((r) => entityRef('product', r.id, r.name)),
+      moduleRef('inventory', 'Inventario'),
+    ])
   },
 }
 
@@ -422,7 +459,7 @@ const initiativesList: LumiTool<{ urgentOnly: boolean }> = {
       : `Tienes ${open.length} ${open.length === 1 ? 'iniciativa abierta' : 'iniciativas abiertas'} (${urgent} urgentes):`
     const lines = shown.slice(0, 15).map((i) => `- [${PRIORITY_LABEL[i.priority] ?? i.priority}] ${i.title}: ${i.detail}`)
     if (shown.length > 15) lines.push(`(y ${shown.length - 15} más en la página Iniciativas)`)
-    return result([head, ...lines].join('\n'), shown.length)
+    return result([head, ...lines].join('\n'), shown.length, undefined, [moduleRef('initiatives', 'Iniciativas')])
   },
 }
 
@@ -451,7 +488,12 @@ const notificationsUnread: LumiTool<Record<string, never>> = {
     if (count === 0) return result('No tienes notificaciones sin leer.', 0)
     const lines = recent.map((n) => `- ${formatDay(n.createdAt)} · ${n.title}`)
     const more = count > recent.length ? `\n(y ${count - recent.length} más en el centro de notificaciones)` : ''
-    return result([`Tienes ${count} ${count === 1 ? 'notificación sin leer' : 'notificaciones sin leer'}:`, ...lines].join('\n') + more, count)
+    return result(
+      [`Tienes ${count} ${count === 1 ? 'notificación sin leer' : 'notificaciones sin leer'}:`, ...lines].join('\n') + more,
+      count,
+      undefined,
+      [moduleRef('notifications', 'Notificaciones')],
+    )
   },
 }
 

@@ -1,5 +1,6 @@
 import type { PermissionId } from '../../../common/permissions/registry.js'
 import type { LumiInitiative } from '../initiatives/domain/initiative.types.js'
+import type { LumiReference } from '../references/lumi-references.js'
 
 /**
  * Catálogo de herramientas de Lumi. Una herramienta es una consulta de SOLO LECTURA que el Server
@@ -28,6 +29,8 @@ export type LumiToolName =
 
 /** Fila de pedido sin datos del cliente. */
 export interface AssistantOrderRow {
+  /** Id del pedido, para abrirlo desde el chat. Nunca se muestra en el texto. */
+  id: string | null
   orderNumber: string | null
   reference: string | null
   createdAt: string | null
@@ -39,6 +42,7 @@ export interface AssistantOrderRow {
 }
 
 export interface AssistantProductRow {
+  id: string
   name: string
   status: string
   available: number
@@ -68,18 +72,18 @@ export interface LumiToolDeps {
     salesSummary(from: Date, to: Date): Promise<AssistantSalesSummary>
   }
   products: {
-    lowStock(threshold: number, limit: number): Promise<Array<{ name: string; available: number }>>
+    lowStock(threshold: number, limit: number): Promise<Array<{ id: string | null; name: string; available: number }>>
     /** Productos sin ninguna variante con precio mayor que cero (fase E). */
-    unpriced(limit: number): Promise<{ items: Array<{ name: string; status: string; variantCount: number }>; total: number }>
+    unpriced(limit: number): Promise<{ items: Array<{ id: string; name: string; status: string; variantCount: number }>; total: number }>
     /** Productos sin IVA configurado (tax_rate ausente o no numérico). */
-    untaxed(limit: number): Promise<{ items: Array<{ name: string; status: string }>; total: number }>
+    untaxed(limit: number): Promise<{ items: Array<{ id: string; name: string; status: string }>; total: number }>
     /** Productos con IVA configurado (tax_rate numérico, 0 % incluido), en orden alfabético. */
-    taxed(limit: number): Promise<{ items: Array<{ name: string; status: string; taxRate: number }>; total: number }>
+    taxed(limit: number): Promise<{ items: Array<{ id: string; name: string; status: string; taxRate: number }>; total: number }>
     search(term: string, limit: number): Promise<AssistantProductRow[]>
   }
   categories: {
     /** Categorías en orden alfabético (activas e inactivas) con su número de productos. */
-    list(limit: number): Promise<{ items: Array<{ name: string; status: string; productCount: number }>; total: number }>
+    list(limit: number): Promise<{ items: Array<{ id: string; name: string; status: string; productCount: number }>; total: number }>
   }
   initiatives: {
     list(userId: string, keys: readonly PermissionId[], limit: number): Promise<LumiInitiative[]>
@@ -112,6 +116,11 @@ export interface LumiToolResult {
   rows: number
   /** Si la respuesta trata de una sola entidad, queda como contexto del turno siguiente. */
   entity?: LumiEntityRef
+  /**
+   * Registros y módulos de los que salen los datos, con sus ids reales. El chat los muestra como
+   * accesos (icono de ojo, enlace al módulo) y se guardan con el mensaje en el historial.
+   */
+  references?: LumiReference[]
 }
 
 /**

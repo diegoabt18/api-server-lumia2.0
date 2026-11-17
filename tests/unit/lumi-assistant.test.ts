@@ -38,7 +38,7 @@ describe('LumiAssistantClient', () => {
     )
     const result = await clientWith(fetchImpl as unknown as typeof fetch).chat(USER, 'hola')
 
-    expect(result).toEqual({ conversationId: 'c-1', model: 'qwen', response: 'Hola' })
+    expect(result).toEqual({ conversationId: 'c-1', model: 'qwen', response: 'Hola', references: [] })
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe(`${BASE}/api/v1/chat`)
     const headers = init.headers as Record<string, string>
