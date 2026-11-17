@@ -90,7 +90,7 @@ export async function registerLumiCapabilityRoutes(api: FastifyInstance, ctx: Ap
     const { capability, recentRequests } = await capabilities.get(id)
     if (capability.status === 'duplicate') throw AppError.conflict('La capacidad está fusionada con otra')
     const plan = buildSpecDraftRequest(capability, recentRequests.map((r) => r.message), LUMI_TOOLS)
-    const generated = await assistant.generate(userIdOf(request), plan.instructions, plan.input, plan.maxTokens)
+    const generated = await assistant.generate(userIdOf(request), plan.instructions, plan.input, plan.maxTokens, plan.temperature)
     return { spec: parseSpecDraft(generated.text, LUMI_TOOLS), model: generated.model }
   })
 

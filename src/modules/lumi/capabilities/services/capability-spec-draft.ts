@@ -18,6 +18,8 @@ export interface SpecDraftRequest {
   instructions: string
   input: string
   maxTokens: number
+  /** Baja: es una salida estructurada, no texto creativo. */
+  temperature: number
 }
 
 /** Mismos límites que capabilitySpecSchema. */
@@ -49,7 +51,27 @@ const READ_PORTS = [
   'products.unpriced(limit): productos sin ninguna variante con precio',
   'products.untaxed(limit): productos sin IVA configurado',
   'initiatives.list(userId, permisos, limit): iniciativas de Lumi del usuario',
-  'notifications.countUnread(userId) y notifications.recentUnread(userId, limit): notificaciones sin leer',
+  'notifications.countUnread(userId): notificaciones sin leer del usuario',
+  'notifications.recentUnread(userId, limit): últimas notificaciones sin leer del usuario',
+] as const
+
+/** Nombre del método («orders.recent») → firma tal como la ve quien programa. */
+const READ_PORT_SIGNATURES: ReadonlyMap<string, string> = new Map(
+  READ_PORTS.map((port) => {
+    const signature = port.slice(0, port.indexOf(':'))
+    return [signature.slice(0, signature.indexOf('(')), signature]
+  }),
+)
+
+/**
+ * Repositorios del Server donde se añadiría un método de lectura que falta. Solo orienta al modelo
+ * («Falta: … en category.repository»); no se valida porque el texto lo revisa una persona.
+ */
+const REPOSITORIES = [
+  'catalog: category.repository (categorías), subcategory.repository, product.repository, inventory.repository, promotion.repository',
+  'sales: order.repository (pedidos), review.repository (reseñas), question.repository (preguntas)',
+  'production: material.repository, recipe.repository, supplier.repository',
+  'payments: payment.repository',
 ] as const
 
 /** Permisos de lectura existentes: el borrador solo puede proponer uno de estos. */
@@ -60,14 +82,27 @@ const INSTRUCTIONS = [
   'Responde ÚNICAMENTE con un objeto JSON válido, sin Markdown ni texto alrededor, con estas claves de tipo cadena y en español:',
   'expectedResult: qué debe responder Lumi y con qué datos, en una o dos frases.',
   'parameters: datos que se extraen de la frase del usuario, con un ejemplo; vacío si no necesita ninguno.',
-  'rules: criterios exactos (filtros, orden, límite de filas, qué hacer si no hay resultados). Nunca datos personales de clientes (nombre, correo, teléfono, dirección).',
+  'rules: criterios exactos (orden, límite de filas, qué hacer si no hay resultados). No conviertas palabras de la frase en filtros. Nunca datos personales de clientes.',
   'proposedPermission: exactamente uno de los permisos de la lista dada.',
-  'dataSource: el método de lectura de la lista que sirve; si ninguno basta, empieza por «Falta:» y describe el método de lectura que habría que añadir y en qué repositorio.',
+  'dataSourceMethod: el nombre exacto (p. ej. «orders.recent») del único método de lectura de la lista que devuelve esos datos, o cadena vacía si ninguno los devuelve. No elijas un método de otro tema.',
+  'missingMethod: solo si dataSourceMethod está vacío, el método que habría que añadir (nombre, parámetros, qué devuelve) y en qué repositorio de la lista.',
   'relatedTool: exactamente el nombre de la herramienta más parecida del catálogo, o cadena vacía.',
   'notes: dudas, ambigüedades y casos límite para quien la programe.',
-  'No inventes campos, colecciones, permisos ni herramientas que no aparezcan en el contexto. Si algo no se puede saber, dilo en notes.',
+  'No inventes campos, métodos, permisos ni herramientas que no aparezcan en el contexto. Si algo no se puede saber, dilo en notes.',
   'Si el equipo ya escribió un campo, respétalo y complétalo sin contradecirlo.',
 ].join('\n')
+
+/** Ejemplo de salida (otro tema, a propósito) para fijar el formato en modelos pequeños. */
+const EXAMPLE_OUTPUT = JSON.stringify({
+  expectedResult: 'Lista de los proveedores activos con nombre y número de materiales que suministran.',
+  parameters: '',
+  rules: 'Orden alfabético. Máximo 30. Si no hay, responder «No hay proveedores activos».',
+  proposedPermission: 'suppliers.read',
+  dataSourceMethod: '',
+  missingMethod: 'suppliers.active(limit): proveedores activos con nombre y número de materiales, en supplier.repository',
+  relatedTool: '',
+  notes: 'Confirmar si se incluyen los proveedores pausados.',
+})
 
 const oneLine = (v: string) => v.replace(/\s+/g, ' ').trim()
 
@@ -97,13 +132,37 @@ export function buildSpecDraftRequest(
     'Catálogo de herramientas existentes (nombre · módulo · permiso · qué hace):',
     ...tools.map((t) => `- ${t.name} · ${t.selector?.module ?? 'sin módulo'} · ${t.permission ?? 'sin permiso'} · ${t.capability}`),
     '',
-    'Métodos de lectura disponibles:',
+    'Métodos de lectura disponibles (los únicos que existen):',
     ...READ_PORTS.map((p) => `- ${p}`),
     '',
+    'Repositorios donde se puede añadir un método:',
+    ...REPOSITORIES.map((r) => `- ${r}`),
+    '',
     `Permisos de lectura existentes: ${READ_PERMISSIONS.join(', ')}`,
+    '',
+    'Ejemplo del formato de salida (para otra capacidad):',
+    EXAMPLE_OUTPUT,
   )
 
-  return { instructions: INSTRUCTIONS, input: lines.join('\n').slice(0, INPUT_MAX_CHARS), maxTokens: 1000 }
+  return { instructions: INSTRUCTIONS, input: lines.join('\n').slice(0, INPUT_MAX_CHARS), maxTokens: 1000, temperature: 0.2 }
+}
+
+/**
+ * «Origen de los datos» lo compone el Server: un método que existe (con su firma) o «Falta: …».
+ * Así no llega al formulario una mezcla de métodos reales e inventados. Si el modelo devolvió el
+ * formato antiguo (`dataSource` libre), se acepta solo si empieza por «Falta:» o nombra un método real.
+ */
+function composeDataSource(json: Record<string, unknown>): string {
+  const method = cleanField(json.dataSourceMethod, 100).replace(/[^a-z.]/gi, '')
+  const signature = [...READ_PORT_SIGNATURES].find(([name]) => name.toLowerCase() === method.toLowerCase())?.[1]
+  if (signature) return signature
+
+  const missing = cleanField(json.missingMethod, FIELD_MAX.dataSource).replace(/^falta:\s*/i, '')
+  if (missing) return `Falta: ${missing}`.slice(0, FIELD_MAX.dataSource)
+
+  const legacy = cleanField(json.dataSource, FIELD_MAX.dataSource)
+  if (/^falta:/i.test(legacy)) return legacy
+  return READ_PORT_SIGNATURES.get(legacy.replace(/\(.*$/s, '').trim()) ?? ''
 }
 
 /** Texto multilínea sin caracteres de control (salvo saltos de línea), recortado a su límite. */
@@ -147,6 +206,7 @@ export function parseSpecDraft(raw: string, tools: readonly Pick<DraftTool, 'nam
   if (!json) throw new AppError(502, 'La IA no devolvió una especificación válida. Inténtalo de nuevo.', 'LUMI_INVALID_SUGGESTION')
 
   const spec = Object.fromEntries(FIELDS.map((key) => [key, cleanField(json[key], FIELD_MAX[key])])) as CapabilitySpec
+  spec.dataSource = composeDataSource(json)
 
   const permission = spec.proposedPermission.toLowerCase().replace(/[^a-z.]/g, '')
   spec.proposedPermission = READ_PERMISSIONS.includes(permission) ? permission : ''

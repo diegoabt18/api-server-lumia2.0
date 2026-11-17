@@ -60,6 +60,32 @@ describe('parseSpecDraft', () => {
     expect(READ_PERMISSIONS).not.toContain('orders.update')
   })
 
+  it('composes the data source from an existing read method or a «Falta:» proposal', () => {
+    const existing = parseSpecDraft(JSON.stringify({ expectedResult: 'x', dataSourceMethod: 'products.search' }), LUMI_TOOLS)
+    expect(existing.dataSource).toBe('products.search(term, limit)')
+
+    const missing = parseSpecDraft(
+      JSON.stringify({
+        expectedResult: 'Lista de categorías.',
+        dataSourceMethod: 'products.list',
+        missingMethod: 'categories.list(limit): categorías activas, en category.repository',
+      }),
+      LUMI_TOOLS,
+    )
+    expect(missing.dataSource).toBe('Falta: categories.list(limit): categorías activas, en category.repository')
+  })
+
+  it('drops a free-text data source that mixes real and invented methods', () => {
+    const spec = parseSpecDraft(
+      JSON.stringify({
+        expectedResult: 'Lista de categorías.',
+        dataSource: 'Método de lectura: orders.findByReference (no es necesario). Alternativa: products.list',
+      }),
+      LUMI_TOOLS,
+    )
+    expect(spec.dataSource).toBe('')
+  })
+
   it('rejects output without JSON or with every field empty', () => {
     expect(() => parseSpecDraft('No sé.', LUMI_TOOLS)).toThrow(AppError)
     expect(() => parseSpecDraft('{"expectedResult": "", "relatedTool": "nope"}', LUMI_TOOLS)).toThrow(AppError)

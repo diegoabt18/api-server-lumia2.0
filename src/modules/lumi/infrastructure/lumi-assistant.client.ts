@@ -375,11 +375,12 @@ export class LumiAssistantClient {
     instructions: string,
     text: string,
     maxTokens: number,
+    temperature = 0.4,
   ): Promise<{ model: string; text: string }> {
     const body = await this.request(userRef, 'POST', '/generate', {
       instructions,
       text,
-      temperature: 0.4,
+      temperature,
       max_tokens: maxTokens,
     })
     return generateUpstreamSchema.parse(body)
