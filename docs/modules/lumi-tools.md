@@ -266,3 +266,12 @@ Implementa la capacidad que se detectó en producción desde el chat («ver los 
 - Lista los productos cuyo `tax_rate` falta o no es un número. Un 0 % está configurado y no aparece.
 - Solo lectura; exige `products.read`.
 - Nace deshabilitada.
+
+### `products.taxed` (productos con IVA configurado)
+
+Implementa la capacidad «ver productos con iva» (`capabilityKey` `none-confi-impuesto-tieie-957b9d`, asignada por el Capability Manager).
+- Inversa de `products.untaxed`: lista los productos cuyo `tax_rate` es un número (0 % incluido) con su tasa, en orden alfabético, hasta 100 (el texto se recorta en `TOOL_TEXT_MAX_CHARS`).
+- Sin resultados responde «No hay productos con IVA configurado.».
+- El IVA se define por producto, no por variante: no hay casos parciales entre variantes. No filtra por precio: tener IVA no depende de tener precio.
+- No reconoce negaciones («sin IVA», «no tienen IVA», que son de `products.untaxed`) ni consultas de precio de un producto («precio con IVA de…»).
+- Solo lectura; exige `products.read`. Nace deshabilitada.

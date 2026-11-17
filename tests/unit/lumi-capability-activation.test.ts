@@ -15,7 +15,13 @@ const TZ = 'America/Bogota'
 const ALL: PermissionId[] = [P.LUMI_USE, P.ORDERS_READ, P.PRODUCTS_READ, P.INVENTORY_READ, P.ANALYTICS_READ]
 const BUILTIN = new Set(LUMI_TOOLS.filter((t) => t.enabledByDefault).map((t) => t.name))
 
-function deps(unpriced = { items: [{ name: 'Vela Sin Precio', status: 'active', variantCount: 1 }, { name: 'Kit Nuevo', status: 'draft', variantCount: 0 }], total: 2 }): LumiToolDeps {
+function deps(
+  unpriced = { items: [{ name: 'Vela Sin Precio', status: 'active', variantCount: 1 }, { name: 'Kit Nuevo', status: 'draft', variantCount: 0 }], total: 2 },
+  taxed: { items: Array<{ name: string; status: string; taxRate: number }>; total: number } = {
+    items: [{ name: 'Difusor Exento', status: 'inactive', taxRate: 0 }, { name: 'Vela Ámbar', status: 'active', taxRate: 19 }],
+    total: 2,
+  },
+): LumiToolDeps {
   const none = async () => []
   return {
     orders: { recent: none, findByReference: none, countByStatus: async () => ({}), salesSummary: async () => ({ orders: 0, soldOrders: 0, revenue: 0, refunds: 0, topProducts: [] }) },
@@ -24,6 +30,7 @@ function deps(unpriced = { items: [{ name: 'Vela Sin Precio', status: 'active', 
       search: none,
       unpriced: async () => unpriced,
       untaxed: async () => ({ items: [{ name: 'Vela Sin IVA', status: 'active' }, { name: 'Kit Viejo', status: 'inactive' }], total: 2 }),
+      taxed: async () => taxed,
     },
     categories: {
       list: async () => ({
@@ -100,6 +107,43 @@ describe('products.untaxed (capacidad detectada en producción)', () => {
     expect(tool.enabledByDefault).toBeUndefined()
     expect(tool.capabilityKey).toBe('none-confi-impuesto-sin-f4ef0d')
     expect(matchTool('productos sin iva', ALL, { ...ctx, enabled: BUILTIN })?.tool.name).not.toBe('products.untaxed')
+  })
+})
+
+describe('products.taxed (capacidad detectada en producción)', () => {
+  const ctx = { now: NOW, timezone: TZ }
+
+  it('reconoce las frases que se pidieron y no se cruza con «sin IVA» ni con consultas de precio', () => {
+    for (const text of [
+      'ver productos con iva',
+      'productos que tienen iva configurado',
+      '¿Qué artículos tienen IVA?',
+      'productos con el impuesto definido',
+    ]) {
+      expect(matchTool(text, ALL, ctx)?.tool.name, text).toBe('products.taxed')
+    }
+    for (const text of ['productos sin iva', '¿qué productos no tienen el IVA?', 'productos con iva sin configurar']) {
+      expect(matchTool(text, ALL, ctx)?.tool.name, text).toBe('products.untaxed')
+    }
+    for (const text of ['precio con iva del producto vela', 'cuánto cuestan los productos con iva', '¿cuánto IVA pagamos este mes?']) {
+      expect(matchTool(text, ALL, ctx)?.tool.name, text).not.toBe('products.taxed')
+    }
+  })
+
+  it('lista los productos con su tasa (0 % incluido) y responde el texto pedido si no hay ninguno', async () => {
+    const match = matchTool('ver productos con iva', ALL, ctx)!
+    const result = await runTool(match, { userId: 'u1', permissionKeys: ALL, now: NOW, timezone: TZ, deps: deps() })
+    expect(result).toEqual({ text: '2 productos tienen el IVA configurado:\n- Difusor Exento (0 %, inactivo)\n- Vela Ámbar (19 %)', rows: 2 })
+    const empty = await runTool(match, { userId: 'u1', permissionKeys: ALL, now: NOW, timezone: TZ, deps: deps(undefined, { items: [], total: 0 }) })
+    expect(empty).toEqual({ text: 'No hay productos con IVA configurado.', rows: 0 })
+    expect(matchTool('ver productos con iva', [P.LUMI_USE], ctx)).toMatchObject({ denied: true })
+  })
+
+  it('nace deshabilitada y enlaza con la clave de la capacidad detectada', () => {
+    const tool = LUMI_TOOLS.find((t) => t.name === 'products.taxed')!
+    expect(tool.enabledByDefault).toBeUndefined()
+    expect(tool.capabilityKey).toBe('none-confi-impuesto-tieie-957b9d')
+    expect(matchTool('ver productos con iva', ALL, { ...ctx, enabled: BUILTIN })?.tool.name).not.toBe('products.taxed')
   })
 })
 

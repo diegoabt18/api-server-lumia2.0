@@ -100,6 +100,14 @@ describeIfDb('Lumi fase E: activación (MongoDB real)', () => {
     expect(items.map((i) => i.name)).toEqual(['Difusor Texto', 'Jabón Sin Campo', 'Kit Nuevo'])
     expect(items[0]).toMatchObject({ status: 'inactive' })
     expect((await repo.findUntaxed(1)).items).toHaveLength(1)
+    // findTaxed es la inversa: solo tasas numéricas, 0 % incluido, en orden alfabético.
+    const taxed = await repo.findTaxed(10)
+    expect(taxed.total).toBe(2)
+    expect(taxed.items.map((i) => [i.name, i.taxRate])).toEqual([
+      ['Vela Con Precio', 19],
+      ['Vela Precio Cero', 0],
+    ])
+    expect((await repo.findTaxed(1)).items).toHaveLength(1)
     // Deja el catálogo como estaba: las pruebas siguientes cuentan productos sin precio.
     await db.collection('products').deleteMany({ slug: { $in: ['jabon-sin-campo', 'difusor-texto'] } })
   })

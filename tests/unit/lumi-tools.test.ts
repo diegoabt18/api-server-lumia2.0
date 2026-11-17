@@ -56,6 +56,7 @@ function fakeDeps(): LumiToolDeps & { calls: string[] } {
     },
     products: {
       untaxed: track('products.untaxed', async () => ({ items: [{ name: 'Vela Sin IVA', status: 'active' }], total: 1 })),
+      taxed: track('products.taxed', async () => ({ items: [{ name: 'Vela Con IVA', status: 'active', taxRate: 19 }], total: 1 })),
       unpriced: track('products.unpriced', async () => ({ items: [{ name: 'Vela Sin Precio', status: 'active', variantCount: 1 }], total: 1 })),
       lowStock: track('products.lowStock', async () => [
         { name: 'Vela Lavanda', available: 0 },

@@ -23,6 +23,7 @@ export type LumiToolName =
   | 'notifications.unread'
   | 'products.unpriced'
   | 'products.untaxed'
+  | 'products.taxed'
   | 'categories.list'
 
 /** Fila de pedido sin datos del cliente. */
@@ -72,6 +73,8 @@ export interface LumiToolDeps {
     unpriced(limit: number): Promise<{ items: Array<{ name: string; status: string; variantCount: number }>; total: number }>
     /** Productos sin IVA configurado (tax_rate ausente o no numérico). */
     untaxed(limit: number): Promise<{ items: Array<{ name: string; status: string }>; total: number }>
+    /** Productos con IVA configurado (tax_rate numérico, 0 % incluido), en orden alfabético. */
+    taxed(limit: number): Promise<{ items: Array<{ name: string; status: string; taxRate: number }>; total: number }>
     search(term: string, limit: number): Promise<AssistantProductRow[]>
   }
   categories: {

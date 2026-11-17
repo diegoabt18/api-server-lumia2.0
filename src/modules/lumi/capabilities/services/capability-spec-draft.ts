@@ -50,6 +50,7 @@ const READ_PORTS = [
   'products.lowStock(umbral, limit): productos activos con stock bajo o agotados',
   'products.unpriced(limit): productos sin ninguna variante con precio',
   'products.untaxed(limit): productos sin IVA configurado',
+  'products.taxed(limit): productos con IVA configurado y su tasa, en orden alfabético',
   'categories.list(limit): categorías en orden alfabético con estado y número de productos (sin subcategorías)',
   'initiatives.list(userId, permisos, limit): iniciativas de Lumi del usuario',
   'notifications.countUnread(userId): notificaciones sin leer del usuario',

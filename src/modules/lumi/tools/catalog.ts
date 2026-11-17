@@ -10,6 +10,7 @@ import {
 } from './tool.types.js'
 import { productsUnpriced } from './products-unpriced.tool.js'
 import { productsUntaxed } from './products-untaxed.tool.js'
+import { productsTaxed } from './products-taxed.tool.js'
 import { categoriesList } from './categories-list.tool.js'
 
 /* ───────────────────────── Formato ───────────────────────── */
@@ -467,6 +468,7 @@ export const LUMI_TOOLS: ReadonlyArray<LumiTool<never>> = [
   // Antes de la búsqueda: «productos sin precio» no es buscar el texto «sin precio».
   productsUnpriced,
   productsUntaxed,
+  productsTaxed,
   productsSearch,
   inventoryLow,
   initiativesList,
