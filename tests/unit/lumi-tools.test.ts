@@ -122,6 +122,9 @@ describe('catálogo: qué herramienta resuelve cada frase', () => {
     ['¿Cuáles son los productos más vendidos este mes?', 'sales.summary'],
     ['¿Cuánto stock queda de la vela de vainilla?', 'products.search'],
     ['precio del difusor cítrico', 'products.search'],
+    ['quería ver el producto que coincida o se parezca a asdasd123', 'products.search'],
+    ['muéstrame productos parecidos a la vela de vainilla', 'products.search'],
+    ['artículos similares al difusor', 'products.search'],
     ['¿Qué productos se están agotando?', 'inventory.low'],
     ['productos sin stock', 'inventory.low'],
     ['¿Qué iniciativas urgentes tengo?', 'initiatives.list'],
@@ -136,8 +139,15 @@ describe('catálogo: qué herramienta resuelve cada frase', () => {
     '¿qué es un pedido?',
     'crea una descripción para esta vela',
     'Propón un título corto y comercial para un producto artesanal.',
+    // «a ese» remite a algo anterior que la búsqueda no recuerda: no se busca el texto «ese».
+    'productos parecidos a ese',
   ])('«%s» no es una herramienta: va al modelo', (message) => {
     expect(matchTool(message, ALL, CTX)).toBeNull()
+  })
+
+  it('«que coincida o se parezca a X» busca X por contenido, sin las palabras de la petición', () => {
+    expect(matchTool('quería ver los productos que coincidan o se parezcan a asdasd123', ALL, CTX)?.input).toEqual({ term: 'asdasd123' })
+    expect(matchTool('productos que coincidan con vainilla?', ALL, CTX)?.input).toEqual({ term: 'vainilla' })
   })
 })
 

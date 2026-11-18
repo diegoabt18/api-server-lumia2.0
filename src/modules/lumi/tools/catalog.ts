@@ -111,7 +111,12 @@ const PRODUCT_PATTERNS: RegExp[] = [
   /\bcuant[oa]s? (?:unidades |stock |existencias )?(?:quedan|hay|tengo|tenemos|queda) (?:de|del|de la|de los|de las) (.+)$/,
   /\bprecio (?:de|del|de la|de los|de las) (.+)$/,
   /\bbusca(?:r|me)? (?:el |la |los |las |un |una )?productos? (.+)$/,
+  // «productos parecidos a vela», «el producto que coincida o se parezca a asdasd123»: la búsqueda del
+  // Server ya es por contenido (palabra por palabra, sin tildes), así que cubre «lo que se parezca».
+  /\b(?:productos?|articulos?) (?:que (?:se parezcan?|coincidan?)(?: o (?:se parezcan?|coincidan?))?|parecidos?|similares|relacionados?) (?:a|al|con|como) (.+)$/,
 ]
+/** «a ese», «con eso»: se refiere a algo anterior que esta herramienta no recuerda; no es un término. */
+const NOT_A_PRODUCT_TERM = /^(?:todo|todos|todas|productos?|inventario|la tienda|es[eoa]s?|est[eoa]s?|aquel(?:l[oa]s?)?)$/
 const INITIATIVES_WORD = /\biniciativas?\b/
 const NOTIFICATIONS_WORD = /\b(notificaciones|avisos)\b/
 const LISTING_HINT = /(pendiente|urgente|abierta|tengo|hay|muestr|cual|lista|nueva|ver\b|revis|sin leer|cuant)/
@@ -353,8 +358,8 @@ const productsSearch: LumiTool<{ term: string }> = {
       const m = pattern.exec(text)
       if (!m) continue
       const term = cleanTerm(m[1]!)
-      // "stock de productos" o "precio de todo" no nombran un producto concreto.
-      if (term && !/^(todo|todos|todas|productos?|inventario|la tienda)$/.test(term)) return { term }
+      // "stock de productos", "precio de todo" o "parecidos a ese" no nombran un producto concreto.
+      if (term && !NOT_A_PRODUCT_TERM.test(term)) return { term }
     }
     return null
   },
