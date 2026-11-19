@@ -96,6 +96,20 @@ const SEEK_UNIT = /\b(?:ve|vete|ir|salta|adelanta|adelantala|regresa|vuelve|pasa
 const SEEK_CLOCK = /\b(?:ve|vete|ir|salta|adelanta|adelantala|regresa|vuelve|pasa|llevala|ponla)\s+(?:hasta\s+)?al?\s+(\d{1,2}):(\d{2})\b/
 
 /** Segundo de la canción que nombra el mensaje («ve al minuto 2», «salta al 1:30»), o null. */
+const RECOMMEND_RULE =
+  /\b(?:recomiendame|recomiendas|sugiereme|sugieres)\b.*\b(?:musica|cancion(?:es)?|temas?)\b|\b(?:canciones|temas|musica) (?:parecid[ao]s?|similares?)\b/
+const SHUFFLE_ON = /\b(?:activa|pon|enciende|usa)\s+(?:el\s+)?(?:modo\s+)?aleatorio\b|\bmezcla\s+la\s+cola\b/
+const SHUFFLE_OFF = /\b(?:desactiva|quita|apaga)\s+(?:el\s+)?(?:modo\s+)?aleatorio\b/
+const REPEAT_ONE = /\b(?:repite|repetir|pon en bucle)\s+(?:esta|la|el)\s+(?:cancion|tema)\b/
+const REPEAT_ALL = /\b(?:repite|repetir)\s+(?:toda\s+)?la\s+cola\b/
+const REPEAT_OFF = /\b(?:no repitas|deja de repetir|(?:desactiva|quita|apaga)\s+(?:la\s+)?repeticion)\b/
+const AUTOPLAY_RULE = /\b(activa|enciende|desactiva|apaga|quita)\s+(?:la\s+|el\s+)?(?:reproduccion automatica|autoplay)\b/
+const CLEAR_QUEUE_RULE = /\b(?:vacia|vaciar|limpia|limpiar|borra|borrar)\s+(?:toda\s+)?la\s+cola\b/
+
+function switchArg(value: unknown): 'on' | 'off' | null {
+  return value === 'on' || value === 'off' ? value : null
+}
+
 function seekSeconds(normalized: string): number | null {
   const unit = SEEK_UNIT.exec(normalized)
   if (unit) {
@@ -163,6 +177,16 @@ const RULES: Partial<Record<LumiToolName, (normalized: string) => MusicInput | n
     return position === null ? null : { position }
   },
   'music.resume': (t) => (RESUME_RULE.test(t) ? {} : null),
+  'music.recommend': (t) => (RECOMMEND_RULE.test(t) ? {} : null),
+  'music.shuffle': (t) => (SHUFFLE_OFF.test(t) ? { state: 'off' } : SHUFFLE_ON.test(t) ? { state: 'on' } : null),
+  'music.repeat': (t) =>
+    REPEAT_OFF.test(t) ? { repeat: 'off' } : REPEAT_ALL.test(t) ? { repeat: 'all' } : REPEAT_ONE.test(t) ? { repeat: 'one' } : null,
+  'music.autoplay': (t) => {
+    const verb = AUTOPLAY_RULE.exec(t)?.[1]
+    if (!verb) return null
+    return { state: verb === 'activa' || verb === 'enciende' ? 'on' : 'off' }
+  },
+  'music.clear_queue': (t) => (CLEAR_QUEUE_RULE.test(t) ? {} : null),
   // «Poner» es la más general: cede ante cualquier otra orden («pon la música por Bluetooth» es la salida).
   'music.play': (t): MusicInput | null => {
     if (Object.entries(RULES).some(([name, rule]) => name !== 'music.play' && rule?.(t))) return null
@@ -237,7 +261,71 @@ function musicTool(spec: MusicToolSpec): LumiTool<MusicInput> {
 const READ = PERMISSION_REGISTRY.MUSIC_READ
 const CONTROL = PERMISSION_REGISTRY.MUSIC_CONTROL
 
+const SWITCH_ARG: LumiSelectorArg = { name: 'state', kind: ['on', 'off'], required: true, description: 'on = activar, off = desactivar' }
+
 const SPECS: readonly MusicToolSpec[] = [
+  {
+    name: 'music.recommend',
+    label: 'Buscando canciones parecidas',
+    capability: 'Recomendar canciones parecidas a la que suena',
+    example: 'Recomiéndame canciones parecidas',
+    description: 'Recomendar canciones parecidas a la que está sonando (resultados reales de YouTube)',
+    permission: READ,
+    args: [],
+    fromArgs: noArgs,
+  },
+  {
+    name: 'music.shuffle',
+    label: 'Cambiando el modo aleatorio',
+    capability: 'Activar o desactivar el modo aleatorio',
+    example: 'Activa el modo aleatorio',
+    description: 'Activar o desactivar el modo aleatorio de la cola',
+    permission: CONTROL,
+    args: [SWITCH_ARG],
+    ask: '¿Activo o desactivo el modo aleatorio?',
+    fromArgs(args) {
+      const state = switchArg(args.state)
+      return state ? { input: { state } } : { missing: ['state'] }
+    },
+  },
+  {
+    name: 'music.repeat',
+    label: 'Cambiando la repetición',
+    capability: 'Repetir la canción, repetir la cola o no repetir',
+    example: 'Repite esta canción',
+    description: 'Repetir la canción actual (one), toda la cola (all) o no repetir (off)',
+    permission: CONTROL,
+    args: [{ name: 'repeat', kind: ['off', 'one', 'all'], required: true, description: 'one = esta canción, all = la cola, off = no repetir' }],
+    ask: '¿Repito esta canción, toda la cola o quito la repetición?',
+    fromArgs(args) {
+      const repeat = args.repeat === 'off' || args.repeat === 'one' || args.repeat === 'all' ? args.repeat : null
+      return repeat ? { input: { repeat } } : { missing: ['repeat'] }
+    },
+  },
+  {
+    name: 'music.autoplay',
+    label: 'Cambiando la reproducción automática',
+    capability: 'Activar o desactivar la reproducción automática',
+    example: 'Activa la reproducción automática',
+    description: 'Al acabar la cola, seguir con canciones relacionadas (on) o detenerse (off)',
+    permission: CONTROL,
+    args: [SWITCH_ARG],
+    ask: '¿Activo o desactivo la reproducción automática?',
+    fromArgs(args) {
+      const state = switchArg(args.state)
+      return state ? { input: { state } } : { missing: ['state'] }
+    },
+  },
+  {
+    name: 'music.clear_queue',
+    label: 'Vaciando la cola',
+    capability: 'Vaciar la cola de reproducción',
+    example: 'Vacía la cola',
+    description: 'Quitar todas las canciones pendientes de la cola (la actual sigue sonando)',
+    permission: CONTROL,
+    args: [],
+    fromArgs: noArgs,
+  },
   {
     name: 'music.play',
     label: 'Poniendo música',

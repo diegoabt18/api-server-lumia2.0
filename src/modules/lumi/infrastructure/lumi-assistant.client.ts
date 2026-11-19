@@ -4,6 +4,8 @@ import { parseLumiReferences, type LumiReference } from '../references/lumi-refe
 import type {
   LumiMusicArgs,
   LumiMusicCommandResult,
+  LumiMusicDiscovery,
+  LumiMusicReadResult,
   LumiMusicState,
   LumiMusicStateResult,
   LumiMusicTrack,
@@ -165,7 +167,25 @@ const musicStateUpstreamSchema = z.object({
   volume: z.number().int().min(0).max(100).optional(),
   output: z.object({ mode: z.enum(['aux', 'bluetooth']), sink: z.string().nullable() }),
   error: z.string().max(500).nullable(),
+  // Opcionales: un asistente anterior no los envía (se toman los valores por defecto).
+  shuffle: z.boolean().optional(),
+  repeat_mode: z.enum(['off', 'one', 'all']).optional(),
+  autoplay: z.boolean().optional(),
+  version: z.number().int().nonnegative().optional(),
+  updated_at: z.number().int().nonnegative().optional(),
 })
+
+const musicTracksUpstreamSchema = z.object({ tracks: z.array(musicTrackUpstreamSchema).max(100) })
+
+const musicDiscoveryUpstreamSchema = z.object({
+  seed: musicTrackUpstreamSchema.nullable(),
+  tracks: z.array(musicTrackUpstreamSchema).max(50),
+  artist_tracks: z.array(musicTrackUpstreamSchema).max(50),
+  artists: z.array(z.object({ name: z.string().min(1).max(200), tracks: z.number().int().nonnegative() })).max(20),
+})
+
+/** Referencia fija con la que el Server abre el canal de eventos del reproductor (compartido). */
+export const LUMI_MUSIC_HUB_USER_REF = 'lumia-music-hub'
 
 /** Respuesta de POST /music/commands: texto determinista y estado del reproductor. */
 const musicCommandUpstreamSchema = z.object({
@@ -206,8 +226,16 @@ export function toMusicState(raw: unknown): LumiMusicState {
     volume: parsed.volume ?? 0,
     output: { mode: parsed.output.mode, active: Boolean(parsed.output.sink) },
     error: parsed.error,
+    shuffle: parsed.shuffle ?? false,
+    repeatMode: parsed.repeat_mode ?? 'off',
+    autoplay: parsed.autoplay ?? false,
+    version: parsed.version ?? 0,
+    updatedAt: parsed.updated_at ?? null,
   }
 }
+
+/** Tiempo límite de recomendaciones y búsquedas (consultan YouTube). */
+export const LUMI_MUSIC_DISCOVER_TIMEOUT_MS = 25_000
 
 /** Tiempo límite de un comando de música (buscar y esperar a que suene puede tardar unos segundos). */
 export const LUMI_MUSIC_COMMAND_TIMEOUT_MS = 30_000
@@ -533,6 +561,66 @@ export class LumiAssistantClient {
     if (!res.ok) return { status: 'unavailable' }
     try {
       return { status: 'done', state: toMusicState(await res.json()) }
+    } catch {
+      return { status: 'unavailable' }
+    }
+  }
+
+  /** Recomendaciones reales para una canción (la actual si no se indica). Nunca lanza. */
+  async musicRecommendations(userRef: string, videoId: string | null): Promise<LumiMusicReadResult<LumiMusicDiscovery>> {
+    const query = videoId ? `?video_id=${encodeURIComponent(videoId)}` : ''
+    return this.musicRead(userRef, `/music/recommendations${query}`, (raw) => {
+      const parsed = musicDiscoveryUpstreamSchema.parse(raw)
+      return {
+        seed: parsed.seed ? toMusicTrack(parsed.seed) : null,
+        tracks: parsed.tracks.map(toMusicTrack),
+        artistTracks: parsed.artist_tracks.map(toMusicTrack),
+        artists: parsed.artists,
+      }
+    })
+  }
+
+  /** Últimas canciones que sonaron (la más reciente primero). Nunca lanza. */
+  async musicHistory(userRef: string): Promise<LumiMusicReadResult<LumiMusicTrack[]>> {
+    return this.musicRead(userRef, '/music/history', (raw) => musicTracksUpstreamSchema.parse(raw).tracks.map(toMusicTrack))
+  }
+
+  /** Búsqueda en YouTube sin reproducir. Nunca lanza. */
+  async musicSearch(userRef: string, query: string, limit: number): Promise<LumiMusicReadResult<LumiMusicTrack[]>> {
+    const params = new URLSearchParams({ q: query, limit: String(limit) })
+    return this.musicRead(userRef, `/music/search?${params.toString()}`, (raw) =>
+      musicTracksUpstreamSchema.parse(raw).tracks.map(toMusicTrack),
+    )
+  }
+
+  /**
+   * Canal SSE de estado del reproductor (GET /music/events). Lo abre el hub del Server con una
+   * referencia fija: el estado es el mismo para todos los usuarios con music.read.
+   */
+  async musicEvents(signal: AbortSignal): Promise<Response | null> {
+    try {
+      return await this.fetchImpl(`${this.options.baseUrl}${API_PREFIX}/music/events`, {
+        method: 'GET',
+        headers: {
+          Accept: 'text/event-stream',
+          'X-API-Key': this.options.apiKey,
+          'X-User-Ref': LUMI_MUSIC_HUB_USER_REF,
+        },
+        signal,
+      })
+    } catch {
+      return null
+    }
+  }
+
+  private async musicRead<T>(userRef: string, path: string, parse: (raw: unknown) => T): Promise<LumiMusicReadResult<T>> {
+    if (!USER_REF_PATTERN.test(userRef)) return { status: 'unavailable' }
+    const res = await this.musicFetch(userRef, 'GET', path, undefined, LUMI_MUSIC_DISCOVER_TIMEOUT_MS)
+    if (res === null) return { status: 'unavailable' }
+    if (res.status === 404) return { status: 'disabled' }
+    if (!res.ok) return { status: 'unavailable' }
+    try {
+      return { status: 'done', data: parse(await res.json()) }
     } catch {
       return { status: 'unavailable' }
     }

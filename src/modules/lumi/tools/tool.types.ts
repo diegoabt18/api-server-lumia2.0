@@ -38,6 +38,11 @@ export type LumiToolName =
   | 'music.output'
   | 'music.output_status'
   | 'music.enqueue'
+  | 'music.recommend'
+  | 'music.shuffle'
+  | 'music.repeat'
+  | 'music.autoplay'
+  | 'music.clear_queue'
   | 'music.queue'
   | 'music.jump'
   | 'music.stop'
@@ -166,7 +171,26 @@ export interface LumiMusicState {
   volume: number
   output: { mode: 'aux' | 'bluetooth'; active: boolean }
   error: string | null
+  /** Modos de reproducción: los aplica el asistente al acabar cada pista. */
+  shuffle: boolean
+  repeatMode: 'off' | 'one' | 'all'
+  autoplay: boolean
+  /** Sube con cada cambio visible del estado. */
+  version: number
+  /** Momento del estado (ms desde epoch) en el asistente; null si no lo indicó. */
+  updatedAt: number | null
 }
+
+/** Descubrir música: relacionadas reales (Mix de YouTube) y más del mismo artista. */
+export interface LumiMusicDiscovery {
+  seed: LumiMusicTrack | null
+  tracks: LumiMusicTrack[]
+  artistTracks: LumiMusicTrack[]
+  artists: Array<{ name: string; tracks: number }>
+}
+
+/** Lecturas del módulo de música (recomendaciones, historial, búsqueda). */
+export type LumiMusicReadResult<T> = { status: 'done'; data: T } | { status: 'disabled' } | { status: 'unavailable' }
 
 export interface LumiToolContext {
   userId: string

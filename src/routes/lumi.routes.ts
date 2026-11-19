@@ -19,6 +19,7 @@ import { missingCapabilityReply } from '../modules/lumi/selector/lumi-selector.j
 import { planLumiTurn, type TurnPlan } from '../modules/lumi/turn/turn-plan.js'
 import { sampleFromTrace, type TurnSample } from '../modules/lumi/metrics/turn-metrics.js'
 import { createLumiMusicPort, createLumiToolDeps } from '../modules/lumi/tools/tool-adapters.js'
+import { LumiMusicHub, type LumiMusicHubEvent } from '../modules/lumi/infrastructure/lumi-music-hub.js'
 import {
   buildAssistRequest,
   lumiProductAssistSchema,
@@ -45,6 +46,8 @@ import {
   lumiConversationParamsSchema,
   lumiListQuerySchema,
   lumiMusicPlayerCommandSchema,
+  lumiMusicRecommendationsQuerySchema,
+  lumiMusicSearchQuerySchema,
   lumiProductParamsSchema,
   lumiUsageQuerySchema,
 } from '../modules/lumi/schemas/lumi.schema.js'
@@ -54,6 +57,11 @@ import {
  * identifica al usuario y reenvía la petición a ia-asistente con su identificador.
  * El navegador nunca recibe la URL ni la clave de ia-asistente.
  */
+/** Stream de música: latido, duración máxima sin caducidad conocida y pestañas por usuario. */
+const MUSIC_STREAM_HEARTBEAT_MS = 25_000
+const MUSIC_STREAM_MAX_MS = 15 * 60_000
+const MUSIC_STREAMS_PER_USER = 5
+
 export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) {
   const { env } = ctx
   const g = (permission: (typeof PERMISSION_REGISTRY)[keyof typeof PERMISSION_REGISTRY]) =>
@@ -686,6 +694,83 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       case 'unavailable':
         return { ok: false, available: false, text: MUSIC_UNAVAILABLE, state: null }
     }
+  })
+
+  /**
+   * Estado del reproductor en tiempo real (SSE). Todas las pestañas comparten una sola conexión del
+   * Server con el asistente (LumiMusicHub). Eventos: `state` (estado real) y `unavailable`.
+   * El stream se cierra al caducar el token con el que se abrió (como las notificaciones): la
+   * reconexión del navegador vuelve a pasar por la autenticación y los permisos.
+   */
+  const musicHub = client ? new LumiMusicHub(client, api.log) : null
+  const musicStreams = new Map<string, Set<() => void>>()
+  api.get('/admin/lumi/music/stream', { preHandler: g(PERMISSION_REGISTRY.MUSIC_READ) }, async (request, reply) => {
+    const userId = userIdOf(request)
+    const token =
+      request.headers.authorization?.replace(/^Bearer\s+/i, '') || request.cookies[ctx.env.COOKIE_ACCESS_NAME]
+    const expiresAt = token ? ctx.jwt.getAccessExpiresAtMs(token) : null
+    const lifetimeMs = Math.max(1_000, Math.min(MUSIC_STREAM_MAX_MS, expiresAt ? expiresAt - Date.now() : MUSIC_STREAM_MAX_MS))
+
+    reply.hijack()
+    const raw = reply.raw
+    raw.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    })
+    raw.write('event: ready\ndata: {}\n\n')
+    const send = (event: LumiMusicHubEvent) => {
+      const payload = event.type === 'state' ? { state: event.state } : { reason: event.reason }
+      raw.write(`event: ${event.type}\ndata: ${JSON.stringify(payload)}\n\n`)
+    }
+    const unsubscribe = musicHub ? musicHub.subscribe(send) : (send({ type: 'unavailable', reason: 'unavailable' }), () => undefined)
+    const heartbeat = setInterval(() => raw.write(': ping\n\n'), MUSIC_STREAM_HEARTBEAT_MS)
+    const close = () => raw.end()
+    const expiry = setTimeout(close, lifetimeMs)
+
+    const streams = musicStreams.get(userId) ?? new Set<() => void>()
+    musicStreams.set(userId, streams)
+    streams.add(close)
+    if (streams.size > MUSIC_STREAMS_PER_USER) {
+      const oldest = streams.values().next().value
+      if (oldest) {
+        streams.delete(oldest)
+        oldest()
+      }
+    }
+
+    raw.once('close', () => {
+      clearInterval(heartbeat)
+      clearTimeout(expiry)
+      unsubscribe()
+      streams.delete(close)
+      if (streams.size === 0 && musicStreams.get(userId) === streams) musicStreams.delete(userId)
+    })
+  })
+
+  /** Descubrir música: relacionadas reales y más del mismo artista (para la canción indicada o la actual). */
+  api.get('/admin/lumi/music/recommendations', { preHandler: g(PERMISSION_REGISTRY.MUSIC_READ) }, async (request) => {
+    const parsed = lumiMusicRecommendationsQuerySchema.safeParse(request.query)
+    if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+    if (!client) return { available: false, seed: null, tracks: [], artistTracks: [], artists: [] }
+    const result = await client.musicRecommendations(userIdOf(request), parsed.data.videoId ?? null)
+    if (result.status !== 'done') return { available: false, seed: null, tracks: [], artistTracks: [], artists: [] }
+    return { available: true, ...result.data }
+  })
+
+  api.get('/admin/lumi/music/history', { preHandler: g(PERMISSION_REGISTRY.MUSIC_READ) }, async (request) => {
+    if (!client) return { available: false, tracks: [] }
+    const result = await client.musicHistory(userIdOf(request))
+    return result.status === 'done' ? { available: true, tracks: result.data } : { available: false, tracks: [] }
+  })
+
+  api.get('/admin/lumi/music/search', { preHandler: g(PERMISSION_REGISTRY.MUSIC_READ) }, async (request) => {
+    const parsed = lumiMusicSearchQuerySchema.safeParse(request.query)
+    if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+    if (!client) return { available: false, tracks: [] }
+    const result = await client.musicSearch(userIdOf(request), parsed.data.q, parsed.data.limit)
+    return result.status === 'done' ? { available: true, tracks: result.data } : { available: false, tracks: [] }
   })
 
   api.get('/admin/lumi/usage', { preHandler: g(PERMISSION_REGISTRY.LUMI_USE) }, async (request) => {

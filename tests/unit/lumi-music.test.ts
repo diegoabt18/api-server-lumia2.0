@@ -14,10 +14,11 @@ const NOW = new Date('2026-11-18T20:00:00.000Z')
 const TZ = 'America/Bogota'
 const CTX = { now: NOW, timezone: TZ }
 const USER = '65f1c0ffee0000000000abcd'
-const READ_TOOLS = ['music.search', 'music.current', 'music.output_status', 'music.queue']
+const READ_TOOLS = ['music.search', 'music.current', 'music.output_status', 'music.queue', 'music.recommend']
 const CONTROL_TOOLS = [
   'music.play', 'music.pause', 'music.resume', 'music.next', 'music.previous', 'music.output',
   'music.enqueue', 'music.jump', 'music.stop', 'music.volume', 'music.seek',
+  'music.shuffle', 'music.repeat', 'music.autoplay', 'music.clear_queue',
 ]
 
 /** Estado del reproductor tal como lo envía el asistente (snake_case). */
@@ -122,6 +123,15 @@ describe('reglas de música (etapa 1, sin modelo)', () => {
     ['reanuda la música', 'music.resume', {}],
     ['siguiente canción', 'music.next', {}],
     ['vuelve a la canción anterior', 'music.previous', {}],
+    ['recomiéndame canciones parecidas', 'music.recommend', {}],
+    ['activa el modo aleatorio', 'music.shuffle', { state: 'on' }],
+    ['quita el aleatorio', 'music.shuffle', { state: 'off' }],
+    ['repite esta canción', 'music.repeat', { repeat: 'one' }],
+    ['repite toda la cola', 'music.repeat', { repeat: 'all' }],
+    ['deja de repetir', 'music.repeat', { repeat: 'off' }],
+    ['activa la reproducción automática', 'music.autoplay', { state: 'on' }],
+    ['desactiva el autoplay', 'music.autoplay', { state: 'off' }],
+    ['vacía la cola', 'music.clear_queue', {}],
   ])('«%s» → %s', (message, tool, input) => {
     expect(rule(message)).toEqual({ tool, input, denied: false, explain: false })
   })
@@ -158,7 +168,7 @@ describe('selectorCatalog con música', () => {
   it('sends only the music tools each permission allows', () => {
     expect(names([P.LUMI_USE, P.MUSIC_READ]).filter((n) => n.startsWith('music.')).sort()).toEqual([...READ_TOOLS].sort())
     expect(names([P.LUMI_USE, P.MUSIC_CONTROL]).filter((n) => n.startsWith('music.')).sort()).toEqual([...CONTROL_TOOLS].sort())
-    expect(names([PERMISSION_WILDCARD as PermissionId]).filter((n) => n.startsWith('music.'))).toHaveLength(15)
+    expect(names([PERMISSION_WILDCARD as PermissionId]).filter((n) => n.startsWith('music.'))).toHaveLength(20)
     expect(selectorCatalog(undefined, [P.MUSIC_READ]).modules).toContain('musica')
   })
 
@@ -413,6 +423,12 @@ describe('estado del reproductor', () => {
       volume: 70,
       output: { mode: 'aux', active: true },
       error: null,
+      // Un asistente sin los modos (versión anterior) se lee con los valores por defecto.
+      shuffle: false,
+      repeatMode: 'off',
+      autoplay: false,
+      version: 0,
+      updatedAt: null,
     })
     expect(JSON.stringify(STATE)).not.toContain('alsa_output')
   })
