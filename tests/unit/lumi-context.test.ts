@@ -3,10 +3,17 @@ import {
   LUMI_CONTEXT_MAX_CHARS,
   lumiContextInputSchema,
   summarizeAnalyticsContext,
+  summarizeBannersContext,
+  summarizeCategoriesContext,
   summarizeDashboardContext,
+  summarizeInventoryContext,
   summarizeOrderContext,
   summarizePageContext,
   summarizeProductContext,
+  summarizeProductListContext,
+  summarizeProductionContext,
+  summarizePromotionsContext,
+  summarizeSubcategoriesContext,
 } from '../../src/modules/lumi/services/lumi-context.js'
 
 const OBJECT_ID = '65f1c0ffee0000000000abcd'
@@ -150,5 +157,127 @@ describe('summaries', () => {
 
   it('describes a page without touching data', () => {
     expect(summarizePageContext('analytics')).toBe('Vista actual: Analítica.')
+  })
+
+  it('adds a fixed description for views that send no data', () => {
+    const text = summarizePageContext('reviews')
+    expect(text.startsWith('Vista actual: Reseñas y preguntas.\n')).toBe(true)
+  })
+
+  it('accepts the new module pages and rejects unknown ones', () => {
+    for (const page of ['categories', 'subcategories', 'promotions', 'banners', 'production']) {
+      expect(lumiContextInputSchema.safeParse({ kind: 'page', page }).success).toBe(true)
+    }
+    expect(lumiContextInputSchema.safeParse({ kind: 'page', page: 'users' }).success).toBe(false)
+  })
+})
+
+describe('module list summaries', () => {
+  it('summarizes categories with status, subcategory and product counts', () => {
+    const text = summarizeCategoriesContext({
+      total: 2,
+      categories: [
+        {
+          name: 'Baby Shower',
+          status: 'active',
+          subcategoryCount: 2,
+          activeSubcategoryCount: 2,
+          productCount: 2,
+          unclassifiedProductCount: 0,
+        },
+        {
+          name: 'Velas Aromáticas',
+          status: 'inactive',
+          subcategoryCount: 0,
+          activeSubcategoryCount: 0,
+          productCount: 0,
+          unclassifiedProductCount: 11,
+        },
+      ],
+    })
+    expect(text).toContain('Vista actual: Categorías. Total: 2.')
+    expect(text).toContain('- Baby Shower: activa; subcategorías 2/2; productos 2')
+    expect(text).toContain(
+      '- Velas Aromáticas: inactiva; subcategorías 0/0; productos 0, 11 sin subcategoría',
+    )
+  })
+
+  it('notes when only part of the list is shown and stays within the limit', () => {
+    const subcategories = Array.from({ length: 40 }, (_, i) => ({
+      name: `Sub ${i} ${'x'.repeat(200)}`,
+      status: 'active',
+      categoryName: 'Velas',
+      productCount: i,
+    }))
+    const text = summarizeSubcategoriesContext({ subcategories, total: 40 })
+    expect(text).toContain('Total: 40 (se listan 15 de 40).')
+    expect(text.length).toBeLessThanOrEqual(LUMI_CONTEXT_MAX_CHARS)
+  })
+
+  it('summarizes products, inventory, promotions, banners and production', () => {
+    expect(
+      summarizeProductListContext({
+        total: 1,
+        products: [
+          { name: 'Vela', status: 'active', categoryName: 'Velas', subcategoryName: null },
+        ],
+      }),
+    ).toContain('- Vela: activa; Velas / —')
+    expect(
+      summarizeInventoryContext({
+        total: 2,
+        items: [
+          { sku: 'V-1', available: 3, quantity: 5, isPerOrder: false, variantName: 'Vainilla' },
+          { sku: 'V-2', available: 0, quantity: 0, isPerOrder: true, variantName: null },
+        ],
+      }),
+    ).toMatch(/V-1 Vainilla: 3 \/ 5[\s\S]*V-2 —: bajo pedido/)
+    expect(
+      summarizePromotionsContext({
+        total: 1,
+        promotions: [
+          {
+            name: 'Navidad',
+            active: true,
+            lifecycle: 'activa',
+            startsAt: '2026-12-01T00:00:00.000Z',
+            endsAt: '2026-12-31T00:00:00.000Z',
+            applyGeneralDiscount: true,
+            generalPercentOff: 10,
+            categorySlugs: ['velas'],
+            productEntries: [],
+          },
+        ],
+      }),
+    ).toContain('- Navidad: vigente; 2026-12-01 a 2026-12-31; 10% general, 1 categorías')
+    expect(
+      summarizeBannersContext(
+        {
+          banners: [
+            {
+              title: 'Hero',
+              position: 'home_hero',
+              active: true,
+              startsAt: '2026-01-01T00:00:00.000Z',
+              endsAt: '2026-02-01T00:00:00.000Z',
+            },
+          ],
+        },
+        new Date('2026-03-01T00:00:00.000Z'),
+      ),
+    ).toContain('- Hero (home_hero): vencido')
+    expect(
+      summarizeProductionContext({
+        totalMaterials: 10,
+        activeMaterials: 8,
+        totalSuppliers: 3,
+        totalRecipes: 4,
+        productsWithOutdatedCosts: 1,
+        averageCost: 5000,
+        minCost: 1000,
+        maxCost: 9000,
+        weeklyCostChanges: [{ materialName: 'Cera', prevCost: 100, newCost: 120 }],
+      }),
+    ).toContain('- Cera: 100 → 120')
   })
 })

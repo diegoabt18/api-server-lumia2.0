@@ -28,10 +28,17 @@ import {
   LUMI_CONTEXT_MAX_CHARS,
   type LumiContextInput,
   summarizeAnalyticsContext,
+  summarizeBannersContext,
+  summarizeCategoriesContext,
   summarizeDashboardContext,
+  summarizeInventoryContext,
   summarizeOrderContext,
   summarizePageContext,
   summarizeProductContext,
+  summarizeProductListContext,
+  summarizeProductionContext,
+  summarizePromotionsContext,
+  summarizeSubcategoriesContext,
 } from '../modules/lumi/services/lumi-context.js'
 import {
   lumiChatBodySchema,
@@ -303,6 +310,40 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
         return summarizeAnalyticsContext(
           await ctx.services.adminAnalytics.getOverview({ period: '30d' }),
         )
+      }
+      // Listados: la primera página que ve el administrador, con el mismo servicio y permiso
+      // que la vista. Solo lectura; el resumen omite datos de clientes.
+      const firstPage = { page: '1', limit: '15' }
+      if (input.page === 'products' && hasPermission(keys, PERMISSION_REGISTRY.PRODUCTS_READ)) {
+        const { products, pagination } = await ctx.services.adminProducts.list(firstPage)
+        return summarizeProductListContext({ products, total: pagination.total })
+      }
+      if (input.page === 'inventory' && hasPermission(keys, PERMISSION_REGISTRY.INVENTORY_READ)) {
+        const { items, pagination } = await ctx.services.adminInventory.list(firstPage)
+        return summarizeInventoryContext({ items, total: pagination.total })
+      }
+      if (input.page === 'categories' && hasPermission(keys, PERMISSION_REGISTRY.CATEGORIES_READ)) {
+        const { categories, pagination } = await ctx.services.adminCategories.list(firstPage)
+        return summarizeCategoriesContext({ categories, total: pagination.total })
+      }
+      if (
+        input.page === 'subcategories' &&
+        hasPermission(keys, PERMISSION_REGISTRY.CATEGORIES_READ)
+      ) {
+        const { subcategories, pagination } =
+          await ctx.services.adminCategories.listAllSubcategories(firstPage)
+        return summarizeSubcategoriesContext({ subcategories, total: pagination.total })
+      }
+      if (input.page === 'promotions' && hasPermission(keys, PERMISSION_REGISTRY.PROMOTIONS_READ)) {
+        const { promotions, pagination } = await ctx.services.adminPromotions.list(firstPage)
+        return summarizePromotionsContext({ promotions, total: pagination.total })
+      }
+      if (input.page === 'banners' && hasPermission(keys, PERMISSION_REGISTRY.BANNERS_READ)) {
+        return summarizeBannersContext(await ctx.services.adminBanners.list())
+      }
+      if (input.page === 'production' && hasPermission(keys, PERMISSION_REGISTRY.COSTING_READ)) {
+        const { data } = await ctx.services.productionDashboard.getDashboard()
+        return summarizeProductionContext(data)
       }
       return summarizePageContext(input.page)
     }
