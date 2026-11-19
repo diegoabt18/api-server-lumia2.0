@@ -25,11 +25,17 @@ export function toAssistantOrderRow(order: OrderEntity): AssistantOrderRow {
 /** Lo que necesita el puerto de música: el cliente del asistente (o un doble en pruebas). */
 export interface LumiMusicCommandSource {
   musicCommand: LumiMusicPort['command']
+  musicState: LumiMusicPort['state']
 }
 
 /** Puerto de música sobre el cliente del asistente. Sin cliente configurado: sin música. */
 export function createLumiMusicPort(client: LumiMusicCommandSource | null): LumiMusicPort | undefined {
-  return client ? { command: (userId, tool, args) => client.musicCommand(userId, tool, args) } : undefined
+  return client
+    ? {
+        command: (userId, tool, args) => client.musicCommand(userId, tool, args),
+        state: (userId) => client.musicState(userId),
+      }
+    : undefined
 }
 
 /**
@@ -40,6 +46,7 @@ export function readOnlyMusicPort(port: LumiMusicPort | undefined, readTools: Re
   if (!port) return undefined
   return {
     command: (userId, tool, args) => (readTools.has(tool) ? port.command(userId, tool, args) : Promise.resolve({ status: 'rejected' })),
+    state: (userId) => port.state(userId),
   }
 }
 

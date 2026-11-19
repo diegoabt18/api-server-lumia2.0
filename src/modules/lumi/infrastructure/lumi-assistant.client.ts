@@ -1,7 +1,13 @@
 import { z } from 'zod'
 import { AppError } from '../../../common/errors/app.error.js'
 import { parseLumiReferences, type LumiReference } from '../references/lumi-references.js'
-import type { LumiMusicCommandResult } from '../tools/tool.types.js'
+import type {
+  LumiMusicArgs,
+  LumiMusicCommandResult,
+  LumiMusicState,
+  LumiMusicStateResult,
+  LumiMusicTrack,
+} from '../tools/tool.types.js'
 
 /**
  * Cliente backend-to-backend hacia ia-asistente (Local AI Assistant).
@@ -116,6 +122,8 @@ export type LumiStreamEvent =
   | { type: 'token'; text: string }
   /** Registros, módulos o fuentes web de la respuesta. Llega antes de `done` y solo si hay alguno. */
   | { type: 'references'; references: LumiReference[] }
+  /** Estado real del reproductor tras un comando de música: el chat lo muestra como reproductor. */
+  | { type: 'music'; state: LumiMusicState }
   | { type: 'done'; conversationId: string }
   | { type: 'error'; message: string }
 
@@ -136,15 +144,75 @@ const selectUpstreamSchema = z.object({
   completion_tokens: z.number().int(),
 })
 
-/** Respuesta de POST /music/commands. Solo se usa el texto determinista; el estado del reproductor se ignora. */
+/** Pista del asistente. La miniatura solo se acepta de YouTube (i.ytimg.com) y la URL, de youtube.com. */
+const musicTrackUpstreamSchema = z.object({
+  video_id: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
+  title: z.string().min(1).max(300),
+  artist: z.string().max(200).nullable().optional(),
+  album: z.string().max(300).nullable().optional(),
+  duration_seconds: z.number().int().nonnegative().nullable().optional(),
+  thumbnail_url: z.string().nullable().optional(),
+  url: z.string().nullable().optional(),
+})
+
+const musicStateUpstreamSchema = z.object({
+  status: z.enum(['idle', 'loading', 'playing', 'paused', 'stopped', 'error']),
+  generation: z.number().int(),
+  current: musicTrackUpstreamSchema.nullable(),
+  upcoming: z.array(musicTrackUpstreamSchema).max(100),
+  position_seconds: z.number().int().nonnegative(),
+  duration_seconds: z.number().int().nonnegative().nullable().optional(),
+  volume: z.number().int().min(0).max(100).optional(),
+  output: z.object({ mode: z.enum(['aux', 'bluetooth']), sink: z.string().nullable() }),
+  error: z.string().max(500).nullable(),
+})
+
+/** Respuesta de POST /music/commands: texto determinista y estado del reproductor. */
 const musicCommandUpstreamSchema = z.object({
   ok: z.boolean(),
   text: z.string().min(1).max(4000),
   error: z.string().nullable().optional(),
+  // Se valida aparte (toMusicState): un estado con forma inesperada no impide mostrar el texto.
+  state: z.unknown().optional(),
 })
 
-/** Tiempo límite de un comando de música (buscar y empezar a sonar puede tardar unos segundos). */
+const THUMBNAIL_RE = /^https:\/\/i\.ytimg\.com\/vi\/[A-Za-z0-9_-]{11}\/[a-z0-9_]+\.(?:jpg|webp)$/
+const WATCH_RE = /^https:\/\/www\.youtube\.com\/watch\?v=[A-Za-z0-9_-]{11}$/
+
+function toMusicTrack(raw: z.infer<typeof musicTrackUpstreamSchema>): LumiMusicTrack {
+  return {
+    videoId: raw.video_id,
+    title: raw.title,
+    artist: raw.artist ?? null,
+    album: raw.album ?? null,
+    durationSeconds: raw.duration_seconds ?? null,
+    // Lo que no tiene la forma esperada no llega al navegador.
+    thumbnailUrl: raw.thumbnail_url && THUMBNAIL_RE.test(raw.thumbnail_url) ? raw.thumbnail_url : null,
+    url: raw.url && WATCH_RE.test(raw.url) ? raw.url : null,
+    source: 'youtube',
+  }
+}
+
+/** Convierte el estado del asistente al del Server (sin el nombre del dispositivo de audio del host). */
+export function toMusicState(raw: unknown): LumiMusicState {
+  const parsed = musicStateUpstreamSchema.parse(raw)
+  return {
+    status: parsed.status,
+    generation: parsed.generation,
+    current: parsed.current ? toMusicTrack(parsed.current) : null,
+    upcoming: parsed.upcoming.map(toMusicTrack),
+    positionSeconds: parsed.position_seconds,
+    durationSeconds: parsed.duration_seconds ?? parsed.current?.duration_seconds ?? null,
+    volume: parsed.volume ?? 0,
+    output: { mode: parsed.output.mode, active: Boolean(parsed.output.sink) },
+    error: parsed.error,
+  }
+}
+
+/** Tiempo límite de un comando de música (buscar y esperar a que suene puede tardar unos segundos). */
 export const LUMI_MUSIC_COMMAND_TIMEOUT_MS = 30_000
+/** Tiempo límite de la consulta del estado (el reproductor lo consulta a menudo: debe ser rápida). */
+export const LUMI_MUSIC_STATE_TIMEOUT_MS = 5_000
 
 export interface LumiSelectRequest {
   message: string
@@ -430,34 +498,67 @@ export class LumiAssistantClient {
   async musicCommand(
     userRef: string,
     tool: string,
-    args: Readonly<Record<string, string>>,
+    args: LumiMusicArgs,
     timeoutMs: number = Math.min(this.options.timeoutMs, LUMI_MUSIC_COMMAND_TIMEOUT_MS),
   ): Promise<LumiMusicCommandResult> {
     if (!USER_REF_PATTERN.test(userRef)) return { status: 'rejected' }
-    let res: Response
-    try {
-      res = await this.fetchImpl(`${this.options.baseUrl}${API_PREFIX}/music/commands`, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-          'X-API-Key': this.options.apiKey,
-          'X-User-Ref': userRef,
-        },
-        body: JSON.stringify({ tool, args }),
-        signal: AbortSignal.timeout(timeoutMs),
-      })
-    } catch {
-      return { status: 'unavailable' }
-    }
+    const res = await this.musicFetch(userRef, 'POST', '/music/commands', { tool, args }, timeoutMs)
+    if (res === null) return { status: 'unavailable' }
     if (res.status === 404) return { status: 'disabled' }
     if (res.status === 422) return { status: 'rejected' }
     if (!res.ok) return { status: 'unavailable' }
     try {
       const parsed = musicCommandUpstreamSchema.parse(await res.json())
-      return { status: 'done', ok: parsed.ok, text: parsed.text, error: parsed.error ?? null }
+      let state: LumiMusicState | null = null
+      try {
+        state = parsed.state ? toMusicState(parsed.state) : null
+      } catch {
+        state = null // un estado con forma inesperada no impide mostrar el texto
+      }
+      return { status: 'done', ok: parsed.ok, text: parsed.text, error: parsed.error ?? null, state }
     } catch {
       return { status: 'unavailable' }
+    }
+  }
+
+  /** Estado del reproductor (GET /music/state). Nunca lanza. */
+  async musicState(
+    userRef: string,
+    timeoutMs: number = Math.min(this.options.timeoutMs, LUMI_MUSIC_STATE_TIMEOUT_MS),
+  ): Promise<LumiMusicStateResult> {
+    if (!USER_REF_PATTERN.test(userRef)) return { status: 'unavailable' }
+    const res = await this.musicFetch(userRef, 'GET', '/music/state', undefined, timeoutMs)
+    if (res === null) return { status: 'unavailable' }
+    if (res.status === 404) return { status: 'disabled' }
+    if (!res.ok) return { status: 'unavailable' }
+    try {
+      return { status: 'done', state: toMusicState(await res.json()) }
+    } catch {
+      return { status: 'unavailable' }
+    }
+  }
+
+  private async musicFetch(
+    userRef: string,
+    method: 'GET' | 'POST',
+    path: string,
+    body: unknown,
+    timeoutMs: number,
+  ): Promise<Response | null> {
+    try {
+      return await this.fetchImpl(`${this.options.baseUrl}${API_PREFIX}${path}`, {
+        method,
+        headers: {
+          Accept: 'application/json',
+          'X-API-Key': this.options.apiKey,
+          'X-User-Ref': userRef,
+          ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+    } catch {
+      return null
     }
   }
 

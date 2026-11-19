@@ -26,6 +26,7 @@
     "db:recalculate-ratings": "tsx scripts/recalculate-product-ratings.ts",
     "db:catalog-hierarchy": "tsx scripts/catalog-hierarchy-migrate.ts",
     "db:migrate-module-permissions": "tsx scripts/migrate-module-permissions.ts",
+    "db:grant-all-permissions": "tsx scripts/grant-all-permissions.ts",
     "docker:dev:local": "docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile local up -d --build",
     "docker:dev:atlas": "docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile atlas up -d --build",
     "docker:dev:prod": "docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile prod up -d --build",

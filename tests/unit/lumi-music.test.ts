@@ -1,29 +1,59 @@
 import { describe, expect, it } from 'vitest'
 import { PERMISSION_REGISTRY as P, PERMISSION_WILDCARD, type PermissionId } from '../../src/common/permissions/registry.js'
 import { SANDBOX_SKIPPED_TEXT, SandboxTurnRunner } from '../../src/modules/lumi/capabilities/services/sandbox-runner.js'
-import { LumiAssistantClient, type LumiSelectResult } from '../../src/modules/lumi/infrastructure/lumi-assistant.client.js'
+import { LumiAssistantClient, toMusicState, type LumiSelectResult } from '../../src/modules/lumi/infrastructure/lumi-assistant.client.js'
+import { lumiMusicPlayerCommandSchema } from '../../src/modules/lumi/schemas/lumi.schema.js'
 import { interpret, normalizeProposal, selectorCatalog, type SelectorProposal } from '../../src/modules/lumi/selector/lumi-selector.js'
 import { capabilitiesFor, LUMI_TOOLS, matchTool, runTool, type ToolMatch } from '../../src/modules/lumi/tools/catalog.js'
 import { MUSIC_HELP_REPLY, MUSIC_TOOLS } from '../../src/modules/lumi/tools/music.tools.js'
 import { createLumiMusicPort, readOnlyMusicPort } from '../../src/modules/lumi/tools/tool-adapters.js'
-import type { LumiMusicCommandResult, LumiMusicPort, LumiToolDeps } from '../../src/modules/lumi/tools/tool.types.js'
+import type { LumiMusicArgs, LumiMusicCommandResult, LumiMusicPort, LumiToolDeps } from '../../src/modules/lumi/tools/tool.types.js'
 import { planLumiTurn } from '../../src/modules/lumi/turn/turn-plan.js'
 
 const NOW = new Date('2026-11-18T20:00:00.000Z')
 const TZ = 'America/Bogota'
 const CTX = { now: NOW, timezone: TZ }
 const USER = '65f1c0ffee0000000000abcd'
-const READ_TOOLS = ['music.search', 'music.current', 'music.output_status']
-const CONTROL_TOOLS = ['music.play', 'music.pause', 'music.resume', 'music.next', 'music.previous', 'music.output']
+const READ_TOOLS = ['music.search', 'music.current', 'music.output_status', 'music.queue']
+const CONTROL_TOOLS = [
+  'music.play', 'music.pause', 'music.resume', 'music.next', 'music.previous', 'music.output',
+  'music.enqueue', 'music.jump', 'music.stop', 'music.volume', 'music.seek',
+]
+
+/** Estado del reproductor tal como lo envía el asistente (snake_case). */
+const UPSTREAM_STATE = {
+  status: 'playing',
+  generation: 3,
+  current: {
+    video_id: '8LDOUFJVNmg',
+    title: 'Paramore - Conspiracy (Official Audio)',
+    artist: 'Paramore',
+    album: null,
+    duration_seconds: 223,
+    thumbnail_url: 'https://i.ytimg.com/vi/8LDOUFJVNmg/hqdefault.jpg',
+    url: 'https://www.youtube.com/watch?v=8LDOUFJVNmg',
+    source: 'youtube',
+  },
+  upcoming: [],
+  position_seconds: 84,
+  duration_seconds: 223,
+  volume: 70,
+  output: { mode: 'aux', sink: 'alsa_output.pci-0000_00_1f.3.analog-stereo' },
+  error: null,
+}
+const STATE = toMusicState(UPSTREAM_STATE)
+
+const done = (text: string, ok = true, error: string | null = null): LumiMusicCommandResult => ({ status: 'done', ok, text, error, state: null })
 
 /** Puerto de música falso: registra cada comando y responde lo que se le indique. */
-function fakeMusic(reply: (tool: string) => LumiMusicCommandResult | Promise<LumiMusicCommandResult> = (tool) => ({ status: 'done', ok: true, text: `ok ${tool}`, error: null })) {
-  const calls: Array<{ userId: string; tool: string; args: Readonly<Record<string, string>> }> = []
+function fakeMusic(reply: (tool: string) => LumiMusicCommandResult | Promise<LumiMusicCommandResult> = (tool) => done(`ok ${tool}`)) {
+  const calls: Array<{ userId: string; tool: string; args: LumiMusicArgs }> = []
   const port: LumiMusicPort = {
     command: async (userId, tool, args) => {
       calls.push({ userId, tool, args })
       return reply(tool)
     },
+    state: async () => ({ status: 'done', state: STATE }),
   }
   return { port, calls }
 }
@@ -128,7 +158,7 @@ describe('selectorCatalog con música', () => {
   it('sends only the music tools each permission allows', () => {
     expect(names([P.LUMI_USE, P.MUSIC_READ]).filter((n) => n.startsWith('music.')).sort()).toEqual([...READ_TOOLS].sort())
     expect(names([P.LUMI_USE, P.MUSIC_CONTROL]).filter((n) => n.startsWith('music.')).sort()).toEqual([...CONTROL_TOOLS].sort())
-    expect(names([PERMISSION_WILDCARD as PermissionId]).filter((n) => n.startsWith('music.'))).toHaveLength(9)
+    expect(names([PERMISSION_WILDCARD as PermissionId]).filter((n) => n.startsWith('music.'))).toHaveLength(15)
     expect(selectorCatalog(undefined, [P.MUSIC_READ]).modules).toContain('musica')
   })
 
@@ -212,14 +242,14 @@ describe('runTool con música', () => {
     ({ tool: LUMI_TOOLS.find((t) => t.name === name)!, input: input as never, denied, explain: false })
 
   it('sends the command and returns the assistant text verbatim', async () => {
-    const music = fakeMusic(() => ({ status: 'done', ok: true, text: 'Reproduciendo «De música ligera» de Soda Stereo.', error: null }))
+    const music = fakeMusic(() => done('Reproduciendo «De música ligera» de Soda Stereo.'))
     const result = await runTool(match('music.play', { query: 'Soda Stereo' }), toolCtx(KEYS, music.port))
     expect(result).toEqual({ text: 'Reproduciendo «De música ligera» de Soda Stereo.', rows: 1 })
     expect(music.calls).toEqual([{ userId: USER, tool: 'music.play', args: { query: 'Soda Stereo' } }])
   })
 
   it('shows a failed command text with zero rows', async () => {
-    const music = fakeMusic(() => ({ status: 'done', ok: false, text: 'No hay nada sonando.', error: 'nothing_playing' }))
+    const music = fakeMusic(() => done('No hay nada sonando.', false, 'nothing_playing'))
     expect(await runTool(match('music.pause'), toolCtx(KEYS, music.port))).toEqual({ text: 'No hay nada sonando.', rows: 0 })
   })
 
@@ -255,7 +285,7 @@ describe('LumiAssistantClient.musicCommand', () => {
       sent = { url: String(url), init: init! }
       return new Response(JSON.stringify({ tool: 'music.pause', ok: true, text: 'Música en pausa.', error: null, tracks: [], state: { status: 'paused' } }), { status: 200 })
     })
-    expect(await c.musicCommand(USER, 'music.pause', {})).toEqual({ status: 'done', ok: true, text: 'Música en pausa.', error: null })
+    expect(await c.musicCommand(USER, 'music.pause', {})).toEqual({ status: 'done', ok: true, text: 'Música en pausa.', error: null, state: null })
     expect(sent!.url).toBe('http://127.0.0.1:8000/api/v1/music/commands')
     expect(sent!.init.method).toBe('POST')
     expect(sent!.init.headers).toMatchObject({ 'X-API-Key': 'k'.repeat(20), 'X-User-Ref': USER })
@@ -282,7 +312,7 @@ describe('LumiAssistantClient.musicCommand', () => {
 
   it('builds the port from the client, or none without a client', async () => {
     expect(createLumiMusicPort(null)).toBeUndefined()
-    const port = createLumiMusicPort({ musicCommand: async () => ({ status: 'disabled' }) })
+    const port = createLumiMusicPort({ musicCommand: async () => ({ status: 'disabled' }), musicState: async () => ({ status: 'disabled' }) })
     expect(await port!.command(USER, 'music.current', {})).toEqual({ status: 'disabled' })
   })
 })
@@ -311,7 +341,7 @@ describe('pruebas de capacidades (sandbox) con música', () => {
   })
 
   it('executes music read tools', async () => {
-    const music = fakeMusic(() => ({ status: 'done', ok: true, text: 'No está sonando nada.', error: null }))
+    const music = fakeMusic(() => done('No está sonando nada.'))
     const runner = new SandboxTurnRunner({ select: selecting('music.current'), selectorEnabled: true, toolDeps: deps(music.port), timezone: TZ, clock: () => NOW })
     const out = await runner.run({ userId: USER, permissionKeys: KEYS, message: '¿qué canción suena?', forceSelector: true })
     expect(out.executions[0]).toMatchObject({ tool: 'music.current', text: 'No está sonando nada.', error: null })
@@ -325,5 +355,125 @@ describe('pruebas de capacidades (sandbox) con música', () => {
     expect(await port.command(USER, 'music.current', {})).toMatchObject({ status: 'done' })
     expect(music.calls.map((c) => c.tool)).toEqual(['music.current'])
     expect(readOnlyMusicPort(undefined, new Set(READ_TOOLS))).toBeUndefined()
+  })
+})
+
+describe('reglas de los comandos nuevos de música', () => {
+  const rule = (message: string) => {
+    const m = matchTool(message, [P.MUSIC_READ, P.MUSIC_CONTROL], CTX)
+    return m ? { tool: m.tool.name, input: m.input as unknown } : null
+  }
+
+  it.each([
+    ['detén la música', 'music.stop', {}],
+    ['apaga la música', 'music.stop', {}],
+    ['para la música', 'music.pause', {}],
+    ['baja el volumen', 'music.volume', { change: 'down' }],
+    ['súbele al volumen', 'music.volume', { change: 'up' }],
+    ['pon el volumen al 40', 'music.volume', { level: 40 }],
+    ['¿qué hay en la cola?', 'music.queue', {}],
+    ['añade la canción Conspiracy de Paramore a la cola', 'music.enqueue', { query: 'conspiracy de paramore' }],
+    ['agrega Misery Business a la cola', 'music.enqueue', { query: 'misery business' }],
+    ['pon la 2 de la cola', 'music.jump', { position: 2 }],
+    ['ve al minuto 2', 'music.seek', { position: 120 }],
+    ['salta al 1:30', 'music.seek', { position: 90 }],
+    ['adelanta al segundo 45', 'music.seek', { position: 45 }],
+  ])('«%s» → %s', (message, tool, input) => {
+    expect(rule(message)).toEqual({ tool, input })
+  })
+
+  it('does not confuse play with the new commands', () => {
+    expect(rule('ponme algo de Soda Stereo')?.tool).toBe('music.play')
+    expect(rule('reproduce conspiracy de paramore')).toEqual({ tool: 'music.play', input: { query: 'conspiracy de paramore' } })
+    expect(rule('quiero escuchar Misery Business')).toEqual({ tool: 'music.play', input: { query: 'misery business' } })
+    expect(rule('reproduce la siguiente canción')?.tool).toBe('music.next')
+    expect(rule('pon el producto vela de coco inactivo')).toBeNull()
+    expect(rule('pon el volumen al 300')).toBeNull()
+  })
+})
+
+describe('estado del reproductor', () => {
+  it('maps the assistant state without host device names', () => {
+    expect(STATE).toEqual({
+      status: 'playing',
+      generation: 3,
+      current: {
+        videoId: '8LDOUFJVNmg',
+        title: 'Paramore - Conspiracy (Official Audio)',
+        artist: 'Paramore',
+        album: null,
+        durationSeconds: 223,
+        thumbnailUrl: 'https://i.ytimg.com/vi/8LDOUFJVNmg/hqdefault.jpg',
+        url: 'https://www.youtube.com/watch?v=8LDOUFJVNmg',
+        source: 'youtube',
+      },
+      upcoming: [],
+      positionSeconds: 84,
+      durationSeconds: 223,
+      volume: 70,
+      output: { mode: 'aux', active: true },
+      error: null,
+    })
+    expect(JSON.stringify(STATE)).not.toContain('alsa_output')
+  })
+
+  it('drops thumbnails and links that are not YouTube', () => {
+    const state = toMusicState({
+      ...UPSTREAM_STATE,
+      current: { ...UPSTREAM_STATE.current, thumbnail_url: 'https://evil.example/x.jpg', url: 'javascript:alert(1)' },
+    })
+    expect(state.current?.thumbnailUrl).toBeNull()
+    expect(state.current?.url).toBeNull()
+    expect(() => toMusicState({ ...UPSTREAM_STATE, status: 'exploded' })).toThrow()
+  })
+
+  it('returns the state with the command result and in the tool result', async () => {
+    const c = new LumiAssistantClient({
+      baseUrl: 'http://127.0.0.1:8000',
+      apiKey: 'k'.repeat(20),
+      timeoutMs: 120000,
+      fetchImpl: async () => new Response(JSON.stringify({ tool: 'music.play', ok: true, text: 'Reproduciendo X.', error: null, tracks: [], state: UPSTREAM_STATE }), { status: 200 }),
+    })
+    const result = await c.musicCommand(USER, 'music.play', { query: 'x' })
+    expect(result).toMatchObject({ status: 'done', ok: true, state: STATE })
+
+    const music = fakeMusic(() => ({ status: 'done', ok: true, text: 'Reproduciendo X.', error: null, state: STATE }))
+    const tool = LUMI_TOOLS.find((t) => t.name === 'music.play')!
+    const ran = await runTool({ tool, input: { query: 'x' } as never, denied: false, explain: false }, { userId: USER, permissionKeys: [P.MUSIC_CONTROL], now: NOW, timezone: TZ, deps: deps(music.port) })
+    expect(ran).toEqual({ text: 'Reproduciendo X.', rows: 1, music: STATE })
+  })
+
+  it('reads the player state: ok, disabled (404) or unavailable', async () => {
+    const client = (fetchImpl: typeof fetch) => new LumiAssistantClient({ baseUrl: 'http://127.0.0.1:8000', apiKey: 'k'.repeat(20), timeoutMs: 120000, fetchImpl })
+    let url = ''
+    const ok = client(async (u) => {
+      url = String(u)
+      return new Response(JSON.stringify(UPSTREAM_STATE), { status: 200 })
+    })
+    expect(await ok.musicState(USER)).toEqual({ status: 'done', state: STATE })
+    expect(url).toBe('http://127.0.0.1:8000/api/v1/music/state')
+    expect(await client(async () => new Response('{}', { status: 404 })).musicState(USER)).toEqual({ status: 'disabled' })
+    expect(await client(async () => Promise.reject(new Error('down'))).musicState(USER)).toEqual({ status: 'unavailable' })
+    expect(await client(async () => new Response('{"status":"x"}', { status: 200 })).musicState(USER)).toEqual({ status: 'unavailable' })
+  })
+})
+
+describe('órdenes del reproductor del chat', () => {
+  it('accepts only the closed list of player commands with typed arguments', () => {
+    expect(lumiMusicPlayerCommandSchema.parse({ tool: 'music.pause' })).toEqual({ tool: 'music.pause', args: {} })
+    expect(lumiMusicPlayerCommandSchema.parse({ tool: 'music.volume', args: { level: 35 } })).toEqual({ tool: 'music.volume', args: { level: 35 } })
+    expect(lumiMusicPlayerCommandSchema.parse({ tool: 'music.seek', args: { position: 84 } }).args).toEqual({ position: 84 })
+    for (const bad of [
+      { tool: 'music.play', args: { query: 'x' } },
+      { tool: 'music.output', args: { mode: 'aux' } },
+      { tool: 'music.volume', args: { level: 101 } },
+      { tool: 'music.volume', args: { level: '35' } },
+      { tool: 'music.seek', args: {} },
+      { tool: 'music.jump', args: { position: 0 } },
+      { tool: 'db.drop', args: {} },
+      { tool: 'music.pause', args: {}, extra: true },
+    ]) {
+      expect(lumiMusicPlayerCommandSchema.safeParse(bad).success).toBe(false)
+    }
   })
 })

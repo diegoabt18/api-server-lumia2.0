@@ -16,6 +16,24 @@ export const lumiChatBodySchema = z.object({
   maxTokens: z.number().int().min(128).max(2048).optional(),
 })
 
+/**
+ * Órdenes del reproductor del chat (botones de Lumia Admin). Lista cerrada con argumentos tipados:
+ * nada de búsquedas ni comandos libres desde el navegador. El permiso de cada una lo comprueba la ruta.
+ */
+const noArgs = z.object({}).strict().default({})
+export const lumiMusicPlayerCommandSchema = z.discriminatedUnion('tool', [
+  z.object({ tool: z.literal('music.play'), args: noArgs }).strict(),
+  z.object({ tool: z.literal('music.pause'), args: noArgs }).strict(),
+  z.object({ tool: z.literal('music.resume'), args: noArgs }).strict(),
+  z.object({ tool: z.literal('music.stop'), args: noArgs }).strict(),
+  z.object({ tool: z.literal('music.next'), args: noArgs }).strict(),
+  z.object({ tool: z.literal('music.previous'), args: noArgs }).strict(),
+  z.object({ tool: z.literal('music.volume'), args: z.object({ level: z.number().int().min(0).max(100) }).strict() }).strict(),
+  z.object({ tool: z.literal('music.seek'), args: z.object({ position: z.number().int().min(0).max(24 * 3600) }).strict() }).strict(),
+  z.object({ tool: z.literal('music.jump'), args: z.object({ position: z.number().int().min(1).max(50) }).strict() }).strict(),
+])
+export type LumiMusicPlayerCommand = z.infer<typeof lumiMusicPlayerCommandSchema>
+
 export const lumiListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   offset: z.coerce.number().int().min(0).default(0),

@@ -44,6 +44,7 @@ import {
   lumiChatBodySchema,
   lumiConversationParamsSchema,
   lumiListQuerySchema,
+  lumiMusicPlayerCommandSchema,
   lumiProductParamsSchema,
   lumiUsageQuerySchema,
 } from '../modules/lumi/schemas/lumi.schema.js'
@@ -145,6 +146,8 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     for (const match of matches) {
       const result = await executeTool(request, match)
       yield toolEvent(match, result.rows)
+      // Música: el estado real del reproductor, para que el chat muestre el reproductor.
+      if (result.music) yield { type: 'music', state: result.music }
       texts.push(result.text)
       references.push(...(result.references ?? []))
       entity = result.entity ?? entity
@@ -649,6 +652,41 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       return { ok: true }
     },
   )
+
+  /* ───────────── Reproductor de música del chat (Lumia Admin) ─────────────
+   * La música suena en el servidor del asistente, no en el navegador. Hay un único reproductor
+   * (una salida de audio): quien tiene music.control lo controla; music.read solo lo ve.
+   */
+  const musicPort = createLumiMusicPort(client)
+  const MUSIC_UNAVAILABLE = 'No pude comunicarme con el reproductor de música ahora mismo.'
+
+  api.get('/admin/lumi/music/state', { preHandler: g(PERMISSION_REGISTRY.MUSIC_READ) }, async (request) => {
+    if (!musicPort) return { available: false, reason: 'not_configured', state: null }
+    const result = await musicPort.state(userIdOf(request))
+    if (result.status === 'done') return { available: true, reason: null, state: result.state }
+    return { available: false, reason: result.status, state: null }
+  })
+
+  api.post('/admin/lumi/music/commands', { preHandler: g(PERMISSION_REGISTRY.MUSIC_READ) }, async (request) => {
+    const parsed = lumiMusicPlayerCommandSchema.safeParse(request.body)
+    if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
+    // Todas las órdenes del reproductor cambian lo que suena: exigen music.control.
+    if (!hasPermission([...keysOf(request)], PERMISSION_REGISTRY.MUSIC_CONTROL)) {
+      throw AppError.forbidden('No tienes permiso para controlar la música')
+    }
+    if (!musicPort) return { ok: false, available: false, text: MUSIC_UNAVAILABLE, state: null }
+    const result = await musicPort.command(userIdOf(request), parsed.data.tool, parsed.data.args)
+    switch (result.status) {
+      case 'done':
+        return { ok: result.ok, available: true, text: result.text, state: result.state }
+      case 'disabled':
+        return { ok: false, available: false, text: 'La música no está activada en el asistente.', state: null }
+      case 'rejected':
+        return { ok: false, available: true, text: 'El reproductor de música no aceptó esa orden.', state: null }
+      case 'unavailable':
+        return { ok: false, available: false, text: MUSIC_UNAVAILABLE, state: null }
+    }
+  })
 
   api.get('/admin/lumi/usage', { preHandler: g(PERMISSION_REGISTRY.LUMI_USE) }, async (request) => {
     const parsed = lumiUsageQuerySchema.safeParse(request.query)

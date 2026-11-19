@@ -37,6 +37,12 @@ export type LumiToolName =
   | 'music.current'
   | 'music.output'
   | 'music.output_status'
+  | 'music.enqueue'
+  | 'music.queue'
+  | 'music.jump'
+  | 'music.stop'
+  | 'music.volume'
+  | 'music.seek'
 
 /** Fila de pedido sin datos del cliente. */
 export interface AssistantOrderRow {
@@ -115,13 +121,51 @@ export interface LumiToolDeps {
  *  - `rejected`: el asistente rechazó los argumentos (422).
  */
 export type LumiMusicCommandResult =
-  | { status: 'done'; ok: boolean; text: string; error: string | null }
+  | { status: 'done'; ok: boolean; text: string; error: string | null; state: LumiMusicState | null }
   | { status: 'disabled' }
   | { status: 'unavailable' }
   | { status: 'rejected' }
 
+/** Estado del reproductor (GET /music/state del asistente). */
+export type LumiMusicStateResult = { status: 'done'; state: LumiMusicState } | { status: 'disabled' } | { status: 'unavailable' }
+
+/** Argumentos de un comando: texto (búsqueda, salida) o entero (volumen, posición). */
+export type LumiMusicArgs = Readonly<Record<string, string | number>>
+
 export interface LumiMusicPort {
-  command(userId: string, tool: string, args: Readonly<Record<string, string>>): Promise<LumiMusicCommandResult>
+  command(userId: string, tool: string, args: LumiMusicArgs): Promise<LumiMusicCommandResult>
+  state(userId: string): Promise<LumiMusicStateResult>
+}
+
+/** Pista tal como la describe el asistente. Metadatos reales de YouTube; los que no hay, null. */
+export interface LumiMusicTrack {
+  videoId: string
+  title: string
+  artist: string | null
+  album: string | null
+  durationSeconds: number | null
+  /** Miniatura pública de YouTube (https://i.ytimg.com/…). */
+  thumbnailUrl: string | null
+  /** Página del vídeo en YouTube. */
+  url: string | null
+  source: 'youtube'
+}
+
+/**
+ * Estado real del reproductor del servidor de música. `playing` solo cuando el motor confirmó audio;
+ * `loading` mientras arranca. No incluye nombres de dispositivos del host.
+ */
+export interface LumiMusicState {
+  status: 'idle' | 'loading' | 'playing' | 'paused' | 'stopped' | 'error'
+  /** Cambia con cada pista nueva o al detener. */
+  generation: number
+  current: LumiMusicTrack | null
+  upcoming: LumiMusicTrack[]
+  positionSeconds: number
+  durationSeconds: number | null
+  volume: number
+  output: { mode: 'aux' | 'bluetooth'; active: boolean }
+  error: string | null
 }
 
 export interface LumiToolContext {
@@ -151,6 +195,8 @@ export interface LumiToolResult {
    * accesos (icono de ojo, enlace al módulo) y se guardan con el mensaje en el historial.
    */
   references?: LumiReference[]
+  /** Estado del reproductor tras un comando de música: el chat lo muestra como reproductor. */
+  music?: LumiMusicState
 }
 
 /**
