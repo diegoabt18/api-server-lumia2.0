@@ -3,8 +3,8 @@ import { PERMISSION_REGISTRY as P, PERMISSION_WILDCARD, type PermissionId } from
 import { SANDBOX_SKIPPED_TEXT, SandboxTurnRunner } from '../../src/modules/lumi/capabilities/services/sandbox-runner.js'
 import { LumiAssistantClient, type LumiSelectResult } from '../../src/modules/lumi/infrastructure/lumi-assistant.client.js'
 import { interpret, normalizeProposal, selectorCatalog, type SelectorProposal } from '../../src/modules/lumi/selector/lumi-selector.js'
-import { capabilitiesFor, LUMI_TOOLS, runTool, type ToolMatch } from '../../src/modules/lumi/tools/catalog.js'
-import { MUSIC_TOOLS } from '../../src/modules/lumi/tools/music.tools.js'
+import { capabilitiesFor, LUMI_TOOLS, matchTool, runTool, type ToolMatch } from '../../src/modules/lumi/tools/catalog.js'
+import { MUSIC_HELP_REPLY, MUSIC_TOOLS } from '../../src/modules/lumi/tools/music.tools.js'
 import { createLumiMusicPort, readOnlyMusicPort } from '../../src/modules/lumi/tools/tool-adapters.js'
 import type { LumiMusicCommandResult, LumiMusicPort, LumiToolDeps } from '../../src/modules/lumi/tools/tool.types.js'
 import { planLumiTurn } from '../../src/modules/lumi/turn/turn-plan.js'
@@ -68,10 +68,49 @@ describe('registro de herramientas de música', () => {
       expect(tool.permission).toBe(read ? P.MUSIC_READ : P.MUSIC_CONTROL)
       expect(tool.external).toEqual({ effect: read ? 'read' : 'control' })
       expect(tool.selector?.module).toBe('musica')
-      // Solo por selector: las reglas no reconocen nada.
-      expect(tool.match('pon musica', 'pon música', CTX)).toBeNull()
       expect(LUMI_TOOLS).toContain(tool)
     }
+  })
+})
+
+describe('reglas de música (etapa 1, sin modelo)', () => {
+  const rule = (message: string, keys: PermissionId[] = [P.MUSIC_READ, P.MUSIC_CONTROL]) => {
+    const m = matchTool(message, keys, CTX)
+    return m ? { tool: m.tool.name, input: m.input as unknown, denied: m.denied, explain: m.explain } : null
+  }
+
+  it.each([
+    ['buscar esta cancion panamore conspirancy', 'music.search', { query: 'panamore conspirancy' }],
+    ['Busca la canción Pan Amore Conspiracy', 'music.search', { query: 'pan amore conspiracy' }],
+    ['ponme algo de Soda Stereo', 'music.play', { query: 'soda stereo' }],
+    ['pon música', 'music.play', {}],
+    ['pon la música por bluetooth', 'music.output', { mode: 'bluetooth' }],
+    ['que suene por el cable auxiliar', 'music.output', { mode: 'aux' }],
+    ['¿por dónde está sonando la música?', 'music.output_status', {}],
+    ['¿qué canción suena?', 'music.current', {}],
+    ['para la música un momento', 'music.pause', {}],
+    ['reanuda la música', 'music.resume', {}],
+    ['siguiente canción', 'music.next', {}],
+    ['vuelve a la canción anterior', 'music.previous', {}],
+  ])('«%s» → %s', (message, tool, input) => {
+    expect(rule(message)).toEqual({ tool, input, denied: false, explain: false })
+  })
+
+  it('does not take store questions or vague phrases', () => {
+    expect(rule('¿cuántos pedidos tengo por despachar?')?.tool).toBe('orders.count')
+    expect(rule('busca el producto vela de coco')?.tool).toBe('products.search')
+    expect(rule('para el pedido ORD-12345678')?.tool).toBe('orders.lookup')
+    expect(rule('pon música para la fiesta')?.tool).toBe('music.play')
+    expect(rule('me gusta la música')).toBeNull()
+  })
+
+  it('answers without permission instead of reading anything', () => {
+    // Solo «Controlar»: buscar requiere «Ver».
+    expect(rule('buscar esta cancion panamore conspirancy', [P.MUSIC_CONTROL])).toMatchObject({ tool: 'music.search', denied: true })
+  })
+
+  it('skips disabled music tools', () => {
+    expect(matchTool('siguiente canción', [P.MUSIC_CONTROL], { ...CTX, enabled: new Set(['orders.count']) })).toBeNull()
   })
 })
 
@@ -111,6 +150,27 @@ describe('selectorCatalog con música', () => {
     await planLumiTurn({ userId: USER, message: 'hola', permissionKeys: [P.LUMI_USE, P.MUSIC_READ], now: NOW, timezone: TZ, resolveEntity: async () => null }, { select })
     expect(sent).toContain('music.current')
     expect(sent).not.toContain('music.play')
+  })
+})
+
+describe('planLumiTurn: lo que el selector no entiende de música', () => {
+  it('answers with the music help and does not register a missing capability', async () => {
+    const select = async (): Promise<LumiSelectResult> => ({ status: 'missing', intents: [], need: 'karaoke', module: 'musica', errors: [], model: 'm', latencyMs: 1, promptTokens: 1, completionTokens: 1 })
+    const { plan, trace } = await planLumiTurn(
+      { userId: USER, message: 'activa el modo karaoke', permissionKeys: [P.LUMI_USE, P.MUSIC_CONTROL], now: NOW, timezone: TZ, resolveEntity: async () => null },
+      { select },
+    )
+    expect(plan).toEqual({ kind: 'reply', text: MUSIC_HELP_REPLY })
+    expect(trace.interpretation).toBe('missing_capability')
+  })
+
+  it('still registers missing store capabilities', async () => {
+    const select = async (): Promise<LumiSelectResult> => ({ status: 'missing', intents: [], need: 'exportar pedidos', module: 'pedidos', errors: [], model: 'm', latencyMs: 1, promptTokens: 1, completionTokens: 1 })
+    const { plan } = await planLumiTurn(
+      { userId: USER, message: 'exporta los pedidos a Excel', permissionKeys: [P.LUMI_USE], now: NOW, timezone: TZ, resolveEntity: async () => null },
+      { select },
+    )
+    expect(plan).toEqual({ kind: 'missing_capability', need: 'exportar pedidos', module: 'pedidos' })
   })
 })
 

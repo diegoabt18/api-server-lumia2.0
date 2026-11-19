@@ -10,7 +10,8 @@ import {
   type LumiInterpretation,
   type NormalizedProposal,
 } from '../selector/lumi-selector.js'
-import { matchTool, type ToolMatch } from '../tools/catalog.js'
+import { LUMI_TOOLS, matchTool, type ToolMatch } from '../tools/catalog.js'
+import { MUSIC_HELP_REPLY } from '../tools/music.tools.js'
 import type { LumiEntityRef } from '../tools/tool.types.js'
 
 /**
@@ -163,6 +164,9 @@ export async function planLumiTurn(input: TurnInput, deps: TurnDeps): Promise<{ 
   return planFrom(result, trace)
 }
 
+/** Módulos externos (música): lo que no sabe hacer no es una capacidad de la tienda que falte. */
+const EXTERNAL_MODULES: ReadonlySet<string> = new Set(LUMI_TOOLS.filter((t) => t.external).map((t) => t.selector!.module))
+
 function planFrom(result: LumiInterpretation, trace: TurnTrace): { plan: TurnPlan; trace: TurnTrace } {
   switch (result.status) {
     case 'supported': {
@@ -183,6 +187,8 @@ function planFrom(result: LumiInterpretation, trace: TurnTrace): { plan: TurnPla
       return { plan: { kind: 'reply', text: result.ask }, trace }
     case 'missing_capability':
       trace.need = result.need
+      // Música: se responde con lo que sí sabe hacer, sin registrar nada en el Capability Manager.
+      if (EXTERNAL_MODULES.has(result.module)) return { plan: { kind: 'reply', text: MUSIC_HELP_REPLY }, trace }
       return { plan: { kind: 'missing_capability', need: result.need, module: result.module }, trace }
     case 'ambiguous':
       return { plan: { kind: 'reply', text: AMBIGUOUS_REPLY }, trace }

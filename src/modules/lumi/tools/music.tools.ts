@@ -17,6 +17,10 @@ import type { LumiSelectorArg, LumiTool, LumiToolContext, LumiToolName, LumiTool
 /** Igual que QUERY_MAX_CHARS del asistente. */
 const QUERY_MAX_CHARS = 200
 
+/** Respuesta cuando el selector no encuentra la orden de música (en lugar de registrar una capacidad). */
+export const MUSIC_HELP_REPLY =
+  'Con la música puedo poner una canción o un artista, buscar canciones, pausar, reanudar, pasar a la siguiente o a la anterior, decirte qué suena y cambiar la salida (cable o Bluetooth). Por ejemplo: «Busca la canción Pan Amore Conspiracy» o «Pon algo de Soda Stereo».'
+
 const DISABLED_TEXT = 'La música no está activada en el asistente.'
 const UNAVAILABLE_TEXT = 'No pude comunicarme con el reproductor de música ahora mismo. Inténtalo de nuevo en un momento.'
 const REJECTED_TEXT = 'El reproductor de música no aceptó esa orden.'
@@ -41,6 +45,65 @@ function outputMode(value: unknown, normalized: string): OutputMode | null {
   const aux = AUX_WORDS.test(normalized)
   if (bt !== aux) return bt ? 'bluetooth' : 'aux'
   return typeof value === 'string' && (OUTPUT_MODES as readonly string[]).includes(value) ? (value as OutputMode) : null
+}
+
+/* ───────────── Reglas (etapa 1): órdenes de música claras, sin depender del modelo ───────────── */
+
+/** Limpia el término capturado por una regla: sin signos ni comillas al principio o al final. */
+function ruleQuery(raw: string | undefined): string | null {
+  const text = (raw ?? '').replace(/[?¿!¡.,;:"'«»]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return text.length >= 2 ? text.slice(0, QUERY_MAX_CHARS) : null
+}
+
+const SONG = String.raw`(?:cancion(?:es)?|tema|temas|musica|artista)`
+const ARTICLE = String.raw`(?:(?:la|las|el|los|una|un|esta|esa|estas)\s+)?`
+const SEARCH_RULE = new RegExp(
+  String.raw`\bbusca(?:r|me|s)?\s+` +
+    ARTICLE +
+    SONG +
+    String.raw`\s+(?:(?:de|del|llamad[oa]s?|que se llaman?|que coincidan? con|parecidas? a)\s+)?(.+)$`,
+)
+const PLAY_RULE = new RegExp(
+  String.raw`\b(?:reproduce|reproducir|reproduceme|quiero escuchar|pon(?:me|nos)?|coloca(?:me)?)\s+` +
+    ARTICLE +
+    String.raw`(?:` +
+    SONG +
+    String.raw`\s+(?:de\s+)?|algo de\s+)(.+)$`,
+)
+const PLAY_ANY_RULE = /\b(?:pon(?:me|nos)?|reproduce|quiero escuchar)\s+(?:algo de\s+|un poco de\s+)?musica$/
+// Verbo seguido de «música/canción»: «pon música para la fiesta» no es pausar.
+const PAUSE_RULE = /\b(?:pausa|pausar|deten|detener|para|parar|quita|quitar|apaga|apagar)\s+(?:la |esta |el )?(?:musica|cancion|tema)\b/
+const RESUME_RULE = /\b(?:reanuda|reanudar|continua|continuar|sigue con|vuelve a poner)\s+(?:la |esta |el )?(?:musica|cancion|tema)\b/
+const NEXT_RULE =
+  /\b(?:siguiente cancion|cancion siguiente|pasa a la siguiente|siguiente tema|otra cancion|salta(?:r|te)? (?:esta |la )?cancion|cambia de cancion)\b/
+const PREVIOUS_RULE = /\b(?:cancion anterior|anterior cancion|tema anterior|vuelve a la (?:cancion )?anterior)\b/
+const CURRENT_RULE = /\bque (?:cancion|tema|musica) (?:esta )?(?:sonando|suena)\b|\bque (?:esta )?sonando\b|\bque suena\b/
+const OUTPUT_STATUS_RULE = /\bpor donde (?:esta )?(?:sonando|suena)\b|\b(?:esta conectado el parlante|parlante (?:esta )?conectado)\b/
+const OUTPUT_TARGET = /\b(?:musica|suene|sonar|suena|salida|pasala|ponla|cancion|audio)\b/
+
+const RULES: Partial<Record<LumiToolName, (normalized: string) => MusicInput | null>> = {
+  'music.search': (t) => {
+    const query = ruleQuery(SEARCH_RULE.exec(t)?.[1])
+    return query ? { query } : null
+  },
+  'music.output_status': (t) => (OUTPUT_STATUS_RULE.test(t) ? {} : null),
+  'music.output': (t) => {
+    if (!OUTPUT_TARGET.test(t) || OUTPUT_STATUS_RULE.test(t)) return null
+    const mode = outputMode(undefined, t)
+    return mode ? { mode } : null
+  },
+  'music.current': (t) => (CURRENT_RULE.test(t) ? {} : null),
+  'music.next': (t) => (NEXT_RULE.test(t) ? {} : null),
+  'music.previous': (t) => (PREVIOUS_RULE.test(t) ? {} : null),
+  'music.pause': (t) => (PAUSE_RULE.test(t) ? {} : null),
+  'music.resume': (t) => (RESUME_RULE.test(t) ? {} : null),
+  // «Poner» es la más general: cede ante cualquier otra orden («pon la música por Bluetooth» es la salida).
+  'music.play': (t): MusicInput | null => {
+    if (Object.entries(RULES).some(([name, rule]) => name !== 'music.play' && rule?.(t))) return null
+    if (PLAY_ANY_RULE.test(t)) return {}
+    const query = ruleQuery(PLAY_RULE.exec(t)?.[1])
+    return query ? { query } : null
+  },
 }
 
 const QUERY_ARG: LumiSelectorArg = { name: 'query', kind: 'str', description: 'canción o artista tal como lo dice el usuario' }
@@ -92,8 +155,8 @@ function musicTool(spec: MusicToolSpec): LumiTool<MusicInput> {
     example: spec.example,
     permission: spec.permission,
     external: { effect: spec.permission === PERMISSION_REGISTRY.MUSIC_CONTROL ? 'control' : 'read' },
-    // Solo por selector: las reglas (etapa 1) son para los datos de la tienda.
-    match: () => null,
+    // Reglas solo para órdenes claras; el resto lo propone el selector.
+    match: (normalized) => RULES[spec.name]?.(normalized) ?? null,
     selector: {
       description: spec.description,
       module: 'musica',
