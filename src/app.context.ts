@@ -148,7 +148,7 @@ import { LumiKnowledgeRepository } from './modules/lumi/learning/infrastructure/
 import { LumiLearningService } from './modules/lumi/learning/services/learning.service.js'
 import { MongoTurnMetrics, type TurnMetricsStore } from './modules/lumi/metrics/turn-metrics.js'
 import { LumiAssistantClient } from './modules/lumi/infrastructure/lumi-assistant.client.js'
-import { createLumiToolDeps } from './modules/lumi/tools/tool-adapters.js'
+import { createLumiMusicPort, createLumiToolDeps, readOnlyMusicPort } from './modules/lumi/tools/tool-adapters.js'
 import { DEFAULT_AUTOMATION_TIMEZONE } from './modules/lumi/automation/domain/schedule.js'
 import { RepositoryInitiativeSources } from './modules/lumi/initiatives/infrastructure/initiative-sources.js'
 import { InitiativeEngine } from './modules/lumi/initiatives/services/initiative-engine.js'
@@ -717,7 +717,18 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       // Las pruebas aplican lo aprendido por quien prueba y lo global, igual que su chat.
       learned: (userId, message, enabled) => lumiLearning.learnedTool(userId, message, enabled, false),
       examples: (userId, message, enabled) => lumiLearning.examples(userId, message, enabled),
-      toolDeps: createLumiToolDeps({ orders, products, categories, notifications, initiatives: lumiInitiatives }),
+      toolDeps: createLumiToolDeps({
+        orders,
+        products,
+        categories,
+        notifications,
+        initiatives: lumiInitiatives,
+        // Música: solo lecturas (qué suena, buscar, salida). Las pruebas nunca ponen a sonar nada.
+        music: readOnlyMusicPort(
+          createLumiMusicPort(lumiAssistantForTests),
+          new Set(LUMI_TOOLS.filter((t) => t.external?.effect === 'read').map((t) => t.name)),
+        ),
+      }),
       timezone: DEFAULT_AUTOMATION_TIMEZONE,
     }),
   )

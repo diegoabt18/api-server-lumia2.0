@@ -133,7 +133,7 @@ export async function planLumiTurn(input: TurnInput, deps: TurnDeps): Promise<{ 
     proposal = await deps.select(input.userId, {
       message: input.message,
       context: entityContextLine(entity),
-      ...selectorCatalog(input.enabledTools),
+      ...selectorCatalog(input.enabledTools, input.permissionKeys),
       ...(examples.length ? { examples } : {}),
     })
   } catch (err) {

@@ -78,6 +78,13 @@ export const PERMISSION_REGISTRY = {
   /** Aprobar, retirar, hacer global o borrar interpretaciones aprendidas. Fase F. */
   LUMI_LEARNING_MANAGE: 'lumi.learning.manage',
   /**
+   * Módulo de música de Lumi (suena en el servidor del asistente). Lectura: qué suena, buscar
+   * canciones y por dónde suena. No cambia nada.
+   */
+  MUSIC_READ: 'music.read',
+  /** Controlar la música: reproducir, pausar, reanudar, saltar y cambiar la salida (aux/Bluetooth). */
+  MUSIC_CONTROL: 'music.control',
+  /**
    * Permisos por módulo (2026-11). Antes estos módulos reutilizaban admin.access o products.*.
    * La migración scripts/migrate-module-permissions.ts los concede a quien ya tenía el acceso.
    */

@@ -1,5 +1,5 @@
 import { PERMISSION_REGISTRY, hasPermission, type PermissionId } from '../../../common/permissions/registry.js'
-import { canUseTool, isToolEnabled, LUMI_TOOLS, wantsExplanation, type EnabledTools, type ToolMatch } from '../tools/catalog.js'
+import { canUseTool, explainWith, isToolEnabled, LUMI_TOOLS, type EnabledTools, type ToolMatch } from '../tools/catalog.js'
 import {
   LUMI_MODULES,
   type LumiEntityRef,
@@ -75,11 +75,18 @@ const selectorTools = (enabled?: EnabledTools): Array<LumiTool<never>> =>
   LUMI_TOOLS.filter((t) => t.selector !== undefined && isToolEnabled(t, enabled))
 
 /**
- * Catálogo para /select. Se envían TODAS las herramientas, también las que el usuario no puede
- * usar: si se ocultaran, "¿cuánto vendimos?" sin permiso de analítica se registraría como una
+ * Catálogo para /select. Se envían TODAS las herramientas de datos, también las que el usuario no
+ * puede usar: si se ocultaran, "¿cuánto vendimos?" sin permiso de analítica se registraría como una
  * capacidad que falta. El permiso se comprueba después, en el Server, y no se lee ningún dato.
+ *
+ * Excepción: las de un módulo externo (música) solo van si el usuario tiene su permiso, y su módulo
+ * solo aparece si va alguna. Sin ellas, «pon música» es conversación, no una capacidad que falta.
+ * Sin `keys` (pruebas, código previo) van todas.
  */
-export function selectorCatalog(enabled?: EnabledTools): { tools: SelectorToolSpec[]; modules: string[] } {
+export function selectorCatalog(
+  enabled?: EnabledTools,
+  keys?: readonly PermissionId[],
+): { tools: SelectorToolSpec[]; modules: string[] } {
   const spec = (name: string, description: string, args: readonly LumiSelectorArg[]): SelectorToolSpec => ({
     name,
     description,
@@ -90,12 +97,15 @@ export function selectorCatalog(enabled?: EnabledTools): { tools: SelectorToolSp
       description: a.description ?? '',
     })),
   })
+  const tools = selectorTools(enabled).filter((t) => t.external === undefined || keys === undefined || canUseTool(t, keys))
+  const externalModules = new Set(selectorTools().filter((t) => t.external).map((t) => t.selector!.module as string))
+  const usedModules = new Set(tools.map((t) => t.selector!.module as string))
   return {
     tools: [
-      ...selectorTools(enabled).map((t) => spec(t.name, t.selector!.description, t.selector!.args)),
+      ...tools.map((t) => spec(t.name, t.selector!.description, t.selector!.args)),
       ...DELEGATES.map((d) => spec(d.name, d.description, d.args)),
     ],
-    modules: [...LUMI_MODULES],
+    modules: LUMI_MODULES.filter((m) => !externalModules.has(m) || usedModules.has(m)),
   }
 }
 
@@ -235,7 +245,7 @@ export function interpret(
       }
       return { status: 'missing_information', tool: tool.name, missing: built.missing, ask: tool.selector!.ask ?? GENERIC_ASK }
     }
-    matches.push({ tool, input: built.input, denied, explain: wantsExplanation(text) })
+    matches.push({ tool, input: built.input, denied, explain: explainWith(tool, text) })
   }
   if (matches.length > 0) return { status: 'supported', matches }
   if (delegate === 'web' && !hasPermission([...permissionKeys], PERMISSION_REGISTRY.LUMI_WEB)) {

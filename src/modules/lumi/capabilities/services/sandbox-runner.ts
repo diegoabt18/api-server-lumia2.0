@@ -40,10 +40,14 @@ export interface SandboxDeps {
   clock?: () => Date
 }
 
+/** Texto de una herramienta que la prueba elige pero no ejecuta (cambiaría algo fuera del Server). */
+export const SANDBOX_SKIPPED_TEXT = 'No se ejecuta en pruebas: cambiaría lo que suena. La selección sí se evalúa.'
+
 /**
  * Ejecuta una frase con el mismo plan de turno que el chat y los permisos del administrador.
  * Sin efectos: no crea recordatorios, no registra capacidades, no guarda historial, no llama a la
- * conversación del modelo. Solo ejecuta herramientas del catálogo, que son de lectura.
+ * conversación del modelo. Solo ejecuta herramientas de lectura: las de control de un módulo
+ * externo (música: reproducir, pausar, cambiar la salida…) se eligen y se evalúan, pero no se ejecutan.
  */
 export class SandboxTurnRunner {
   constructor(private readonly deps: SandboxDeps) {}
@@ -114,6 +118,9 @@ export class SandboxTurnRunner {
   private async execute(match: ToolMatch, input: SandboxInput, now: Date): Promise<ToolExecution> {
     if (match.denied) {
       return { tool: match.tool.name, denied: true, rows: null, durationMs: 0, text: null, error: null }
+    }
+    if (match.tool.external?.effect === 'control') {
+      return { tool: match.tool.name, denied: false, rows: null, durationMs: 0, text: SANDBOX_SKIPPED_TEXT, error: null }
     }
     const started = Date.now()
     try {

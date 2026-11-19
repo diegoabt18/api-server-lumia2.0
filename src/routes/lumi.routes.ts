@@ -18,7 +18,7 @@ import type { LumiReference } from '../modules/lumi/references/lumi-references.j
 import { missingCapabilityReply } from '../modules/lumi/selector/lumi-selector.js'
 import { planLumiTurn, type TurnPlan } from '../modules/lumi/turn/turn-plan.js'
 import { sampleFromTrace, type TurnSample } from '../modules/lumi/metrics/turn-metrics.js'
-import { createLumiToolDeps } from '../modules/lumi/tools/tool-adapters.js'
+import { createLumiMusicPort, createLumiToolDeps } from '../modules/lumi/tools/tool-adapters.js'
 import {
   buildAssistRequest,
   lumiProductAssistSchema,
@@ -108,6 +108,8 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     categories: ctx.repos.categories,
     notifications: ctx.repos.notifications,
     initiatives: ctx.services.lumiInitiatives,
+    // Música del asistente (POST /music/commands). Sin asistente configurado: «no disponible».
+    music: createLumiMusicPort(client),
   })
 
   const executeTool = (request: FastifyRequest, match: ToolMatch) =>

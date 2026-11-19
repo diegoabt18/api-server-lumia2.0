@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { AppError } from '../../../common/errors/app.error.js'
 import { parseLumiReferences, type LumiReference } from '../references/lumi-references.js'
+import type { LumiMusicCommandResult } from '../tools/tool.types.js'
 
 /**
  * Cliente backend-to-backend hacia ia-asistente (Local AI Assistant).
@@ -134,6 +135,16 @@ const selectUpstreamSchema = z.object({
   prompt_tokens: z.number().int(),
   completion_tokens: z.number().int(),
 })
+
+/** Respuesta de POST /music/commands. Solo se usa el texto determinista; el estado del reproductor se ignora. */
+const musicCommandUpstreamSchema = z.object({
+  ok: z.boolean(),
+  text: z.string().min(1).max(4000),
+  error: z.string().nullable().optional(),
+})
+
+/** Tiempo límite de un comando de música (buscar y empezar a sonar puede tardar unos segundos). */
+export const LUMI_MUSIC_COMMAND_TIMEOUT_MS = 30_000
 
 export interface LumiSelectRequest {
   message: string
@@ -409,6 +420,44 @@ export class LumiAssistantClient {
       latencyMs: parsed.latency_ms,
       promptTokens: parsed.prompt_tokens,
       completionTokens: parsed.completion_tokens,
+    }
+  }
+
+  /**
+   * Comando del módulo de música (`{tool, args}`). Nunca lanza: devuelve el texto determinista del
+   * asistente, o por qué no se pudo (módulo apagado = 404, asistente caído, respuesta inesperada).
+   */
+  async musicCommand(
+    userRef: string,
+    tool: string,
+    args: Readonly<Record<string, string>>,
+    timeoutMs: number = Math.min(this.options.timeoutMs, LUMI_MUSIC_COMMAND_TIMEOUT_MS),
+  ): Promise<LumiMusicCommandResult> {
+    if (!USER_REF_PATTERN.test(userRef)) return { status: 'rejected' }
+    let res: Response
+    try {
+      res = await this.fetchImpl(`${this.options.baseUrl}${API_PREFIX}/music/commands`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-API-Key': this.options.apiKey,
+          'X-User-Ref': userRef,
+        },
+        body: JSON.stringify({ tool, args }),
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+    } catch {
+      return { status: 'unavailable' }
+    }
+    if (res.status === 404) return { status: 'disabled' }
+    if (res.status === 422) return { status: 'rejected' }
+    if (!res.ok) return { status: 'unavailable' }
+    try {
+      const parsed = musicCommandUpstreamSchema.parse(await res.json())
+      return { status: 'done', ok: parsed.ok, text: parsed.text, error: parsed.error ?? null }
+    } catch {
+      return { status: 'unavailable' }
     }
   }
 

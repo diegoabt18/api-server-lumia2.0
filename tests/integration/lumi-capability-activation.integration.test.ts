@@ -112,12 +112,13 @@ describeIfDb('Lumi fase E: activación (MongoDB real)', () => {
     await db.collection('products').deleteMany({ slug: { $in: ['jabon-sin-campo', 'difusor-texto'] } })
   })
 
-  it('sincroniza el registro una sola vez y solo habilita las 8 herramientas anteriores', async () => {
+  it('sincroniza el registro una sola vez y solo habilita las 8 herramientas anteriores y las 9 de música', async () => {
     await activation.syncRegistry()
     await activation.syncRegistry()
     expect(await db.collection('lumi_capabilities').countDocuments()).toBe(LUMI_TOOLS.length)
     const enabled = await repo.enabledToolNames()
-    expect(enabled).toHaveLength(8)
+    expect(enabled.filter((name) => !name.startsWith('music.'))).toHaveLength(8)
+    expect(enabled.filter((name) => name.startsWith('music.'))).toHaveLength(9)
     expect(enabled).not.toContain('products.unpriced')
     expect(matchTool('productos sin precio', admin.permissionKeys, { now: new Date(), timezone: 'America/Bogota', enabled: await gate.enabledTools() })?.tool.name).not.toBe('products.unpriced')
   })

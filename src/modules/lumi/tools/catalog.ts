@@ -12,6 +12,7 @@ import { productsUnpriced } from './products-unpriced.tool.js'
 import { productsUntaxed } from './products-untaxed.tool.js'
 import { productsTaxed } from './products-taxed.tool.js'
 import { categoriesList } from './categories-list.tool.js'
+import { MUSIC_TOOLS } from './music.tools.js'
 import { compactRefs, entityRef, moduleRef, type LumiReference } from '../references/lumi-references.js'
 
 /* ───────────────────────── Formato ───────────────────────── */
@@ -137,6 +138,11 @@ const EXPLANATION_INTENT =
 
 export function wantsExplanation(normalized: string): boolean {
   return EXPLANATION_INTENT.test(normalized)
+}
+
+/** Si los datos de la herramienta van al modelo para explicarlos. Nunca con un módulo externo (música). */
+export function explainWith(tool: Pick<LumiTool<never>, 'external'>, normalized: string): boolean {
+  return tool.external === undefined && wantsExplanation(normalized)
 }
 
 /* ───────────────────────── Herramientas ───────────────────────── */
@@ -520,6 +526,8 @@ export const LUMI_TOOLS: ReadonlyArray<LumiTool<never>> = [
   inventoryLow,
   initiativesList,
   notificationsUnread,
+  // Música: solo por selector y solo para quien tiene music.read o music.control.
+  ...MUSIC_TOOLS,
 ] as unknown as ReadonlyArray<LumiTool<never>>
 
 export interface ToolMatch {
@@ -554,7 +562,7 @@ export function matchTool(
     if (!isToolEnabled(tool, ctx.enabled)) continue
     const input = tool.match(normalized, message, ctx)
     if (input === null) continue
-    return { tool, input, denied: !canUseTool(tool, keys), explain: wantsExplanation(normalized) }
+    return { tool, input, denied: !canUseTool(tool, keys), explain: explainWith(tool, normalized) }
   }
   return null
 }
@@ -565,6 +573,8 @@ const DENIED_TEXT: Record<string, string> = {
   [PERMISSION_REGISTRY.INVENTORY_READ]: 'No tienes permiso para consultar el inventario.',
   [PERMISSION_REGISTRY.ANALYTICS_READ]: 'No tienes permiso para consultar ventas ni analítica.',
   [PERMISSION_REGISTRY.CATEGORIES_READ]: 'No tienes permiso para consultar categorías.',
+  [PERMISSION_REGISTRY.MUSIC_READ]: 'No tienes permiso para consultar la música.',
+  [PERMISSION_REGISTRY.MUSIC_CONTROL]: 'No tienes permiso para controlar la música.',
 }
 
 /** Ejecuta la herramienta. Sin permiso no se lee nada: se devuelve el aviso. */

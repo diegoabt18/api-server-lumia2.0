@@ -5,6 +5,8 @@ import type { LumiReference } from '../references/lumi-references.js'
 /**
  * Catálogo de herramientas de Lumi. Una herramienta es una consulta de SOLO LECTURA que el Server
  * ejecuta con los permisos del usuario y responde con texto determinista (plantilla), sin modelo.
+ * Excepción: las de música (`external`), que controlan el reproductor del asistente con un comando
+ * cerrado y también responden con texto determinista.
  *
  * Reglas del catálogo:
  *  - Nunca hay "ejecutar endpoint arbitrario": solo las herramientas registradas aquí.
@@ -26,6 +28,15 @@ export type LumiToolName =
   | 'products.untaxed'
   | 'products.taxed'
   | 'categories.list'
+  | 'music.play'
+  | 'music.search'
+  | 'music.pause'
+  | 'music.resume'
+  | 'music.next'
+  | 'music.previous'
+  | 'music.current'
+  | 'music.output'
+  | 'music.output_status'
 
 /** Fila de pedido sin datos del cliente. */
 export interface AssistantOrderRow {
@@ -92,6 +103,25 @@ export interface LumiToolDeps {
     countUnread(userId: string): Promise<number>
     recentUnread(userId: string, limit: number): Promise<Array<{ title: string; createdAt: string }>>
   }
+  /** Módulo de música del asistente. Sin puerto (asistente sin configurar o pruebas): no disponible. */
+  music?: LumiMusicPort
+}
+
+/**
+ * Resultado de un comando de música (POST /music/commands del asistente):
+ *  - `done`: el asistente respondió; `text` es determinista y se muestra tal cual (`ok` false = no se pudo).
+ *  - `disabled`: el módulo está apagado (MUSIC_ENABLED=false, el asistente responde 404).
+ *  - `unavailable`: el asistente no responde, tardó demasiado o respondió algo inesperado.
+ *  - `rejected`: el asistente rechazó los argumentos (422).
+ */
+export type LumiMusicCommandResult =
+  | { status: 'done'; ok: boolean; text: string; error: string | null }
+  | { status: 'disabled' }
+  | { status: 'unavailable' }
+  | { status: 'rejected' }
+
+export interface LumiMusicPort {
+  command(userId: string, tool: string, args: Readonly<Record<string, string>>): Promise<LumiMusicCommandResult>
 }
 
 export interface LumiToolContext {
@@ -144,6 +174,7 @@ export const LUMI_MODULES = [
   'recordatorios',
   'notificaciones',
   'iniciativas',
+  'musica',
 ] as const
 export type LumiModule = (typeof LUMI_MODULES)[number]
 
@@ -202,6 +233,13 @@ export interface LumiTool<I> {
   run(ctx: LumiToolContext, input: I): Promise<LumiToolResult>
   /** Sin `selector`, la herramienta solo se usa por reglas (etapa 1). */
   selector?: LumiToolSelector<I>
+  /**
+   * Herramienta de un módulo externo (la música del asistente). Diferencias con las de datos:
+   *  - El selector solo la ve quien tiene su permiso (no es una capacidad de la tienda que falte).
+   *  - Su texto es la respuesta final: nunca pasa al modelo para «explicarla».
+   *  - `effect: 'control'` cambia algo fuera del Server (lo que suena): las pruebas no la ejecutan.
+   */
+  external?: { effect: 'read' | 'control' }
 }
 
 /** Límite de caracteres de una respuesta de herramienta (el historial acepta hasta 8000). */

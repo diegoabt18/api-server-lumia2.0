@@ -4,7 +4,7 @@ import type { NotificationRepository } from '../../notifications/infrastructure/
 import type { OrderEntity } from '../../sales/domain/order.entity.js'
 import { ANALYTICS_SOLD_STATUSES, type OrderRepository } from '../../sales/infrastructure/order.repository.js'
 import type { LumiInitiativeService } from '../initiatives/services/initiative.service.js'
-import type { AssistantOrderRow, LumiToolDeps } from './tool.types.js'
+import type { AssistantOrderRow, LumiMusicPort, LumiToolDeps } from './tool.types.js'
 
 /** Fila de pedido para el asistente: sin nombre, correo, teléfono ni dirección del cliente. */
 export function toAssistantOrderRow(order: OrderEntity): AssistantOrderRow {
@@ -22,6 +22,27 @@ export function toAssistantOrderRow(order: OrderEntity): AssistantOrderRow {
   }
 }
 
+/** Lo que necesita el puerto de música: el cliente del asistente (o un doble en pruebas). */
+export interface LumiMusicCommandSource {
+  musicCommand: LumiMusicPort['command']
+}
+
+/** Puerto de música sobre el cliente del asistente. Sin cliente configurado: sin música. */
+export function createLumiMusicPort(client: LumiMusicCommandSource | null): LumiMusicPort | undefined {
+  return client ? { command: (userId, tool, args) => client.musicCommand(userId, tool, args) } : undefined
+}
+
+/**
+ * Puerto de música para las pruebas de capacidades: solo deja pasar los comandos de lectura. Es una
+ * segunda barrera (SandboxTurnRunner ya no ejecuta los de control): una prueba nunca pone a sonar nada.
+ */
+export function readOnlyMusicPort(port: LumiMusicPort | undefined, readTools: ReadonlySet<string>): LumiMusicPort | undefined {
+  if (!port) return undefined
+  return {
+    command: (userId, tool, args) => (readTools.has(tool) ? port.command(userId, tool, args) : Promise.resolve({ status: 'rejected' })),
+  }
+}
+
 /** Puertos de lectura del catálogo de herramientas, sobre los repositorios del Server. */
 export function createLumiToolDeps(repos: {
   orders: OrderRepository
@@ -29,8 +50,10 @@ export function createLumiToolDeps(repos: {
   categories: CategoryRepository
   notifications: NotificationRepository
   initiatives: LumiInitiativeService
+  music?: LumiMusicPort
 }): LumiToolDeps {
   return {
+    ...(repos.music ? { music: repos.music } : {}),
     orders: {
       async recent(limit) {
         return (await repos.orders.listAllAdmin(0, limit)).map(toAssistantOrderRow)
