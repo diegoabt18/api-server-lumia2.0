@@ -19,6 +19,11 @@ const EXCLUDED = [
   // «No era esto»: su cuerpo es la pregunta del usuario; el aprendizaje tiene su propio registro de eventos.
   /^\/api\/admin\/lumi\/feedback$/,
   /^\/api\/admin\/lumi\/products\/:id\/assist$/,
+  // Órdenes a un equipo de escritorio: el cuerpo puede llevar texto escrito en una página. Su
+  // auditoría es `desktop_executions` (usuario, equipo, operación, autorización y resumen sin valores).
+  /^\/api\/admin\/desktop\/devices\/:id\/executions$/,
+  // Archivos de un equipo: el cuerpo es el propio archivo. Auditoría: `desktop_executions`.
+  /^\/api\/admin\/desktop\/devices\/:id\/files(\/.*)?$/,
 ]
 
 type Params = Record<string, string | undefined>

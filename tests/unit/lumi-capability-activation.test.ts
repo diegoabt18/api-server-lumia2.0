@@ -48,12 +48,14 @@ function deps(
 }
 
 describe('registro de herramientas', () => {
-  it('cada herramienta declara una capabilityKey única; las 8 anteriores y las 20 de música nacen habilitadas y la nueva no', () => {
+  it('cada herramienta declara una capabilityKey única; las 8 anteriores, las 20 de música y las 9 del equipo nacen habilitadas y la nueva no', () => {
     const keys = LUMI_TOOLS.map((t) => t.capabilityKey)
     expect(new Set(keys).size).toBe(keys.length)
     // Las de música nacen habilitadas: las limitan music.read / music.control (nadie los tiene por defecto).
-    expect([...BUILTIN].filter((name) => !name.startsWith('music.'))).toHaveLength(8)
+    expect([...BUILTIN].filter((name) => !name.startsWith('music.') && !name.startsWith('device.'))).toHaveLength(8)
     expect([...BUILTIN].filter((name) => name.startsWith('music.'))).toHaveLength(20)
+    // Las del equipo, igual que la música: las limitan desktop.* (nadie los tiene por defecto) y DESKTOP_AGENT_ENABLED.
+    expect([...BUILTIN].filter((name) => name.startsWith('device.'))).toHaveLength(9)
     expect(productsUnpriced.enabledByDefault).toBeUndefined()
     expect(LUMI_TOOLS).toContain(productsUnpriced)
   })
@@ -310,7 +312,7 @@ describe('CapabilityActivationService', () => {
     const result = await svc.syncRegistry()
     expect(result.find((r) => r.tool === 'products.unpriced')?.result).toBe('linked')
     expect(mem.items.find((c) => c.key === 'productos-sin-precio')).toMatchObject({ status: 'in_development', toolName: 'products.unpriced' })
-    expect(mem.items.filter((c) => c.status === 'enabled')).toHaveLength(8 + 20)
+    expect(mem.items.filter((c) => c.status === 'enabled')).toHaveLength(8 + 20 + 9)
     expect((await svc.syncRegistry()).every((r) => r.result === 'unchanged')).toBe(true)
   })
 

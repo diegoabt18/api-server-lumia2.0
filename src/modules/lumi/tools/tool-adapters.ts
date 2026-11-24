@@ -4,7 +4,7 @@ import type { NotificationRepository } from '../../notifications/infrastructure/
 import type { OrderEntity } from '../../sales/domain/order.entity.js'
 import { ANALYTICS_SOLD_STATUSES, type OrderRepository } from '../../sales/infrastructure/order.repository.js'
 import type { LumiInitiativeService } from '../initiatives/services/initiative.service.js'
-import type { AssistantOrderRow, LumiMusicPort, LumiToolDeps } from './tool.types.js'
+import type { AssistantOrderRow, LumiMusicPort, LumiDesktopPort, LumiToolDeps } from './tool.types.js'
 
 /** Fila de pedido para el asistente: sin nombre, correo, teléfono ni dirección del cliente. */
 export function toAssistantOrderRow(order: OrderEntity): AssistantOrderRow {
@@ -58,9 +58,11 @@ export function createLumiToolDeps(repos: {
   notifications: NotificationRepository
   initiatives: LumiInitiativeService
   music?: LumiMusicPort
+  desktop?: LumiDesktopPort
 }): LumiToolDeps {
   return {
     ...(repos.music ? { music: repos.music } : {}),
+    ...(repos.desktop ? { desktop: repos.desktop } : {}),
     orders: {
       async recent(limit) {
         return (await repos.orders.listAllAdmin(0, limit)).map(toAssistantOrderRow)

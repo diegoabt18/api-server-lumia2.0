@@ -48,6 +48,15 @@ export type LumiToolName =
   | 'music.stop'
   | 'music.volume'
   | 'music.seek'
+  | 'device.status'
+  | 'device.open_page'
+  | 'device.read_page'
+  | 'device.click_page'
+  | 'device.type_page'
+  | 'device.windows'
+  | 'device.read_app'
+  | 'device.click_app'
+  | 'device.type_app'
 
 /** Fila de pedido sin datos del cliente. */
 export interface AssistantOrderRow {
@@ -116,6 +125,72 @@ export interface LumiToolDeps {
   }
   /** Módulo de música del asistente. Sin puerto (asistente sin configurar o pruebas): no disponible. */
   music?: LumiMusicPort
+  /** Equipos de escritorio (Lumia Desktop Agent). Sin puerto: el agente no está activado. */
+  desktop?: LumiDesktopPort
+}
+
+/** Equipo del usuario tal como lo ve el chat. */
+export interface LumiDesktopDevice {
+  id: string
+  name: string
+  online: boolean
+  paused: boolean
+  /** Operaciones que el equipo anuncia ahora mismo (`browser.navigate`, `desktop.click`…). */
+  operations: readonly string[]
+}
+
+/** Resultado de una operación ejecutada en un equipo (ya verificada por el agente). */
+export interface LumiDesktopOutcome {
+  /** completed | unverified | failed | rejected | cancelled | timed_out */
+  status: string
+  result: Record<string, unknown> | null
+  error: { code: string; message: string } | null
+}
+
+/** Confirmación pendiente de una acción del equipo, tal como la ve el chat. */
+export interface LumiDesktopConfirmation {
+  /** Identificador de la acción pendiente: la respuesta con botón solo confirma esta. */
+  id: string
+  /** Qué se hará («abrir https://…», «pulsar «Enviar» en example.com»). */
+  summary: string
+  device: string
+  /** Alcance de «no volver a preguntar» («abrir páginas de example.com»). */
+  scope: string
+  expiresAt: string
+}
+
+/** Aprobación recordada: «no volver a preguntar» para un tipo de acción en un destino. */
+export interface LumiDesktopApproval {
+  deviceId: string
+  /** open_page | click_page | type_page | click_app | type_app */
+  kind: string
+  /** Sitio (host) o aplicación. */
+  target: string
+}
+
+export interface LumiDesktopPort {
+  devices(userId: string): Promise<LumiDesktopDevice[]>
+  /** Ordena una operación con los permisos del usuario (el Server firma y autoriza). */
+  execute(input: {
+    userId: string
+    permissionKeys: readonly PermissionId[]
+    deviceId: string
+    operation: string
+    args: Record<string, unknown>
+  }): Promise<LumiDesktopOutcome>
+  isApproved(userId: string, approval: LumiDesktopApproval): Promise<boolean>
+  approve(userId: string, approval: LumiDesktopApproval): Promise<void>
+  /** Acción esperando «sí» / «no» (caduca sola). Sustituye a la anterior del usuario. */
+  savePending(
+    userId: string,
+    payload: Record<string, string>,
+    summary: string,
+  ): Promise<{ id: string; expiresAt: Date }>
+  /**
+   * Toma (y borra) la acción pendiente vigente, o null. Solo una respuesta puede consumirla. Con
+   * `id`, solo esa acción (botones de la tarjeta de confirmación).
+   */
+  takePending(userId: string, id?: string): Promise<Record<string, string> | null>
 }
 
 /**
@@ -221,6 +296,12 @@ export interface LumiToolResult {
   references?: LumiReference[]
   /** Estado del reproductor tras un comando de música: el chat lo muestra como reproductor. */
   music?: LumiMusicState
+  /** Acción en un equipo esperando confirmación: el chat puede mostrar botones (fase 5). */
+  /**
+   * Acción del equipo esperando respuesta. Lumia Admin la muestra como tarjeta con «Sí» / «No» y
+   * la casilla «no volver a preguntar» (solo aplica al «Sí»).
+   */
+  confirmation?: LumiDesktopConfirmation
 }
 
 /**
@@ -245,6 +326,8 @@ export const LUMI_MODULES = [
   'notificaciones',
   'iniciativas',
   'musica',
+  /** Equipos de escritorio del usuario (Lumia Desktop Agent). */
+  'equipo',
 ] as const
 export type LumiModule = (typeof LUMI_MODULES)[number]
 

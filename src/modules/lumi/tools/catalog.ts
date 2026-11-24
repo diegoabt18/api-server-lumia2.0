@@ -12,6 +12,7 @@ import { productsUnpriced } from './products-unpriced.tool.js'
 import { productsUntaxed } from './products-untaxed.tool.js'
 import { productsTaxed } from './products-taxed.tool.js'
 import { categoriesList } from './categories-list.tool.js'
+import { DEVICE_TOOLS } from './desktop.tools.js'
 import { MUSIC_TOOLS } from './music.tools.js'
 import { compactRefs, entityRef, moduleRef, type LumiReference } from '../references/lumi-references.js'
 
@@ -528,6 +529,8 @@ export const LUMI_TOOLS: ReadonlyArray<LumiTool<never>> = [
   notificationsUnread,
   // Música: solo por selector y solo para quien tiene music.read o music.control.
   ...MUSIC_TOOLS,
+  // Equipos de escritorio: solo por selector o reglas claras, y solo con permisos desktop.*.
+  ...DEVICE_TOOLS,
 ] as unknown as ReadonlyArray<LumiTool<never>>
 
 export interface ToolMatch {
@@ -575,6 +578,13 @@ const DENIED_TEXT: Record<string, string> = {
   [PERMISSION_REGISTRY.CATEGORIES_READ]: 'No tienes permiso para consultar categorías.',
   [PERMISSION_REGISTRY.MUSIC_READ]: 'No tienes permiso para consultar la música.',
   [PERMISSION_REGISTRY.MUSIC_CONTROL]: 'No tienes permiso para controlar la música.',
+  [PERMISSION_REGISTRY.DESKTOP_DEVICES_READ]: 'No tienes permiso para ver equipos de escritorio.',
+  [PERMISSION_REGISTRY.DESKTOP_BROWSER_READ]: 'No tienes permiso para leer el navegador de tus equipos.',
+  [PERMISSION_REGISTRY.DESKTOP_BROWSER_CONTROL]: 'No tienes permiso para controlar el navegador de tus equipos.',
+  [PERMISSION_REGISTRY.DESKTOP_APPS_READ]: 'No tienes permiso para leer las aplicaciones de tus equipos.',
+  [PERMISSION_REGISTRY.DESKTOP_APPS_CONTROL]: 'No tienes permiso para controlar las aplicaciones de tus equipos.',
+  [PERMISSION_REGISTRY.DESKTOP_FILES_READ]: 'No tienes permiso para ver los archivos de tus equipos.',
+  [PERMISSION_REGISTRY.DESKTOP_FILES_WRITE]: 'No tienes permiso para enviar archivos a tus equipos.',
 }
 
 /** Ejecuta la herramienta. Sin permiso no se lee nada: se devuelve el aviso. */

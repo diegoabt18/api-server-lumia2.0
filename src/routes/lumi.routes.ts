@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { AppContext } from '../app.context.js'
+import { handleDesktopReply } from '../modules/lumi/tools/desktop.tools.js'
 import { AppError } from '../common/errors/app.error.js'
 import { PERMISSION_REGISTRY, hasPermission } from '../common/permissions/registry.js'
 import { adminGuard } from '../modules/admin/middleware/admin-guard.js'
@@ -119,7 +120,29 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     initiatives: ctx.services.lumiInitiatives,
     // Música del asistente (POST /music/commands). Sin asistente configurado: «no disponible».
     music: createLumiMusicPort(client),
+    // Equipos de escritorio (Lumia Desktop Agent). Sin DESKTOP_AGENT_ENABLED: «no activado».
+    desktop: ctx.services.desktopAgent?.lumiPort,
   })
+
+  const toolContext = (request: FastifyRequest) => ({
+    userId: userIdOf(request),
+    permissionKeys: keysOf(request),
+    now: new Date(),
+    timezone,
+    deps: toolDeps,
+  })
+
+  /**
+   * Respuestas de confirmación del equipo («sí», «sí, no vuelvas a preguntar», «no») antes que las
+   * de recordatorios: cada una solo actúa si tiene su propia acción pendiente.
+   */
+  const commandReply = async (
+    request: FastifyRequest,
+    message: string,
+    confirmationId?: string,
+  ): Promise<string | null> =>
+    (await handleDesktopReply(toolContext(request), message, confirmationId)) ??
+    (await ctx.services.lumiCommands.handle(userIdOf(request), message))
 
   const executeTool = (request: FastifyRequest, match: ToolMatch) =>
     runTool(match, {
@@ -156,6 +179,8 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       yield toolEvent(match, result.rows)
       // Música: el estado real del reproductor, para que el chat muestre el reproductor.
       if (result.music) yield { type: 'music', state: result.music }
+      // Equipo: la acción espera respuesta; el chat la muestra con botones.
+      if (result.confirmation) yield { type: 'confirmation', ...result.confirmation }
       texts.push(result.text)
       references.push(...(result.references ?? []))
       entity = result.entity ?? entity
@@ -414,8 +439,8 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
   api.post('/admin/lumi/chat', { preHandler: g(PERMISSION_REGISTRY.LUMI_USE) }, async (request) => {
     const parsed = lumiChatBodySchema.safeParse(request.body)
     if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
-    // Órdenes de recordatorio: se resuelven con reglas y el backend, sin llamar al modelo.
-    const automated = await ctx.services.lumiCommands.handle(userIdOf(request), parsed.data.message)
+    // Confirmaciones del equipo y órdenes de recordatorio: reglas y backend, sin llamar al modelo.
+    const automated = await commandReply(request, parsed.data.message, parsed.data.confirmationId)
     if (automated !== null) {
       recordTurn(request, { stage: 'automation', interpretation: null })
       return {
@@ -493,7 +518,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       const parsed = lumiChatBodySchema.safeParse(request.body)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
 
-      const automated = await ctx.services.lumiCommands.handle(userIdOf(request), parsed.data.message)
+      const automated = await commandReply(request, parsed.data.message, parsed.data.confirmationId)
       const learnedReply = automated === null ? await learningTurn(request, parsed.data.message) : null
       const plan =
         automated === null && learnedReply === null

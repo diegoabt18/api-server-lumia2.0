@@ -14,6 +14,11 @@ export const lumiChatBodySchema = z.object({
   webMode: z.enum(['auto', 'on', 'off']).optional(),
   /** Límite de tokens de la respuesta. Si se omite, lo decide ia-asistente. */
   maxTokens: z.number().int().min(128).max(2048).optional(),
+  /** Respuesta con botón a una confirmación del equipo: solo actúa sobre esa acción pendiente. */
+  confirmationId: z
+    .string()
+    .regex(/^[a-f0-9]{24}$/)
+    .optional(),
 })
 
 /**

@@ -154,6 +154,7 @@ import { RepositoryInitiativeSources } from './modules/lumi/initiatives/infrastr
 import { InitiativeEngine } from './modules/lumi/initiatives/services/initiative-engine.js'
 import { InitiativeScheduler, DEFAULT_INITIATIVE_SCHEDULER_OPTIONS } from './modules/lumi/initiatives/services/initiative-scheduler.js'
 import { LumiInitiativeService } from './modules/lumi/initiatives/services/initiative.service.js'
+import { createDesktopAgentServices, type DesktopAgentServices } from './modules/lumi/desktop-agent/index.js'
 
 export interface AppContext {
   env: Env
@@ -232,6 +233,8 @@ export interface AppContext {
     lumiLearning: LumiLearningService
     /** Fase G: métricas de turnos. */
     lumiTurnMetrics: TurnMetricsStore
+    /** Lumia Desktop Agent (fase 1: registro y conexión). null si DESKTOP_AGENT_ENABLED=false. */
+    desktopAgent: DesktopAgentServices | null
     notificationHub: NotificationStreamHub
     auth: AuthService
     authorization: AuthorizationService
@@ -652,6 +655,12 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
   await lumiTurnMetrics
     .ensureIndexes()
     .catch((err) => logger.warn({ err }, 'lumi turn metrics indexes skipped'))
+  // Lumia Desktop Agent: registro de equipos y pasarela WebSocket (solo con DESKTOP_AGENT_ENABLED).
+  const desktopAgent = env.DESKTOP_AGENT_ENABLED ? await createDesktopAgentServices(identityDb, logger, {
+        grantSigningKey: env.DESKTOP_GRANT_SIGNING_KEY,
+        nodeEnv: env.NODE_ENV,
+        pending: lumiPendingActions,
+      }) : null
   const lumiLearning = new LumiLearningService(lumiKnowledgeRepo, {
     tools: LUMI_TOOLS,
     enabledTools: () => lumiToolGate.enabledTools(),
@@ -813,6 +822,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       lumiCapabilityActivation,
       lumiLearning,
       lumiTurnMetrics,
+      desktopAgent,
       notificationHub,
       auth,
       authorization,
@@ -877,6 +887,7 @@ export async function shutdownAppContext(ctx: AppContext): Promise<void> {
   ctx.automation.stop()
   ctx.initiatives.stop()
   ctx.securityMaintenance.stop()
+  ctx.services.desktopAgent?.shutdown()
   await ctx.redis.close()
   await ctx.mongo.closeAll()
 }

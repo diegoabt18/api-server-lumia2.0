@@ -110,6 +110,28 @@ export const PERMISSION_REGISTRY = {
   INVENTORY_READ: 'inventory.read',
   /** Ajustar existencias y la política de anticipo por SKU. */
   INVENTORY_UPDATE: 'inventory.update',
+  /** Lumia Desktop Agent: ver los equipos propios, su estado y sus capacidades. */
+  DESKTOP_DEVICES_READ: 'desktop.devices.read',
+  /** Inscribir equipos propios (código de un solo uso), renombrarlos y revocarlos. */
+  DESKTOP_DEVICES_MANAGE: 'desktop.devices.manage',
+  /**
+   * Leer el navegador de un equipo propio: navegadores instalados, pestañas y snapshot de la página.
+   * Un snapshot muestra contenido de la pantalla: no es un permiso inocuo.
+   */
+  DESKTOP_BROWSER_READ: 'desktop.browser.read',
+  /** Controlar el navegador aislado de un equipo propio: navegar, pulsar, escribir, desplazar, cerrar. */
+  DESKTOP_BROWSER_CONTROL: 'desktop.browser.control',
+  /**
+   * Leer aplicaciones de un equipo propio: aplicaciones y ventanas abiertas (con sus títulos),
+   * árbol de accesibilidad y valores de campos. Muestra contenido privado de la pantalla.
+   */
+  DESKTOP_APPS_READ: 'desktop.apps.read',
+  /** Actuar en aplicaciones de un equipo propio: pulsar, escribir en campos y teclas permitidas. */
+  DESKTOP_APPS_CONTROL: 'desktop.apps.control',
+  /** Ver las carpetas autorizadas de un equipo propio y descargar sus archivos (fase 6). */
+  DESKTOP_FILES_READ: 'desktop.files.read',
+  /** Enviar archivos a una carpeta autorizada de un equipo propio (nunca reemplaza ninguno). */
+  DESKTOP_FILES_WRITE: 'desktop.files.write',
 } as const
 
 export type PermissionId = (typeof PERMISSION_REGISTRY)[keyof typeof PERMISSION_REGISTRY]

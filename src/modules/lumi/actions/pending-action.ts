@@ -8,7 +8,7 @@ import { ObjectId, type Collection, type Db } from 'mongodb'
 
 export const PENDING_ACTION_TTL_MS = 10 * 60_000
 
-export type PendingActionKind = 'delete_routine'
+export type PendingActionKind = 'delete_routine' | 'desktop_action'
 
 export interface PendingAction {
   id: string
@@ -25,8 +25,11 @@ export interface PendingAction {
 export interface PendingActionStore {
   /** Guarda la acción y sustituye cualquier otra pendiente del mismo tipo para ese usuario. */
   put(action: Omit<PendingAction, 'id'>): Promise<PendingAction>
-  /** Toma (y borra) la acción vigente del usuario. Solo una confirmación puede consumirla. */
-  take(userId: string, kind: PendingActionKind, now: Date): Promise<PendingAction | null>
+  /**
+   * Toma (y borra) la acción vigente del usuario. Solo una confirmación puede consumirla. Con `id`,
+   * solo si es esa acción (un botón de una tarjeta antigua no confirma otra más reciente).
+   */
+  take(userId: string, kind: PendingActionKind, now: Date, id?: string): Promise<PendingAction | null>
   /** Descarta las acciones pendientes del usuario. Devuelve cuántas había vigentes. */
   discard(userId: string, now: Date): Promise<number>
   /** ¿Tiene el usuario alguna acción vigente? */
@@ -47,9 +50,10 @@ export class MemoryPendingActions implements PendingActionStore {
     return saved
   }
 
-  async take(userId: string, kind: PendingActionKind, now: Date): Promise<PendingAction | null> {
+  async take(userId: string, kind: PendingActionKind, now: Date, id?: string): Promise<PendingAction | null> {
     const key = this.key(userId, kind)
     const item = this.items.get(key)
+    if (id !== undefined && item?.id !== id) return null
     this.items.delete(key)
     return item && item.expiresAt > now ? item : null
   }
@@ -102,8 +106,14 @@ export class MongoPendingActions implements PendingActionStore {
     return { ...action, id: (result?._id ?? new ObjectId()).toHexString() }
   }
 
-  async take(userId: string, kind: PendingActionKind, now: Date): Promise<PendingAction | null> {
-    const doc = await this.collection.findOneAndDelete({ userId, kind, expiresAt: { $gt: now } })
+  async take(userId: string, kind: PendingActionKind, now: Date, id?: string): Promise<PendingAction | null> {
+    if (id !== undefined && !ObjectId.isValid(id)) return null
+    const doc = await this.collection.findOneAndDelete({
+      userId,
+      kind,
+      expiresAt: { $gt: now },
+      ...(id !== undefined ? { _id: new ObjectId(id) } : {}),
+    })
     if (!doc) return null
     const { _id, ...rest } = doc
     return { ...rest, id: _id.toHexString() }

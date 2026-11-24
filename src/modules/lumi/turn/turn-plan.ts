@@ -6,12 +6,19 @@ import {
   interpret,
   normalizeProposal,
   REMINDER_HINT,
-  selectorCatalog,
   type LumiInterpretation,
   type NormalizedProposal,
 } from '../selector/lumi-selector.js'
 import { LUMI_TOOLS, matchTool, type ToolMatch } from '../tools/catalog.js'
 import { MUSIC_HELP_REPLY } from '../tools/music.tools.js'
+import { DEVICE_HELP_REPLY } from '../tools/desktop.tools.js'
+import {
+  GROUP_TOOL_PREFIX,
+  groupMenu,
+  routeSelectorMenu,
+  type LumiToolGroupId,
+  type SelectorMenu,
+} from '../selector/tool-groups.js'
 import type { LumiEntityRef } from '../tools/tool.types.js'
 
 /**
@@ -44,6 +51,11 @@ export interface TurnTraceSelector {
   completionTokens?: number
   model?: string
   error?: string
+  /**
+   * Selección en dos niveles: menú enviado (`flat` completo, `grouped` un grupo por palabras clave,
+   * `mixed` tienda + entradas de grupo), grupo final, tamaño del último menú y llamadas al modelo.
+   */
+  routing?: { mode: 'flat' | 'grouped' | 'mixed'; group: string | null; menuSize: number; calls: number }
 }
 
 /** Lo que pasó en cada etapa, para el entorno de pruebas y las métricas (sin el texto del usuario). */
@@ -126,17 +138,52 @@ export async function planLumiTurn(input: TurnInput, deps: TurnDeps): Promise<{ 
     return { plan: { kind: 'model', match: null, forceWeb: false }, trace: { ...emptyTrace('fallback'), selector: { outcome: 'disabled' }, interpretation: 'unsupported' } }
   }
 
-  // Etapa 2: el selector propone.
+  // Etapa 2: el selector propone, con el menú que decide la selección en dos niveles.
   const entity = await input.resolveEntity()
   const examples = deps.examples ? await deps.examples(input.message, input.enabledTools).catch(() => []) : []
-  let proposal: LumiSelectResult
-  try {
-    proposal = await deps.select(input.userId, {
+  const select = deps.select
+  const ask = (menu: SelectorMenu) => {
+    // Los ejemplos aprendidos solo valen si su herramienta está en este menú.
+    const names = new Set(menu.tools.map((t) => t.name))
+    const usable = examples.filter((e) => names.has(e.tool))
+    return select(input.userId, {
       message: input.message,
       context: entityContextLine(entity),
-      ...selectorCatalog(input.enabledTools, input.permissionKeys),
-      ...(examples.length ? { examples } : {}),
+      ...menu,
+      ...(usable.length ? { examples: usable } : {}),
     })
+  }
+  const routed = routeSelectorMenu(input.message, input.enabledTools, input.permissionKeys)
+  const routing: NonNullable<TurnTraceSelector['routing']> = {
+    mode: routed.mode,
+    group: routed.mode === 'grouped' ? routed.group : null,
+    menuSize: routed.menu.tools.length,
+    calls: 1,
+  }
+  let proposal: LumiSelectResult
+  try {
+    proposal = await ask(routed.menu)
+    if (routed.mode === 'mixed') {
+      const picked = proposal.intents.find((i) => i.tool.startsWith(GROUP_TOOL_PREFIX))
+      const group = picked?.tool.slice(GROUP_TOOL_PREFIX.length) as LumiToolGroupId | undefined
+      if (group && routed.groups.includes(group)) {
+        // Segundo nivel: el modelo eligió un grupo; ahora elige entre sus herramientas.
+        const menu = groupMenu(group, input.enabledTools, input.permissionKeys)
+        const second = await ask(menu)
+        proposal = {
+          ...second,
+          latencyMs: (proposal.latencyMs ?? 0) + (second.latencyMs ?? 0),
+          promptTokens: (proposal.promptTokens ?? 0) + (second.promptTokens ?? 0),
+          completionTokens: (proposal.completionTokens ?? 0) + (second.completionTokens ?? 0),
+        }
+        routing.group = group
+        routing.menuSize = menu.tools.length
+        routing.calls = 2
+      } else if (picked) {
+        // Una entrada de grupo que no estaba en el menú no es una herramienta: se ignora.
+        proposal = { ...proposal, intents: proposal.intents.filter((i) => !i.tool.startsWith(GROUP_TOOL_PREFIX)) }
+      }
+    }
   } catch (err) {
     const error = err instanceof Error ? err.message.slice(0, 200) : 'error'
     return { plan: { kind: 'model', match: null, forceWeb: false }, trace: { ...emptyTrace('fallback'), selector: { outcome: 'error', error }, interpretation: 'unsupported' } }
@@ -156,6 +203,7 @@ export async function planLumiTurn(input: TurnInput, deps: TurnDeps): Promise<{ 
       promptTokens: proposal.promptTokens,
       completionTokens: proposal.completionTokens,
       model: proposal.model,
+      routing,
     },
     interpretation: result.status,
     module: normalized.module,
@@ -164,7 +212,7 @@ export async function planLumiTurn(input: TurnInput, deps: TurnDeps): Promise<{ 
   return planFrom(result, trace)
 }
 
-/** Módulos externos (música): lo que no sabe hacer no es una capacidad de la tienda que falte. */
+/** Módulos externos (música, equipo): lo que no sabe hacer no es una capacidad de la tienda que falte. */
 const EXTERNAL_MODULES: ReadonlySet<string> = new Set(LUMI_TOOLS.filter((t) => t.external).map((t) => t.selector!.module))
 
 function planFrom(result: LumiInterpretation, trace: TurnTrace): { plan: TurnPlan; trace: TurnTrace } {
@@ -188,7 +236,10 @@ function planFrom(result: LumiInterpretation, trace: TurnTrace): { plan: TurnPla
     case 'missing_capability':
       trace.need = result.need
       // Música: se responde con lo que sí sabe hacer, sin registrar nada en el Capability Manager.
-      if (EXTERNAL_MODULES.has(result.module)) return { plan: { kind: 'reply', text: MUSIC_HELP_REPLY }, trace }
+      if (EXTERNAL_MODULES.has(result.module)) {
+        const text = result.module === 'equipo' ? DEVICE_HELP_REPLY : MUSIC_HELP_REPLY
+        return { plan: { kind: 'reply', text }, trace }
+      }
       return { plan: { kind: 'missing_capability', need: result.need, module: result.module }, trace }
     case 'ambiguous':
       return { plan: { kind: 'reply', text: AMBIGUOUS_REPLY }, trace }

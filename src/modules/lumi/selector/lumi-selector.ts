@@ -86,6 +86,9 @@ const selectorTools = (enabled?: EnabledTools): Array<LumiTool<never>> =>
 export function selectorCatalog(
   enabled?: EnabledTools,
   keys?: readonly PermissionId[],
+  /** Solo las herramientas de estos módulos (selección en dos niveles, ver tool-groups.ts). */
+  onlyModules?: ReadonlySet<string>,
+  withDelegates = true,
 ): { tools: SelectorToolSpec[]; modules: string[] } {
   const spec = (name: string, description: string, args: readonly LumiSelectorArg[]): SelectorToolSpec => ({
     name,
@@ -97,15 +100,19 @@ export function selectorCatalog(
       description: a.description ?? '',
     })),
   })
-  const tools = selectorTools(enabled).filter((t) => t.external === undefined || keys === undefined || canUseTool(t, keys))
+  const tools = selectorTools(enabled)
+    .filter((t) => t.external === undefined || keys === undefined || canUseTool(t, keys))
+    .filter((t) => !onlyModules || onlyModules.has(t.selector!.module))
   const externalModules = new Set(selectorTools().filter((t) => t.external).map((t) => t.selector!.module as string))
   const usedModules = new Set(tools.map((t) => t.selector!.module as string))
   return {
     tools: [
       ...tools.map((t) => spec(t.name, t.selector!.description, t.selector!.args)),
-      ...DELEGATES.map((d) => spec(d.name, d.description, d.args)),
+      ...(withDelegates ? DELEGATES.map((d) => spec(d.name, d.description, d.args)) : []),
     ],
-    modules: LUMI_MODULES.filter((m) => !externalModules.has(m) || usedModules.has(m)),
+    modules: LUMI_MODULES.filter(
+      (m) => (!externalModules.has(m) || usedModules.has(m)) && (!onlyModules || onlyModules.has(m)),
+    ),
   }
 }
 

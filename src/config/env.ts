@@ -157,6 +157,23 @@ const envSchema = z.object({
     .default('false'),
   LUMI_SELECTOR_TIMEOUT_MS: z.coerce.number().int().min(1000).default(30000),
 
+  /**
+   * Lumia Desktop Agent (registro de equipos y WebSocket /api/desktop-agent/ws). Desactivado por
+   * defecto: sin él, las rutas del agente y de /admin/desktop no se registran.
+   */
+  DESKTOP_AGENT_ENABLED: z
+    .string()
+    .transform((v) => v === 'true')
+    .default('false'),
+  /**
+   * Semilla Ed25519 (32 bytes, base64url) que firma los grants de operación. Obligatoria en
+   * producción con el agente activado; en desarrollo se usa una clave efímera.
+   */
+  DESKTOP_GRANT_SIGNING_KEY: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{43}$/, 'must be 32 bytes in base64url (43 characters)')
+    .optional(),
+
   // Motor de automatización de Lumi (scheduler + worker). Sin Qwen en la Fase 1.
   LUMI_AUTOMATION_ENABLED: z
     .string()

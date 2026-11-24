@@ -3,6 +3,7 @@ import { PERMISSION_REGISTRY as P, PERMISSION_WILDCARD, type PermissionId } from
 import { SANDBOX_SKIPPED_TEXT, SandboxTurnRunner } from '../../src/modules/lumi/capabilities/services/sandbox-runner.js'
 import { LumiAssistantClient, toMusicState, type LumiSelectResult } from '../../src/modules/lumi/infrastructure/lumi-assistant.client.js'
 import { lumiMusicPlayerCommandSchema } from '../../src/modules/lumi/schemas/lumi.schema.js'
+import { routeSelectorMenu } from '../../src/modules/lumi/selector/tool-groups.js'
 import { interpret, normalizeProposal, selectorCatalog, type SelectorProposal } from '../../src/modules/lumi/selector/lumi-selector.js'
 import { capabilitiesFor, LUMI_TOOLS, matchTool, runTool, type ToolMatch } from '../../src/modules/lumi/tools/catalog.js'
 import { MUSIC_HELP_REPLY, MUSIC_TOOLS } from '../../src/modules/lumi/tools/music.tools.js'
@@ -176,9 +177,13 @@ describe('selectorCatalog con música', () => {
     const catalog = selectorCatalog(new Set(['orders.count']), [P.MUSIC_READ, P.MUSIC_CONTROL])
     expect(catalog.tools.some((t) => t.name.startsWith('music.'))).toBe(false)
     expect(catalog.modules).not.toContain('musica')
-    const full = selectorCatalog(undefined, [PERMISSION_WILDCARD as PermissionId])
-    expect(full.tools.length).toBeLessThanOrEqual(40)
-    expect(full.modules.length).toBeLessThanOrEqual(40)
+    // El catálogo completo ya no cabe en un menú (música + equipo): lo que se ENVÍA sí, por el
+    // enrutado en dos niveles (tool-groups.ts).
+    for (const message of ['hola', 'pon una canción de Soda Stereo', 'abre example.com en mi pc', '¿cuánto vendimos hoy?']) {
+      const routed = routeSelectorMenu(message, undefined, [PERMISSION_WILDCARD as PermissionId])
+      expect(routed.menu.tools.length).toBeLessThanOrEqual(40)
+      expect(routed.menu.modules.length).toBeLessThanOrEqual(40)
+    }
   })
 
   it('sends the user permissions through planLumiTurn', async () => {
