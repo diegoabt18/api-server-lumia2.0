@@ -104,8 +104,8 @@ export function jaroWinklerSimilarity(a: string, b: string): number {
  * Similitud de tokens: porcentaje de palabras que coinciden entre dos strings.
  */
 export function tokenSimilarity(a: string, b: string): number {
-  const tokensA = new Set(a.split(/\s+/).filter(Boolean))
-  const tokensB = new Set(b.split(/\s+/).filter(Boolean))
+  const tokensA = new Set(a.toLowerCase().split(/\s+/).filter(Boolean))
+  const tokensB = new Set(b.toLowerCase().split(/\s+/).filter(Boolean))
 
   if (tokensA.size === 0 || tokensB.size === 0) return 0
 
@@ -242,9 +242,14 @@ export function scoreMatch(query: ExtractedQuery, videoTitle: string, weights?: 
   // Indicadores de versión
   const versionScore = query.version ? detectVersionIndicators(videoTitle) : 0
 
+  // Bonus: si todos los tokens de la query aparecen en el video, dar boost
+  const queryTokens = query.title.toLowerCase().split(/\s+/).filter(Boolean)
+  const containment = queryTokens.length > 0 ? containmentSimilarity(queryTokens, videoTitle) : 0
+  const containmentBonus = containment === 1.0 ? 0.15 : 0
+
   // Puntuación ponderada
   const overall =
-    titleSim * finalWeights.title + artistSim * finalWeights.artist + tokenSim * finalWeights.tokens + versionScore * finalWeights.indicators
+    titleSim * finalWeights.title + artistSim * finalWeights.artist + tokenSim * finalWeights.tokens + versionScore * finalWeights.indicators + containmentBonus
 
   // Generar razón
   let reasoning = ''
