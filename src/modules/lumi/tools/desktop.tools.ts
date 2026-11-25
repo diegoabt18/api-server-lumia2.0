@@ -1,6 +1,7 @@
 import { PERMISSION_REGISTRY, type PermissionId } from '../../../common/permissions/registry.js'
 import { isConfirmation, isRejection, normalizeText } from '../automation/domain/reminder-parser.js'
 import { plainText } from '../selector/selector-text.js'
+import { extractMusicQuery, findBestCandidate, getConfidenceLevel } from '../selector/fuzzy-matcher.js'
 import type {
   LumiDesktopApproval,
   LumiDesktopDevice,
@@ -327,35 +328,54 @@ const CHANNEL_LINK = /^(?:ir al canal|go to channel)\b/
 const HAS_DURATION = /\b\d+ (?:segundos?|minutos?|horas?|seconds?|minutes?|hours?)\b/
 
 /**
- * Vídeo de los resultados de búsqueda que mejor coincide con lo pedido: un enlace cuyo nombre
- * accesible contiene la mayoría de las palabras de la búsqueda. Se prefieren los títulos de vídeo
- * (con duración) a cualquier otro enlace que también coincida, como el nombre del canal. Si
- * empatan, el primero de la página (el más relevante para YouTube). null si ninguno coincide lo
- * suficiente: no se adivina.
+ * Vídeo de los resultados de búsqueda que mejor coincide con lo pedido.
+ * Usa fuzzy matching con similitud Jaro-Winkler para tolerancia a errores ortográficos,
+ * tipográficos y variaciones menores.
+ *
+ * Estrategia:
+ * 1. Extrae título, artista y versión de la búsqueda
+ * 2. Filtra candidatos válidos (vídeos reales, no canales ni anuncios)
+ * 3. Calcula similitud con fuzzy matching para cada candidato
+ * 4. Retorna el mejor candidato si supera el umbral mínimo (0.72)
+ * 5. null si ninguno coincide suficientemente: no se adivina
+ *
+ * Niveles de confianza:
+ * - 0.88-1.00: reproducción automática (sin confirmar)
+ * - 0.72-0.87: requiere confirmación del usuario
+ * - <0.72: no se reproduce (rechazado)
  */
 export function pickVideoLink(elements: Element[], query: string): Element | null {
-  const terms = [
-    ...new Set(
-      plainText(query)
-        .split(' ')
-        .filter((w) => w.length >= 2),
-    ),
-  ]
-  if (terms.length === 0) return null
-  const needed = Math.ceil(terms.length / 2)
-  let best: { element: Element; hits: number; video: boolean } | null = null
-  for (const element of elements) {
-    if (element.role !== 'link' || !element.name) continue
-    const name = plainText(element.name)
-    if (NOT_A_VIDEO.test(name) || CHANNEL_LINK.test(name)) continue
-    const words = new Set(name.split(' '))
-    const hits = terms.filter((t) => words.has(t)).length
-    if (hits < needed) continue
-    const video = HAS_DURATION.test(name)
-    const better = !best || (video && !best.video) || (video === best.video && hits > best.hits)
-    if (better) best = { element, hits, video }
+  if (!query || query.trim().length === 0) return null
+
+  // Extraer componentes de la búsqueda (título, artista, versión)
+  const musicQuery = extractMusicQuery(plainText(query))
+
+  // Filtrar candidatos válidos (vídeos reales)
+  const candidates = elements
+    .filter((el) => {
+      if (el.role !== 'link' || !el.name) return false
+      const name = plainText(el.name)
+      // Excluir anuncios, canales, y enlaces no válidos
+      if (NOT_A_VIDEO.test(name) || CHANNEL_LINK.test(name)) return false
+      // Preferir vídeos con información de duración (más confiables)
+      return HAS_DURATION.test(name) || true
+    })
+    .map((el) => ({ name: plainText(el.name!), originalElement: el }))
+
+  if (candidates.length === 0) return null
+
+  // Usar fuzzy matching para encontrar el mejor candidato
+  const best = findBestCandidate(candidates, musicQuery)
+
+  if (!best) return null
+
+  // Solo retornar si supera el umbral mínimo de confianza
+  if (best.score < 0.72) {
+    // Puntuación muy baja: no se adivina
+    return null
   }
-  return best?.element ?? null
+
+  return best.element.originalElement as Element
 }
 
 function summarize(plan: ActionPlan): string {
