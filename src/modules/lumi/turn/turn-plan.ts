@@ -10,7 +10,6 @@ import {
   type NormalizedProposal,
 } from '../selector/lumi-selector.js'
 import { LUMI_TOOLS, matchTool, type ToolMatch } from '../tools/catalog.js'
-import { MUSIC_HELP_REPLY } from '../tools/music.tools.js'
 import { DEVICE_HELP_REPLY } from '../tools/desktop.tools.js'
 import {
   GROUP_TOOL_PREFIX,
@@ -235,10 +234,9 @@ function planFrom(result: LumiInterpretation, trace: TurnTrace): { plan: TurnPla
       return { plan: { kind: 'reply', text: result.ask }, trace }
     case 'missing_capability':
       trace.need = result.need
-      // Música: se responde con lo que sí sabe hacer, sin registrar nada en el Capability Manager.
-      if (EXTERNAL_MODULES.has(result.module)) {
-        const text = result.module === 'equipo' ? DEVICE_HELP_REPLY : MUSIC_HELP_REPLY
-        return { plan: { kind: 'reply', text }, trace }
+      // Equipos de escritorio: se responde con lo que sí sabe hacer, sin registrar nada en el Capability Manager.
+      if (EXTERNAL_MODULES.has(result.module) && result.module === 'equipo') {
+        return { plan: { kind: 'reply', text: DEVICE_HELP_REPLY }, trace }
       }
       return { plan: { kind: 'missing_capability', need: result.need, module: result.module }, trace }
     case 'ambiguous':
