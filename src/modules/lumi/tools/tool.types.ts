@@ -50,6 +50,7 @@ export type LumiToolName =
   | 'music.seek'
   | 'device.status'
   | 'device.open_page'
+  | 'device.play_music'
   | 'device.read_page'
   | 'device.click_page'
   | 'device.type_page'

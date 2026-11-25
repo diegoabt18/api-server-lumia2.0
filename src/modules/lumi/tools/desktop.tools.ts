@@ -30,6 +30,8 @@ type DeviceInput = {
   text?: string
   field?: string
   app?: string
+  /** Canción o artista a poner en YouTube (`device.play_music`). */
+  query?: string
 }
 
 const NAME_MAX = 120
@@ -274,7 +276,11 @@ function result(text: string, rows = 1, extra: Partial<LumiToolResult> = {}): Lu
 
 /* ───────────────────────── Acciones con confirmación ───────────────────────── */
 
-type ActionKind = 'open_page' | 'click_page' | 'type_page' | 'click_app' | 'type_app'
+/**
+ * `play_music` no es un tipo de aprobación propio: abre la búsqueda y pulsa un vídeo en YouTube, así
+ * que necesita (y al recordarse, guarda) las aprobaciones `open_page` y `click_page` de ese sitio.
+ */
+type ActionKind = 'open_page' | 'click_page' | 'type_page' | 'click_app' | 'type_app' | 'play_music'
 
 interface ActionPlan {
   kind: ActionKind
@@ -287,6 +293,7 @@ interface ActionPlan {
   field?: string
   text?: string
   app?: string
+  query?: string
 }
 
 const KIND_PHRASE: Record<ActionKind, string> = {
@@ -295,11 +302,67 @@ const KIND_PHRASE: Record<ActionKind, string> = {
   type_page: 'escribir en las páginas de',
   click_app: 'pulsar en',
   type_app: 'escribir en',
+  play_music: 'abrir y pulsar en las páginas de',
+}
+
+/* ───────────────────────── Música en YouTube ───────────────────────── */
+
+const YOUTUBE_HOST = 'www.youtube.com'
+const MUSIC_QUERY_MAX = 200
+/** «/music X», «/play X», «/reproduce X» (comandos del chat de Lumia Admin). */
+const MUSIC_COMMAND = /^\/(?:play|reproduce|music)\s+(.+)$/i
+/** Enlaces de anuncios o de la propia interfaz de YouTube que nunca se pulsan como vídeo. */
+const NOT_A_VIDEO = /\b(?:patrocinado|sponsored|anuncio|publicidad|ad)\b/
+
+export function youtubeSearchUrl(query: string): string {
+  return `https://${YOUTUBE_HOST}/results?search_query=${encodeURIComponent(query)}`
+}
+
+/** Enlaces a un canal («Ir al canal Linkin Park», «Go to channel …»): nunca son el vídeo. */
+const CHANNEL_LINK = /^(?:ir al canal|go to channel)\b/
+/**
+ * El título de un vídeo en los resultados lleva su duración en el nombre accesible
+ * («… 3 minutos y 8 segundos», «… 3 minutes, 8 seconds»); los enlaces de canal no.
+ */
+const HAS_DURATION = /\b\d+ (?:segundos?|minutos?|horas?|seconds?|minutes?|hours?)\b/
+
+/**
+ * Vídeo de los resultados de búsqueda que mejor coincide con lo pedido: un enlace cuyo nombre
+ * accesible contiene la mayoría de las palabras de la búsqueda. Se prefieren los títulos de vídeo
+ * (con duración) a cualquier otro enlace que también coincida, como el nombre del canal. Si
+ * empatan, el primero de la página (el más relevante para YouTube). null si ninguno coincide lo
+ * suficiente: no se adivina.
+ */
+export function pickVideoLink(elements: Element[], query: string): Element | null {
+  const terms = [
+    ...new Set(
+      plainText(query)
+        .split(' ')
+        .filter((w) => w.length >= 2),
+    ),
+  ]
+  if (terms.length === 0) return null
+  const needed = Math.ceil(terms.length / 2)
+  let best: { element: Element; hits: number; video: boolean } | null = null
+  for (const element of elements) {
+    if (element.role !== 'link' || !element.name) continue
+    const name = plainText(element.name)
+    if (NOT_A_VIDEO.test(name) || CHANNEL_LINK.test(name)) continue
+    const words = new Set(name.split(' '))
+    const hits = terms.filter((t) => words.has(t)).length
+    if (hits < needed) continue
+    const video = HAS_DURATION.test(name)
+    const better = !best || (video && !best.video) || (video === best.video && hits > best.hits)
+    if (better) best = { element, hits, video }
+  }
+  return best?.element ?? null
 }
 
 function summarize(plan: ActionPlan): string {
   const preview = (plan.text ?? '').length > 40 ? `${plan.text!.slice(0, 40)}…` : plan.text
   switch (plan.kind) {
+    case 'play_music':
+      return `buscar «${plan.query}» en YouTube y poner el vídeo que coincida`
     case 'open_page':
       return `abrir ${plan.url}`
     case 'click_page':
@@ -313,8 +376,23 @@ function summarize(plan: ActionPlan): string {
   }
 }
 
-function approvalOf(plan: ActionPlan): LumiDesktopApproval {
-  return { deviceId: plan.deviceId, kind: plan.kind, target: plan.target }
+/** Aprobaciones que necesita la acción (y que «sí, no vuelvas a preguntar» guarda). */
+function approvalsOf(plan: ActionPlan): LumiDesktopApproval[] {
+  if (plan.kind === 'play_music') {
+    return (['open_page', 'click_page'] as const).map((kind) => ({
+      deviceId: plan.deviceId,
+      kind,
+      target: plan.target,
+    }))
+  }
+  return [{ deviceId: plan.deviceId, kind: plan.kind, target: plan.target }]
+}
+
+async function isApproved(ctx: LumiToolContext, plan: ActionPlan): Promise<boolean> {
+  for (const approval of approvalsOf(plan)) {
+    if (!(await ctx.deps.desktop!.isApproved(ctx.userId, approval))) return false
+  }
+  return true
 }
 
 /**
@@ -323,7 +401,7 @@ function approvalOf(plan: ActionPlan): LumiDesktopApproval {
  */
 async function confirmOrRun(ctx: LumiToolContext, plan: ActionPlan): Promise<LumiToolResult> {
   const port = ctx.deps.desktop!
-  if (await port.isApproved(ctx.userId, approvalOf(plan))) return perform(ctx, plan)
+  if (await isApproved(ctx, plan)) return perform(ctx, plan)
   const summary = summarize(plan)
   const scope = `${KIND_PHRASE[plan.kind]} ${plan.kind.endsWith('_app') ? plan.app : plan.target}`
   const pending = await port.savePending(ctx.userId, { plan: JSON.stringify(plan) }, summary)
@@ -351,6 +429,8 @@ async function perform(ctx: LumiToolContext, plan: ActionPlan): Promise<LumiTool
     return result(`«${plan.deviceName}» ya no está conectado; no hice nada.`, 0)
   if (device.paused)
     return result(`La ejecución está en pausa en «${plan.deviceName}»; no hice nada.`, 0)
+
+  if (plan.kind === 'play_music') return playMusic(ctx, device, plan)
 
   if (plan.kind === 'open_page') {
     const outcome = await execute(ctx, device, 'browser.navigate', { url: plan.url })
@@ -421,6 +501,58 @@ async function perform(ctx: LumiToolContext, plan: ActionPlan): Promise<LumiTool
   )
 }
 
+/**
+ * Pone música en YouTube en el navegador del equipo: abre la búsqueda, lee la página, pulsa el vídeo
+ * que coincide y comprueba que el navegador quedó en ese vídeo. Cada paso lo verifica el agente; el
+ * texto final solo afirma lo comprobado (que el vídeo quedó abierto, no que se oiga).
+ */
+async function playMusic(
+  ctx: LumiToolContext,
+  device: LumiDesktopDevice,
+  plan: ActionPlan,
+): Promise<LumiToolResult> {
+  const query = plan.query ?? ''
+  const opened = await execute(ctx, device, 'browser.navigate', { url: youtubeSearchUrl(query) })
+  if (!ok(opened)) return result(failureText(opened), 0)
+  // La aprobación es para YouTube: si acabó en otra página (p. ej. el aviso de cookies), no se pulsa.
+  if (hostOf(opened.result?.url) !== YOUTUBE_HOST) {
+    return result(
+      `Abrí YouTube en «${device.name}», pero quedó en otra página (${opened.result?.url ?? 'desconocida'}). Revísala en el equipo y vuelve a pedirlo.`,
+      0,
+    )
+  }
+  const snap = await execute(ctx, device, 'browser.snapshot', { interactive: true })
+  if (!ok(snap)) return result(failureText(snap), 0)
+  if (hostOf(snap.result?.url) !== YOUTUBE_HOST) {
+    return result(`La página de «${device.name}» ya no es de YouTube; no pulsé nada.`, 0)
+  }
+  const video = pickVideoLink(pageElements(snap.result), query)
+  if (!video) {
+    return result(
+      `Abrí la búsqueda de «${query}» en YouTube en «${device.name}», pero no encontré un vídeo que coincida para ponerlo. Elige uno en el equipo.`,
+      0,
+    )
+  }
+  const clicked = await execute(ctx, device, 'browser.click', { ref: video.ref })
+  const name = clean(video.name, 90) ?? query
+  const landed = String(clicked.result?.url ?? '')
+  if (
+    ok(clicked) &&
+    hostOf(landed) === YOUTUBE_HOST &&
+    /\/(?:watch|shorts)\b/.test(new URL(landed).pathname)
+  ) {
+    return result(
+      `Puse «${name}» en YouTube en «${device.name}». YouTube debería empezar a reproducirlo; si el navegador lo bloquea, pulsa reproducir en el equipo.`,
+    )
+  }
+  if (clicked.status === 'unverified' || ok(clicked)) {
+    return result(
+      `Pulsé «${name}» en YouTube en «${device.name}», pero no pude comprobar que se abriera el vídeo. Revísalo en el equipo.`,
+    )
+  }
+  return result(failureText(clicked), 0)
+}
+
 /** Respuesta a «sí» / «sí, no vuelvas a preguntar» sobre una acción pendiente. */
 export async function confirmDesktopAction(
   ctx: LumiToolContext,
@@ -436,7 +568,7 @@ export async function confirmDesktopAction(
   }
   const done = await perform(ctx, plan)
   if (!remember) return done.text
-  await ctx.deps.desktop.approve(ctx.userId, approvalOf(plan))
+  for (const approval of approvalsOf(plan)) await ctx.deps.desktop.approve(ctx.userId, approval)
   const where = plan.kind.endsWith('_app') ? plan.app : plan.target
   return `${done.text}\nNo volveré a pedirte confirmación para ${KIND_PHRASE[plan.kind]} ${where} en «${plan.deviceName}». Puedes retirarlo en Lumia Admin → Dispositivos.`
 }
@@ -634,6 +766,56 @@ const SPECS: readonly DeviceToolSpec[] = [
         deviceName: found.device.name,
         target,
         url: input.url,
+      })
+    },
+  },
+  {
+    name: 'device.play_music',
+    label: 'Poniendo música en tu equipo',
+    capability: 'Poner una canción o un artista en YouTube en el navegador de mi equipo',
+    example: '/music Numb de Linkin Park',
+    description:
+      'Poner una canción o un artista en YouTube, en el navegador del equipo del usuario (con el reproductor oficial)',
+    permission: PERMISSION_REGISTRY.DESKTOP_BROWSER_CONTROL,
+    effect: 'control',
+    args: [
+      {
+        name: 'cancion',
+        kind: 'str',
+        required: true,
+        description: 'canción y/o artista tal como lo dice el usuario',
+      },
+      DEVICE_ARG,
+    ],
+    ask: '¿Qué canción o artista pongo?',
+    fromArgs: (a) =>
+      build({ query: clean(a.cancion, MUSIC_QUERY_MAX) ?? undefined, device: deviceOf(a) }, [
+        'query',
+      ]),
+    // Comandos del chat de Lumia Admin: «/music X», «/play X», «/reproduce X».
+    match(_n, original) {
+      const m = MUSIC_COMMAND.exec(original.trim())
+      const query = clean(m?.[1], MUSIC_QUERY_MAX)
+      return query ? { query } : null
+    },
+    async run(ctx, input) {
+      const found = await resolveDevice(ctx, input.device, 'browser.navigate')
+      if ('reply' in found) return result(found.reply, 0)
+      const missing = ['browser.snapshot', 'browser.click'].filter(
+        (op) => !found.device.operations.includes(op),
+      )
+      if (missing.length) {
+        return result(
+          `«${found.device.name}» no puede leer ni pulsar páginas ahora mismo, así que no puedo poner la canción.`,
+          0,
+        )
+      }
+      return confirmOrRun(ctx, {
+        kind: 'play_music',
+        deviceId: found.device.id,
+        deviceName: found.device.name,
+        target: YOUTUBE_HOST,
+        query: input.query,
       })
     },
   },

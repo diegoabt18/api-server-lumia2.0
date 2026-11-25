@@ -21,7 +21,9 @@ import {
 import {
   handleDesktopReply,
   normalizeUrl,
+  pickVideoLink,
   resolveElement,
+  youtubeSearchUrl,
 } from '../../src/modules/lumi/tools/desktop.tools.js'
 import type {
   LumiDesktopDevice,
@@ -102,7 +104,7 @@ describe('selección en dos niveles', () => {
 
     const device = routeSelectorMenu('pulsa el botón Enviar en la página', undefined, ALL)
     expect(device.mode).toBe('grouped')
-    expect(device.menu.tools.filter((t) => t.name.startsWith('device.'))).toHaveLength(9)
+    expect(device.menu.tools.filter((t) => t.name.startsWith('device.'))).toHaveLength(10)
     expect(
       device.menu.tools.some((t) => t.name.startsWith('music.') || t.name.startsWith('orders.')),
     ).toBe(false)
@@ -179,6 +181,8 @@ interface FakeState {
   devices: LumiDesktopDevice[]
   page: { url: string; refs: Record<string, { role: string; name: string }> }
   executed: Array<{ operation: string; args: Record<string, unknown> }>
+  /** URL en la que queda el navegador tras un click (si se informa). */
+  clickUrl?: string
 }
 
 function fakePort(state: FakeState) {
@@ -202,7 +206,11 @@ function fakePort(state: FakeState) {
             error: null,
           }
         case 'browser.click':
-          return { status: 'completed', result: { url_changed: true }, error: null }
+          return {
+            status: 'completed',
+            result: { url_changed: true, ...(state.clickUrl ? { url: state.clickUrl } : {}) },
+            error: null,
+          }
         case 'browser.fill':
           return {
             status: 'completed',
@@ -567,5 +575,181 @@ describe('equipo en Lumi Chat: reglas para órdenes claras (sin modelo)', () => 
       mode: 'grouped',
       group: 'musica',
     })
+  })
+})
+
+/* ───────────────────────── Música en YouTube (/music) ───────────────────────── */
+
+const RESULTS_PAGE = {
+  url: 'https://www.youtube.com/results?search_query=numb%20linkin%20park',
+  refs: {
+    e1: { role: 'link', name: 'Inicio' },
+    e2: { role: 'button', name: 'Filtros' },
+    e3: { role: 'link', name: 'Numb Linkin Park karaoke Patrocinado' },
+    e4: {
+      role: 'link',
+      name: 'Numb (Official Music Video) [4K UPGRADE] – Linkin Park de Linkin Park 2.1 mil millones de visualizaciones',
+    },
+    e5: { role: 'link', name: 'Numb (Live) Linkin Park de Linkin Park' },
+  },
+}
+
+describe('equipo en Lumi Chat: poner música en YouTube (/music)', () => {
+  it('reconoce /music, /play y /reproduce sin modelo', () => {
+    for (const [message, query] of [
+      ['/music Numb Linkin Park', 'Numb Linkin Park'],
+      ['/play  Bohemian Rhapsody ', 'Bohemian Rhapsody'],
+      ['/REPRODUCE Imagine de John Lennon', 'Imagine de John Lennon'],
+    ] as const) {
+      const match = matchTool(message, DESKTOP, { now: NOW, timezone: TZ })
+      expect(match?.tool.name).toBe('device.play_music')
+      expect(match?.input).toEqual({ query })
+      expect(match?.denied).toBe(false)
+    }
+    expect(matchTool('/music', DESKTOP, { now: NOW, timezone: TZ })?.tool.name).not.toBe(
+      'device.play_music',
+    )
+    expect(matchTool('/music Numb', [P.LUMI_USE], { now: NOW, timezone: TZ })?.denied).toBe(true)
+  })
+
+  it('la primera vez pide confirmación y no ejecuta nada', async () => {
+    const { state, run } = setup({ page: RESULTS_PAGE })
+    const reply = await run('device.play_music', { query: 'Numb Linkin Park' })
+    expect(reply.confirmation).toMatchObject({
+      summary: 'buscar «Numb Linkin Park» en YouTube y poner el vídeo que coincida',
+      device: 'PC de Diego',
+      scope: 'abrir y pulsar en las páginas de www.youtube.com',
+    })
+    expect(state.executed).toHaveLength(0)
+  })
+
+  it('al confirmar: busca, pulsa el vídeo que coincide (no el anuncio) y comprueba que quedó abierto', async () => {
+    const { state, ctx, run } = setup({
+      page: RESULTS_PAGE,
+      clickUrl: 'https://www.youtube.com/watch?v=kXYiU_JCYtU',
+    })
+    const card = await run('device.play_music', { query: 'Numb Linkin Park' })
+    const done = await handleDesktopReply(ctx, 'Sí', card.confirmation!.id)
+    expect(state.executed.map((e) => e.operation)).toEqual([
+      'browser.navigate',
+      'browser.snapshot',
+      'browser.click',
+    ])
+    expect(state.executed[0]?.args).toEqual({ url: youtubeSearchUrl('Numb Linkin Park') })
+    expect(state.executed[2]?.args).toEqual({ ref: 'e4' })
+    expect(done).toMatch(/^Puse «Numb \(Official Music Video\)/)
+    expect(done).toMatch(/en «PC de Diego»/)
+    expect(done).not.toMatch(/suena|sonando/)
+  })
+
+  it('«sí, no vuelvas a preguntar» guarda abrir y pulsar en YouTube y la próxima vez no pregunta', async () => {
+    const { state, ctx, run, approvals } = setup({
+      page: RESULTS_PAGE,
+      clickUrl: 'https://www.youtube.com/watch?v=kXYiU_JCYtU',
+    })
+    const card = await run('device.play_music', { query: 'Numb Linkin Park' })
+    const done = await handleDesktopReply(ctx, 'Sí, no vuelvas a preguntar', card.confirmation!.id)
+    expect(done).toMatch(
+      /No volveré a pedirte confirmación para abrir y pulsar en las páginas de www\.youtube\.com/,
+    )
+    const saved = (await approvals.list(USER)).map((a) => `${a.kind}:${a.target}`).sort()
+    expect(saved).toEqual(['click_page:www.youtube.com', 'open_page:www.youtube.com'])
+    state.executed.length = 0
+    const again = await run('device.play_music', { query: 'Numb Linkin Park' })
+    expect(again.confirmation).toBeUndefined()
+    expect(again.text).toMatch(/^Puse «Numb/)
+    expect(state.executed).toHaveLength(3)
+  })
+
+  it('si ningún resultado coincide, abre la búsqueda pero no pulsa nada', async () => {
+    const { state, ctx, run } = setup({ page: RESULTS_PAGE })
+    const card = await run('device.play_music', { query: 'Yellow Coldplay' })
+    const done = await handleDesktopReply(ctx, 'Sí', card.confirmation!.id)
+    expect(done).toMatch(/no encontré un vídeo que coincida/)
+    expect(state.executed.map((e) => e.operation)).toEqual(['browser.navigate', 'browser.snapshot'])
+  })
+
+  it('no afirma que se abrió el vídeo si el agente no lo comprueba', async () => {
+    const { ctx, run } = setup({ page: RESULTS_PAGE })
+    const card = await run('device.play_music', { query: 'Numb Linkin Park' })
+    const done = await handleDesktopReply(ctx, 'Sí', card.confirmation!.id)
+    expect(done).toMatch(/no pude comprobar que se abriera el vídeo/)
+  })
+
+  it('no pulsa nada si YouTube redirige a otra página (p. ej. aviso de cookies)', async () => {
+    const { state, ctx, run } = setup({
+      page: { url: 'https://consent.youtube.com/m?continue=x', refs: RESULTS_PAGE.refs },
+    })
+    const card = await run('device.play_music', { query: 'Numb Linkin Park' })
+    const done = await handleDesktopReply(ctx, 'Sí', card.confirmation!.id)
+    expect(done).toMatch(/ya no es de YouTube; no pulsé nada/)
+    expect(state.executed.map((e) => e.operation)).not.toContain('browser.click')
+  })
+
+  it('sin equipo capaz de leer y pulsar páginas no ofrece la acción', async () => {
+    const { run } = setup({
+      devices: [
+        {
+          id: 'dev_1',
+          name: 'PC de Diego',
+          online: true,
+          paused: false,
+          operations: ['browser.navigate'],
+        },
+      ],
+    })
+    const reply = await run('device.play_music', { query: 'Numb' })
+    expect(reply.text).toMatch(/no puede leer ni pulsar páginas/)
+    expect(reply.confirmation).toBeUndefined()
+  })
+
+  it('elige el vídeo por coincidencia de palabras, salta anuncios y no adivina', () => {
+    const elements = Object.entries(RESULTS_PAGE.refs).map(([ref, v]) => ({ ref, ...v }))
+    expect(pickVideoLink(elements, 'numb linkin park')?.ref).toBe('e4')
+    expect(pickVideoLink(elements, 'Numb')?.ref).toBe('e4')
+    expect(pickVideoLink(elements, 'yellow coldplay')).toBeNull()
+    expect(pickVideoLink(elements, '!!')).toBeNull()
+    expect(youtubeSearchUrl('AC/DC & Queen')).toBe(
+      'https://www.youtube.com/results?search_query=AC%2FDC%20%26%20Queen',
+    )
+  })
+})
+
+describe('equipo en Lumi Chat: elección del vídeo con nombres reales de YouTube', () => {
+  // Nombres accesibles de enlaces de una búsqueda real (2026-11-24, interfaz en español).
+  const REAL = [
+    'Página principal de YouTube',
+    '3:08 3:08 Reproduciendo',
+    'Ir al canal Linkin Park',
+    'Linkin Park',
+    'Numb (Official Music Video) [4K UPGRADE] – Linkin Park 3 minutos y 8 segundos',
+    'Ir al canal LatinHype',
+    'Linkin Park - Numb 3 minutos y 6 segundos',
+    'Numb (Live) - Linkin Park 3 minutos y 13 segundos',
+    'Mix: Numb (Official Music Video) [4K UPGRADE] – Linkin Park',
+  ].map((name, i) => ({ ref: `e${i + 1}`, role: 'link', name }))
+
+  it('pone el vídeo oficial al pedir canción y artista', () => {
+    expect(pickVideoLink(REAL, 'Numb Linkin Park')?.name).toMatch(/^Numb \(Official Music Video\)/)
+    expect(pickVideoLink(REAL, 'Numb de Linkin Park')?.name).toMatch(/^Numb \(Official/)
+  })
+
+  it('con solo el artista elige un vídeo, nunca el enlace al canal', () => {
+    const picked = pickVideoLink(REAL, 'Linkin Park')
+    expect(picked?.name).toMatch(/minutos y/)
+    expect(picked?.name).not.toBe('Linkin Park')
+  })
+
+  it('acepta los nombres en inglés', () => {
+    const english = [
+      { ref: 'e1', role: 'link', name: 'Go to channel Linkin Park' },
+      { ref: 'e2', role: 'link', name: 'Linkin Park' },
+      {
+        ref: 'e3',
+        role: 'link',
+        name: 'Numb (Official Music Video) - Linkin Park 3 minutes, 8 seconds',
+      },
+    ]
+    expect(pickVideoLink(english, 'Linkin Park')?.ref).toBe('e3')
   })
 })
