@@ -1,7 +1,7 @@
 import { PERMISSION_REGISTRY, type PermissionId } from '../../../common/permissions/registry.js'
 import { isConfirmation, isRejection, normalizeText } from '../automation/domain/reminder-parser.js'
 import { plainText } from '../selector/selector-text.js'
-import { extractMusicQuery, findBestCandidate, getConfidenceLevel } from '../selector/fuzzy-matcher.js'
+import { extractMusicQuery, findBestCandidate } from '../selector/fuzzy-matcher.js'
 import type {
   LumiDesktopApproval,
   LumiDesktopDevice,

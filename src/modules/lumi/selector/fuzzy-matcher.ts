@@ -278,7 +278,7 @@ export interface ConfidenceLevel {
  * - 0.72-0.87: solicitar confirmación
  * - <0.72: rechazar (no reproducir automáticamente)
  */
-export function getConfidenceLevel(score: number, separator: number = 0.08): ConfidenceLevel {
+export function getConfidenceLevel(score: number): ConfidenceLevel {
   if (score >= 0.88) {
     return {
       level: 'auto',
@@ -326,7 +326,7 @@ export function findBestCandidate(
       return {
         element: candidate,
         score: scores.overallScore,
-        confidence: getConfidenceLevel(scores.overallScore, minSeparation),
+        confidence: getConfidenceLevel(scores.overallScore),
         reasoning: scores.reasoning,
       }
     })
