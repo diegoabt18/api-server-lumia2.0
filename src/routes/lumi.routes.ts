@@ -19,8 +19,7 @@ import type { LumiReference } from '../modules/lumi/references/lumi-references.j
 import { missingCapabilityReply } from '../modules/lumi/selector/lumi-selector.js'
 import { planLumiTurn, type TurnPlan } from '../modules/lumi/turn/turn-plan.js'
 import { sampleFromTrace, type TurnSample } from '../modules/lumi/metrics/turn-metrics.js'
-import { createLumiMusicPort, createLumiToolDeps } from '../modules/lumi/tools/tool-adapters.js'
-import { LumiMusicHub, type LumiMusicHubEvent } from '../modules/lumi/infrastructure/lumi-music-hub.js'
+import { createLumiToolDeps } from '../modules/lumi/tools/tool-adapters.js'
 import {
   buildAssistRequest,
   lumiProductAssistSchema,
@@ -46,9 +45,6 @@ import {
   lumiChatBodySchema,
   lumiConversationParamsSchema,
   lumiListQuerySchema,
-  lumiMusicPlayerCommandSchema,
-  lumiMusicRecommendationsQuerySchema,
-  lumiMusicSearchQuerySchema,
   lumiProductParamsSchema,
   lumiUsageQuerySchema,
 } from '../modules/lumi/schemas/lumi.schema.js'
@@ -58,10 +54,6 @@ import {
  * identifica al usuario y reenvía la petición a ia-asistente con su identificador.
  * El navegador nunca recibe la URL ni la clave de ia-asistente.
  */
-/** Stream de música: latido, duración máxima sin caducidad conocida y pestañas por usuario. */
-const MUSIC_STREAM_HEARTBEAT_MS = 25_000
-const MUSIC_STREAM_MAX_MS = 15 * 60_000
-const MUSIC_STREAMS_PER_USER = 5
 
 export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) {
   const { env } = ctx
