@@ -1,9 +1,15 @@
 # =============================================================================
 # Docker Compose — Producción (ThinkCentre / servidor dedicado)
-# Uso: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Uso: npm run docker:prod
+#   (docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --remove-orphans)
+# Imagen compilada (target `production`: node dist/server.js, sin dependencias de desarrollo).
+# El puerto publicado sale de API_BIND_ADDRESS en server/.env (no de .env.production).
 # =============================================================================
 services:
   api:
+    # Mismo nombre que el antiguo `api-prod` de docker-compose.dev.yml: Lumia Admin
+    # (NUXT_API_BASE_URL=http://server-api:3001) y el asistente lo buscan así en la red Docker.
+    container_name: server-api
     env_file:
       - .env.production
     deploy:
