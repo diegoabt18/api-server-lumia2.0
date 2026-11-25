@@ -126,6 +126,22 @@ export type LumiStreamEvent =
   | { type: 'references'; references: LumiReference[] }
   /** Estado real del reproductor tras un comando de música: el chat lo muestra como reproductor. */
   | { type: 'music'; state: LumiMusicState }
+  /** Candidatos de música cuando la confianza es media (0.72-0.87): el usuario selecciona uno. */
+  | {
+      type: 'music_candidates'
+      conversationId: string
+      queryId: string
+      query: string
+      candidates: Array<{
+        id: string
+        title: string
+        artist: string
+        duration: number
+        thumbnailUrl: string | null
+        type: 'song' | 'live' | 'cover' | 'remix' | 'official' | 'unknown'
+      }>
+      expiresAt: string
+    }
   /** Acción del equipo esperando «sí» / «no»: Lumia Admin la muestra con botones. */
   | {
       type: 'confirmation'

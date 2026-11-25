@@ -636,8 +636,10 @@ async function playMusic(
   // CONFIRM: Devolver múltiples candidatos para que el usuario elija
   if (confidence === 'confirm') {
     // Generar queryId y guardar en caché (lo haremos en toolTurnStream)
-    const musicCandidates: Omit<LumiMusicCandidates, 'conversationId'> = {
-      queryId: randomUUID(),
+    const queryId = randomUUID()
+    const musicCandidates: LumiMusicCandidates = {
+      conversationId: '', // Se agregará en toolTurnStream con conversationId real
+      queryId,
       query,
       candidates: candidates.map((c) => ({
         id: `yt-${randomUUID()}`, // Placeholder; se obtendría del video real

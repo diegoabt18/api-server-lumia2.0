@@ -171,7 +171,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     const texts: string[] = []
     const references: LumiReference[] = []
     let entity: LumiEntityRef | undefined
-    let musicCandidatesEvent: LumiStreamEvent | null = null
+    let musicCandidatesEmitted = false
     for (const match of matches) {
       const result = await executeTool(request, match)
       yield toolEvent(match, result.rows)
@@ -185,7 +185,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
           result.musicCandidates.candidates,
         )
         // Crear evento SSE con conversationId
-        musicCandidatesEvent = {
+        const musicCandidatesEvent: Extract<LumiStreamEvent, { type: 'music_candidates' }> = {
           type: 'music_candidates',
           conversationId: tempConvId,
           queryId: result.musicCandidates.queryId,
@@ -194,6 +194,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
           expiresAt: result.musicCandidates.expiresAt.toISOString(),
         }
         yield musicCandidatesEvent
+        musicCandidatesEmitted = true
       }
       // Música: el estado real del reproductor, para que el chat muestre el reproductor.
       if (result.music) yield { type: 'music', state: result.music }
@@ -213,7 +214,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
         .catch((err) => request.log.warn({ err }, 'Lumi active entity not saved'))
     }
     // Si se emitió event de candidatos, NO emitir token/referencias/done (el turno queda en CONFIRM)
-    if (!musicCandidatesEvent) {
+    if (!musicCandidatesEmitted) {
       yield { type: 'token', text }
       if (references.length) yield { type: 'references', references }
       yield { type: 'done', conversationId: saved.conversationId }
