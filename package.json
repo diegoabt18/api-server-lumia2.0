@@ -31,8 +31,8 @@
     "docker:dev:atlas": "docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile atlas up -d --build",
     "docker:dev:prod": "docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile prod up -d --build",
     "docker:dev:down": "docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile local --profile atlas --profile prod down",
-    "docker:prod": "docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --remove-orphans",
-    "docker:prod:down": "docker compose -f docker-compose.yml -f docker-compose.prod.yml down",
+    "docker:prod": "docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml up -d --build --remove-orphans",
+    "docker:prod:down": "docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml down",
     "expire:orders": "tsx scripts/expire-orders.ts",
     "typecheck": "tsc --noEmit"
   },

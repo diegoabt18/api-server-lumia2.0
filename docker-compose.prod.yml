@@ -1,9 +1,11 @@
 # =============================================================================
 # Docker Compose — Producción (ThinkCentre / servidor dedicado)
 # Uso: npm run docker:prod
-#   (docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --remove-orphans)
+#   (docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml
+#    up -d --build --remove-orphans)
 # Imagen compilada (target `production`: node dist/server.js, sin dependencias de desarrollo).
-# El puerto publicado sale de API_BIND_ADDRESS en server/.env (no de .env.production).
+# Con --env-file, Compose toma de .env.production también las variables de este archivo
+# (API_BIND_ADDRESS, PORT, REDIS_PASSWORD): un solo archivo para todo.
 # =============================================================================
 services:
   api:
