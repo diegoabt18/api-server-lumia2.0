@@ -21,43 +21,6 @@ export const lumiChatBodySchema = z.object({
     .optional(),
 })
 
-/**
- * Órdenes del reproductor del chat (botones de Lumia Admin). Lista cerrada con argumentos tipados:
- * nada de búsquedas ni comandos libres desde el navegador. El permiso de cada una lo comprueba la ruta.
- */
-const noArgs = z.object({}).strict().default({})
-const musicVideoId = z.string().regex(/^[A-Za-z0-9_-]{11}$/)
-const queuePosition = z.number().int().min(1).max(50)
-const onOff = z.enum(['on', 'off'])
-export const lumiMusicPlayerCommandSchema = z.discriminatedUnion('tool', [
-  // Sin argumentos reanuda o empieza la cola; con video_id (de un resultado mostrado) pone esa canción.
-  z.object({ tool: z.literal('music.play'), args: z.object({ video_id: musicVideoId.optional() }).strict().default({}) }).strict(),
-  z.object({ tool: z.literal('music.enqueue'), args: z.object({ video_id: musicVideoId }).strict() }).strict(),
-  z.object({ tool: z.literal('music.play_next'), args: z.object({ video_id: musicVideoId }).strict() }).strict(),
-  z.object({ tool: z.literal('music.remove'), args: z.object({ position: queuePosition }).strict() }).strict(),
-  z.object({ tool: z.literal('music.move'), args: z.object({ position: queuePosition, to: queuePosition }).strict() }).strict(),
-  z.object({ tool: z.literal('music.clear_queue'), args: noArgs }).strict(),
-  z.object({ tool: z.literal('music.shuffle'), args: z.object({ state: onOff }).strict() }).strict(),
-  z.object({ tool: z.literal('music.repeat'), args: z.object({ repeat: z.enum(['off', 'one', 'all']) }).strict() }).strict(),
-  z.object({ tool: z.literal('music.autoplay'), args: z.object({ state: onOff }).strict() }).strict(),
-  z.object({ tool: z.literal('music.pause'), args: noArgs }).strict(),
-  z.object({ tool: z.literal('music.resume'), args: noArgs }).strict(),
-  z.object({ tool: z.literal('music.stop'), args: noArgs }).strict(),
-  z.object({ tool: z.literal('music.next'), args: noArgs }).strict(),
-  z.object({ tool: z.literal('music.previous'), args: noArgs }).strict(),
-  z.object({ tool: z.literal('music.volume'), args: z.object({ level: z.number().int().min(0).max(100) }).strict() }).strict(),
-  z.object({ tool: z.literal('music.seek'), args: z.object({ position: z.number().int().min(0).max(24 * 3600) }).strict() }).strict(),
-  z.object({ tool: z.literal('music.jump'), args: z.object({ position: z.number().int().min(1).max(50) }).strict() }).strict(),
-])
-export type LumiMusicPlayerCommand = z.infer<typeof lumiMusicPlayerCommandSchema>
-
-export const lumiMusicRecommendationsQuerySchema = z.object({ videoId: musicVideoId.optional() }).strict()
-export const lumiMusicSearchQuerySchema = z
-  .object({
-    q: z.string().trim().min(1).max(200),
-    limit: z.coerce.number().int().min(1).max(10).default(8),
-  })
-  .strict()
 
 export const lumiListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
