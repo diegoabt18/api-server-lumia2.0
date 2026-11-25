@@ -348,3 +348,29 @@ export function findBestCandidate(
 
   return best
 }
+
+/**
+ * Encuentra los 5 mejores candidatos ordenados por similitud.
+ * Retorna hasta 5 resultados (o menos si hay pocos candidatos).
+ */
+export function findTopCandidates(
+  candidates: Array<{ name: string; [key: string]: unknown }>,
+  query: ExtractedQuery,
+): CandidateResult[] {
+  if (candidates.length === 0) return []
+
+  const scored = candidates
+    .map((candidate) => {
+      const scores = scoreMatch(query, candidate.name)
+      return {
+        element: candidate,
+        score: scores.overallScore,
+        confidence: getConfidenceLevel(scores.overallScore),
+        reasoning: scores.reasoning,
+      }
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5) // Top 5
+
+  return scored
+}

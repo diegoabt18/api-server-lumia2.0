@@ -1,11 +1,13 @@
+import { randomUUID } from 'node:crypto'
 import { PERMISSION_REGISTRY, type PermissionId } from '../../../common/permissions/registry.js'
 import { isConfirmation, isRejection, normalizeText } from '../automation/domain/reminder-parser.js'
 import { plainText } from '../selector/selector-text.js'
-import { extractMusicQuery, findBestCandidate } from '../selector/fuzzy-matcher.js'
+import { extractMusicQuery, findBestCandidate, findTopCandidates } from '../selector/fuzzy-matcher.js'
 import type {
   LumiDesktopApproval,
   LumiDesktopDevice,
   LumiDesktopOutcome,
+  LumiMusicCandidates,
   LumiSelectorArg,
   LumiSelectorBuild,
   LumiTool,
@@ -378,6 +380,79 @@ export function pickVideoLink(elements: Element[], query: string): Element | nul
   return best.element.originalElement as Element
 }
 
+/**
+ * Extrae duración en segundos del nombre visible del video.
+ * Ej: "Numb - Linkin Park 3 minutos y 8 segundos" → 188
+ */
+function extractDurationSeconds(text: string): number {
+  const matches = text.match(/(\d+)\s*(?:horas?|hours?)/i)
+  if (matches) {
+    const hours = parseInt(matches[1], 10)
+    return hours * 3600
+  }
+
+  let seconds = 0
+  const minMatches = text.match(/(\d+)\s*(?:minutos?|minutes?)/i)
+  if (minMatches) {
+    seconds += parseInt(minMatches[1], 10) * 60
+  }
+
+  const secMatches = text.match(/(\d+)\s*(?:segundos?|seconds?)/i)
+  if (secMatches) {
+    seconds += parseInt(secMatches[1], 10)
+  }
+
+  return seconds || 0
+}
+
+/**
+ * Detecta el tipo de video basado en el nombre visible.
+ */
+function detectMusicType(name: string): 'song' | 'live' | 'cover' | 'remix' | 'official' | 'unknown' {
+  const lower = name.toLowerCase()
+  if (/\b(?:live|en vivo|directo)\b/.test(lower)) return 'live'
+  if (/\b(?:cover|versión)\b/.test(lower)) return 'cover'
+  if (/\b(?:remix|rework)\b/.test(lower)) return 'remix'
+  if (/\b(?:official|oficial|audio\s+oficial)\b/.test(lower)) return 'official'
+  return 'unknown'
+}
+
+/**
+ * Extrae top 5 candidatos de música con información disponible.
+ * Los candidatos incluyen título, artista, duración y tipo detectados del nombre visible.
+ */
+export function extractMusicCandidates(
+  elements: Element[],
+  query: string,
+): Array<{ name: string; duration: number; type: ReturnType<typeof detectMusicType>; originalElement: Element; score: number }> {
+  if (!query || query.trim().length === 0) return []
+
+  const musicQuery = extractMusicQuery(plainText(query))
+
+  const candidates = elements
+    .filter((el) => {
+      if (el.role !== 'link' || !el.name) return false
+      const name = plainText(el.name)
+      if (NOT_A_VIDEO.test(name) || CHANNEL_LINK.test(name)) return false
+      return true
+    })
+    .map((el) => ({ name: plainText(el.name!), originalElement: el }))
+
+  if (candidates.length === 0) return []
+
+  const topCandidates = findTopCandidates(candidates, musicQuery)
+
+  return topCandidates
+    .filter((c) => c.score >= 0.72) // Solo candidatos con confianza suficiente
+    .map((candidate) => ({
+      name: candidate.element.name,
+      duration: extractDurationSeconds(candidate.element.name),
+      type: detectMusicType(candidate.element.name),
+      originalElement: candidate.element.originalElement as Element,
+      score: candidate.score,
+    }))
+}
+
 function summarize(plan: ActionPlan): string {
   const preview = (plan.text ?? '').length > 40 ? `${plan.text!.slice(0, 40)}…` : plan.text
   switch (plan.kind) {
@@ -534,7 +609,6 @@ async function playMusic(
   const query = plan.query ?? ''
   const opened = await execute(ctx, device, 'browser.navigate', { url: youtubeSearchUrl(query) })
   if (!ok(opened)) return result(failureText(opened), 0)
-  // La aprobación es para YouTube: si acabó en otra página (p. ej. el aviso de cookies), no se pulsa.
   if (hostOf(opened.result?.url) !== YOUTUBE_HOST) {
     return result(
       `Abrí YouTube en «${device.name}», pero quedó en otra página (${opened.result?.url ?? 'desconocida'}). Revísala en el equipo y vuelve a pedirlo.`,
@@ -546,31 +620,70 @@ async function playMusic(
   if (hostOf(snap.result?.url) !== YOUTUBE_HOST) {
     return result(`La página de «${device.name}» ya no es de YouTube; no pulsé nada.`, 0)
   }
-  const video = pickVideoLink(pageElements(snap.result), query)
-  if (!video) {
+
+  // Obtener los top 5 candidatos con scoring
+  const candidates = extractMusicCandidates(pageElements(snap.result), query)
+  if (candidates.length === 0) {
     return result(
       `Abrí la búsqueda de «${query}» en YouTube en «${device.name}», pero no encontré un vídeo que coincida para ponerlo. Elige uno en el equipo.`,
       0,
     )
   }
-  const clicked = await execute(ctx, device, 'browser.click', { ref: video.ref })
-  const name = clean(video.name, 90) ?? query
-  const landed = String(clicked.result?.url ?? '')
-  if (
-    ok(clicked) &&
-    hostOf(landed) === YOUTUBE_HOST &&
-    /\/(?:watch|shorts)\b/.test(new URL(landed).pathname)
-  ) {
-    return result(
-      `Puse «${name}» en YouTube en «${device.name}». YouTube debería empezar a reproducirlo; si el navegador lo bloquea, pulsa reproducir en el equipo.`,
-    )
+
+  const best = candidates[0]!
+  const confidence = best.score >= 0.88 ? 'auto' : best.score >= 0.72 ? 'confirm' : 'reject'
+
+  // CONFIRM: Devolver múltiples candidatos para que el usuario elija
+  if (confidence === 'confirm') {
+    // Generar queryId y guardar en caché (lo haremos en toolTurnStream)
+    const musicCandidates: Omit<LumiMusicCandidates, 'conversationId'> = {
+      queryId: randomUUID(),
+      query,
+      candidates: candidates.map((c) => ({
+        id: `yt-${randomUUID()}`, // Placeholder; se obtendría del video real
+        title: c.name,
+        artist: '', // Se extraería del parsing de c.name
+        duration: c.duration,
+        thumbnailUrl: null, // Se obtendría en BFF
+        type: c.type,
+      })),
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutos
+    }
+    return {
+      text: `Encontré varios vídeos que podrían ser «${query}». Elige uno en el chat.`,
+      rows: 0,
+      musicCandidates,
+    }
   }
-  if (clicked.status === 'unverified' || ok(clicked)) {
-    return result(
-      `Pulsé «${name}» en YouTube en «${device.name}», pero no pude comprobar que se abriera el vídeo. Revísalo en el equipo.`,
-    )
+
+  // AUTO: Hacer clic automáticamente en el mejor
+  if (confidence === 'auto') {
+    const video = best.originalElement
+    const clicked = await execute(ctx, device, 'browser.click', { ref: video.ref })
+    const name = clean(video.name, 90) ?? query
+    const landed = String(clicked.result?.url ?? '')
+    if (
+      ok(clicked) &&
+      hostOf(landed) === YOUTUBE_HOST &&
+      /\/(?:watch|shorts)\b/.test(new URL(landed).pathname)
+    ) {
+      return result(
+        `Puse «${name}» en YouTube en «${device.name}». YouTube debería empezar a reproducirlo; si el navegador lo bloquea, pulsa reproducir en el equipo.`,
+      )
+    }
+    if (clicked.status === 'unverified' || ok(clicked)) {
+      return result(
+        `Pulsé «${name}» en YouTube en «${device.name}», pero no pude comprobar que se abriera el vídeo. Revísalo en el equipo.`,
+      )
+    }
+    return result(failureText(clicked), 0)
   }
-  return result(failureText(clicked), 0)
+
+  // REJECT: Puntuación muy baja
+  return result(
+    `Abrí la búsqueda de «${query}» en YouTube en «${device.name}», pero la coincidencia no fue clara. Elige uno en el equipo.`,
+    0,
+  )
 }
 
 /** Respuesta a «sí» / «sí, no vuelvas a preguntar» sobre una acción pendiente. */
