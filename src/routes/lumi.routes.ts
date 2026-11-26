@@ -213,12 +213,13 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
         .set(userIdOf(request), saved.conversationId, entity, new Date())
         .catch((err) => request.log.warn({ err }, 'Lumi active entity not saved'))
     }
-    // Si se emitió event de candidatos, NO emitir token/referencias/done (el turno queda en CONFIRM)
+    // Si se emitió event de candidatos, NO emitir token/referencias (el turno muestra candidatos)
     if (!musicCandidatesEmitted) {
       yield { type: 'token', text }
       if (references.length) yield { type: 'references', references }
-      yield { type: 'done', conversationId: saved.conversationId }
     }
+    // Siempre emitir done para cerrar el stream correctamente
+    yield { type: 'done', conversationId: saved.conversationId }
   }
 
   /**
