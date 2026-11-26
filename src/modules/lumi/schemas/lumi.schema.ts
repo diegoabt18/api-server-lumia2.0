@@ -38,3 +38,11 @@ export const lumiProductParamsSchema = z.object({
 export const lumiConversationParamsSchema = z.object({
   id: z.string().uuid(),
 })
+
+export const lumiMusicSelectionParamsSchema = z.object({
+  queryId: z.string().uuid(),
+})
+
+export const lumiMusicSelectionBodySchema = z.object({
+  candidateId: z.string().regex(/^[0-9a-f]{16}$/),
+})

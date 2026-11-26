@@ -283,21 +283,29 @@ export interface LumiEntityRef {
   label: string
 }
 
+/** Vídeo de los resultados de YouTube que el usuario puede elegir (lo que ve el chat). */
 export interface LumiMusicCandidate {
-  id: string // YouTube video ID
+  /** Estable para el mismo resultado: hash de su nombre accesible, no un índice. */
+  id: string
   title: string
+  /** Canal que publica el vídeo, si el resultado lo muestra; '' si no. */
   artist: string
   duration: number
   thumbnailUrl: string | null
   type: 'song' | 'live' | 'cover' | 'remix' | 'official' | 'unknown'
 }
 
-export interface LumiMusicCandidates {
-  conversationId: string
+/**
+ * Búsqueda que espera la elección del usuario. Solo vive en el Server: `ref` y `label` sirven para
+ * volver a pulsar el mismo vídeo en el equipo y nunca salen hacia el chat.
+ */
+export interface LumiMusicSelection {
   queryId: string
   query: string
-  candidates: LumiMusicCandidate[]
-  expiresAt: Date
+  deviceId: string
+  deviceName: string
+  expiresAt: string
+  candidates: Array<LumiMusicCandidate & { ref: string; label: string }>
 }
 
 export interface LumiToolResult {
@@ -315,7 +323,7 @@ export interface LumiToolResult {
   /** Estado del reproductor tras un comando de música: el chat lo muestra como reproductor. */
   music?: LumiMusicState
   /** Candidatos de música cuando la confianza es media (0.72-0.87): el usuario selecciona uno. */
-  musicCandidates?: LumiMusicCandidates
+  musicSelection?: LumiMusicSelection
   /** Acción en un equipo esperando confirmación: el chat puede mostrar botones (fase 5). */
   /**
    * Acción del equipo esperando respuesta. Lumia Admin la muestra como tarjeta con «Sí» / «No» y

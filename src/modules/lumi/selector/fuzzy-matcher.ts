@@ -100,8 +100,26 @@ export function jaroWinklerSimilarity(a: string, b: string): number {
   return jaro + commonPrefix * 0.1 * (1 - jaro)
 }
 
+/** Palabras de 4 letras o menos solo cuentan si son exactas («numb» nunca es «dumb»). */
+const TYPO_MIN_LENGTH = 5
+/** Una letra cambiada, sobrante o faltante en una palabra de 5 o más («conspirancy» → «conspiracy»). */
+const TYPO_MIN_SIMILARITY = 0.8
+
+/** La palabra está en el conjunto tal cual o con un error de escritura razonable. */
+function hasToken(token: string, tokens: Set<string>): boolean {
+  if (tokens.has(token)) return true
+  if (token.length < TYPO_MIN_LENGTH) return false
+  for (const candidate of tokens) {
+    if (candidate.length >= TYPO_MIN_LENGTH && levenshteinSimilarity(token, candidate) >= TYPO_MIN_SIMILARITY) {
+      return true
+    }
+  }
+  return false
+}
+
 /**
- * Similitud de tokens: porcentaje de palabras que coinciden entre dos strings.
+ * Similitud de tokens: porcentaje de palabras que coinciden entre dos strings (tolera errores de
+ * escritura en palabras largas).
  */
 export function tokenSimilarity(a: string, b: string): number {
   const tokensA = new Set(a.toLowerCase().split(/\s+/).filter(Boolean))
@@ -111,7 +129,7 @@ export function tokenSimilarity(a: string, b: string): number {
 
   let matches = 0
   for (const token of tokensA) {
-    if (tokensB.has(token)) matches++
+    if (hasToken(token, tokensB)) matches++
   }
 
   // Usar la media armónica (F1 score)
@@ -128,8 +146,8 @@ export function tokenSimilarity(a: string, b: string): number {
  */
 export function containmentSimilarity(searchTerms: string[], resultText: string): number {
   if (searchTerms.length === 0) return 0
-  const resultTokens = new Set(resultText.split(/\s+/).filter(Boolean))
-  const matches = searchTerms.filter((term) => resultTokens.has(term)).length
+  const resultTokens = new Set(resultText.toLowerCase().split(/\s+/).filter(Boolean))
+  const matches = searchTerms.filter((term) => hasToken(term, resultTokens)).length
   return matches / searchTerms.length
 }
 

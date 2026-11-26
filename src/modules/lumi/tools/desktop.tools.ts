@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { PERMISSION_REGISTRY, type PermissionId } from '../../../common/permissions/registry.js'
 import { isConfirmation, isRejection, normalizeText } from '../automation/domain/reminder-parser.js'
 import { plainText } from '../selector/selector-text.js'
@@ -7,7 +7,7 @@ import type {
   LumiDesktopApproval,
   LumiDesktopDevice,
   LumiDesktopOutcome,
-  LumiMusicCandidates,
+  LumiMusicSelection,
   LumiSelectorArg,
   LumiSelectorBuild,
   LumiTool,
@@ -417,40 +417,87 @@ function detectMusicType(name: string): 'song' | 'live' | 'cover' | 'remix' | 'o
   return 'unknown'
 }
 
+const DURATION_SUFFIX =
+  /(?:\s*,?\s*(?:y|and)?\s*\d+\s+(?:horas?|hours?|minutos?|minutes?|segundos?|seconds?))+\s*$/i
+/** «… 6,1 M de visualizaciones hace 11 años», «… 6.1M views 11 years ago»: lo que sigue al canal. */
+const VIEWS_SEGMENT =
+  /\s+[\d.,]+\s*(?:[kmb]|mil|mill\.?|millones?)?\s*(?:de\s+)?(?:visualizaciones|vistas|views)\b.*$/i
+
 /**
- * Extrae top 5 candidatos de música con información disponible.
- * Los candidatos incluyen título, artista, duración y tipo detectados del nombre visible.
+ * Título y canal a partir del nombre accesible del resultado («Título de Canal 6,1 M de
+ * visualizaciones hace 11 años 3 minutos»). Solo se separa el canal si el formato se reconoce; si
+ * no, el título es el nombre sin la duración y el canal queda vacío (nunca se inventa).
  */
-export function extractMusicCandidates(
-  elements: Element[],
-  query: string,
-): Array<{ name: string; duration: number; type: ReturnType<typeof detectMusicType>; originalElement: Element; score: number }> {
+export function parseVideoLabel(label: string): { title: string; artist: string } {
+  const text = label.replace(/\s+/g, ' ').trim().replace(DURATION_SUFFIX, '').trim()
+  const views = VIEWS_SEGMENT.exec(text)
+  if (!views) return { title: text, artist: '' }
+  const head = text.slice(0, views.index)
+  const split = Math.max(head.lastIndexOf(' de '), head.lastIndexOf(' by '))
+  if (split <= 0) return { title: head, artist: '' }
+  return { title: head.slice(0, split).trim(), artist: head.slice(split + 4).trim() }
+}
+
+function candidateId(label: string): string {
+  return createHash('sha256').update(label).digest('hex').slice(0, 16)
+}
+
+export interface MusicCandidateMatch {
+  id: string
+  label: string
+  title: string
+  artist: string
+  duration: number
+  type: ReturnType<typeof detectMusicType>
+  element: Element
+  score: number
+}
+
+/**
+ * Hasta 5 vídeos de los resultados que superan el umbral de confirmación, del mejor al peor. Los
+ * datos salen del nombre accesible real de cada enlace; el mismo vídeo (miniatura y título) cuenta
+ * una vez. Si algún enlace trae duración, solo se usan esos: los de canal o navegación no la traen.
+ */
+export function extractMusicCandidates(elements: Element[], query: string): MusicCandidateMatch[] {
   if (!query || query.trim().length === 0) return []
 
   const musicQuery = extractMusicQuery(plainText(query))
 
-  const candidates = elements
+  const links = elements.filter((el) => {
+    if (el.role !== 'link' || !el.name) return false
+    const name = plainText(el.name)
+    return !NOT_A_VIDEO.test(name) && !CHANNEL_LINK.test(name)
+  })
+  const withDuration = links.filter((el) => HAS_DURATION.test(plainText(el.name)))
+  const pool = withDuration.length > 0 ? withDuration : links
+
+  const seen = new Set<string>()
+  const candidates = pool
     .filter((el) => {
-      if (el.role !== 'link' || !el.name) return false
-      const name = plainText(el.name)
-      if (NOT_A_VIDEO.test(name) || CHANNEL_LINK.test(name)) return false
+      const label = el.name.replace(/\s+/g, ' ').trim()
+      if (seen.has(label)) return false
+      seen.add(label)
       return true
     })
-    .map((el) => ({ name: plainText(el.name!), originalElement: el }))
+    .map((el) => ({ name: plainText(el.name), originalElement: el }))
 
   if (candidates.length === 0) return []
 
-  const topCandidates = findTopCandidates(candidates, musicQuery)
-
-  return topCandidates
-    .filter((c) => c.score >= 0.72) // Solo candidatos con confianza suficiente
-    .map((candidate) => ({
-      name: candidate.element.name,
-      duration: extractDurationSeconds(candidate.element.name),
-      type: detectMusicType(candidate.element.name),
-      originalElement: candidate.element.originalElement as Element,
-      score: candidate.score,
-    }))
+  return findTopCandidates(candidates, musicQuery)
+    .filter((c) => c.score >= 0.72)
+    .map((c) => {
+      const element = c.element.originalElement as Element
+      const label = element.name.replace(/\s+/g, ' ').trim()
+      return {
+        id: candidateId(label),
+        label,
+        ...parseVideoLabel(label),
+        duration: extractDurationSeconds(label),
+        type: detectMusicType(label),
+        element,
+        score: c.score,
+      }
+    })
 }
 
 function summarize(plan: ActionPlan): string {
@@ -621,7 +668,7 @@ async function playMusic(
     return result(`La página de «${device.name}» ya no es de YouTube; no pulsé nada.`, 0)
   }
 
-  // Obtener los top 5 candidatos con scoring
+  // extractMusicCandidates ya descarta lo que no llega a 0.72 (REJECT).
   const candidates = extractMusicCandidates(pageElements(snap.result), query)
   if (candidates.length === 0) {
     return result(
@@ -631,81 +678,150 @@ async function playMusic(
   }
 
   const best = candidates[0]!
-  const confidence = best.score >= 0.88 ? 'auto' : best.score >= 0.72 ? 'confirm' : 'reject'
-
-  // CONFIRM: Devolver múltiples candidatos para que el usuario elija
-  if (confidence === 'confirm') {
-    // Generar queryId y guardar en caché (lo haremos en toolTurnStream)
-    const queryId = randomUUID()
-    const musicCandidates: LumiMusicCandidates = {
-      conversationId: '', // Se agregará en toolTurnStream con conversationId real
-      queryId,
-      query,
-      candidates: candidates.map((c) => ({
-        id: `yt-${randomUUID()}`, // Placeholder; se obtendría del video real
-        title: c.name,
-        artist: '', // Se extraería del parsing de c.name
-        duration: c.duration,
-        thumbnailUrl: null, // Se obtendría en BFF
-        type: c.type,
-      })),
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutos
-    }
-    return {
-      text: `Encontré varios vídeos que podrían ser «${query}». Elige uno en el chat.`,
-      rows: 0,
-      musicCandidates,
-    }
+  if (best.score >= 0.88) {
+    const played = await clickVideo(ctx, device, best.element.ref, best.title || query)
+    return result(played.text, played.status === 'failed' ? 0 : 1)
   }
 
-  // AUTO: Hacer clic automáticamente en el mejor
-  if (confidence === 'auto') {
-    const video = best.originalElement
-    const clicked = await execute(ctx, device, 'browser.click', { ref: video.ref })
-    const name = clean(video.name, 90) ?? query
-    const landed = String(clicked.result?.url ?? '')
-    if (
-      ok(clicked) &&
-      hostOf(landed) === YOUTUBE_HOST &&
-      /\/(?:watch|shorts)\b/.test(new URL(landed).pathname)
-    ) {
-      return result(
-        `Puse «${name}» en YouTube en «${device.name}». YouTube debería empezar a reproducirlo; si el navegador lo bloquea, pulsa reproducir en el equipo.`,
-      )
-    }
-    if (clicked.status === 'unverified' || ok(clicked)) {
-      return result(
-        `Pulsé «${name}» en YouTube en «${device.name}», pero no pude comprobar que se abriera el vídeo. Revísalo en el equipo.`,
-      )
-    }
-    return result(failureText(clicked), 0)
+  // CONFIRM: el usuario elige en el chat; los ref siguen valiendo mientras nadie lea otra página.
+  const selection: LumiMusicSelection = {
+    queryId: randomUUID(),
+    query,
+    deviceId: device.id,
+    deviceName: device.name,
+    expiresAt: new Date(Date.now() + MUSIC_SELECTION_TTL_MS).toISOString(),
+    candidates: candidates.map((c) => ({
+      id: c.id,
+      title: c.title,
+      artist: c.artist,
+      duration: c.duration,
+      thumbnailUrl: null,
+      type: c.type,
+      ref: c.element.ref,
+      label: c.label,
+    })),
   }
-
-  // REJECT: Puntuación muy baja
+  const count = candidates.length
   return result(
-    `Abrí la búsqueda de «${query}» en YouTube en «${device.name}», pero la coincidencia no fue clara. Elige uno en el equipo.`,
+    count === 1
+      ? `Encontré un vídeo que podría ser «${query}» en «${device.name}». Confírmalo en la tarjeta para ponerlo.`
+      : `Encontré ${count} vídeos que podrían ser «${query}» en «${device.name}». Elige uno en la tarjeta para ponerlo.`,
     0,
+    { musicSelection: selection },
   )
 }
 
-/** Respuesta a «sí» / «sí, no vuelvas a preguntar» sobre una acción pendiente. */
+export const MUSIC_SELECTION_TTL_MS = 10 * 60 * 1000
+
+export type MusicPlaybackStatus = 'playing' | 'unverified' | 'failed' | 'offline'
+
+/**
+ * Pulsa un vídeo de los resultados y comprueba con la URL que devuelve el agente que el navegador
+ * quedó en ese vídeo. Solo «playing» afirma que se abrió; nunca que se oiga.
+ */
+async function clickVideo(
+  ctx: LumiToolContext,
+  device: LumiDesktopDevice,
+  ref: string,
+  name: string,
+): Promise<{ status: MusicPlaybackStatus; text: string; outcome: LumiDesktopOutcome }> {
+  const clicked = await execute(ctx, device, 'browser.click', { ref })
+  const shown = clean(name, 90) ?? 'el vídeo'
+  const landed = String(clicked.result?.url ?? '')
+  if (ok(clicked) && hostOf(landed) === YOUTUBE_HOST && /\/(?:watch|shorts)\b/.test(new URL(landed).pathname)) {
+    return {
+      status: 'playing',
+      text: `Puse «${shown}» en YouTube en «${device.name}». YouTube debería empezar a reproducirlo; si el navegador lo bloquea, pulsa reproducir en el equipo.`,
+      outcome: clicked,
+    }
+  }
+  if (clicked.status === 'unverified' || ok(clicked)) {
+    return {
+      status: 'unverified',
+      text: `Pulsé «${shown}» en YouTube en «${device.name}», pero no pude comprobar que se abriera el vídeo. Revísalo en el equipo.`,
+      outcome: clicked,
+    }
+  }
+  const offline = clicked.error?.code === 'DEVICE_OFFLINE'
+  return { status: offline ? 'offline' : 'failed', text: failureText(clicked), outcome: clicked }
+}
+
+const STALE_CODES = new Set(['ELEMENT_STALE', 'ELEMENT_NOT_FOUND'])
+
+/**
+ * Pone el candidato elegido. Primero pulsa el enlace guardado; si la página cambió desde la búsqueda
+ * (ref caducado), vuelve a abrir la misma búsqueda y localiza el vídeo por su nombre exacto. Si ya no
+ * aparece, no pulsa otro: se informa.
+ */
+export async function playMusicSelection(
+  ctx: LumiToolContext,
+  selection: LumiMusicSelection,
+  candidateId: string,
+): Promise<{ status: MusicPlaybackStatus; text: string }> {
+  const candidate = selection.candidates.find((c) => c.id === candidateId)
+  if (!candidate) return { status: 'failed', text: 'Ese vídeo no es de esta búsqueda; no hice nada.' }
+  if (!ctx.deps.desktop) return { status: 'failed', text: NO_PORT_TEXT }
+
+  const devices = await ctx.deps.desktop.devices(ctx.userId)
+  const device = devices.find((d) => d.id === selection.deviceId)
+  if (!device || !device.online) {
+    return { status: 'offline', text: `«${selection.deviceName}» no está conectado; no hice nada.` }
+  }
+  if (device.paused) {
+    return { status: 'offline', text: `La ejecución está en pausa en «${selection.deviceName}»; no hice nada.` }
+  }
+
+  const first = await clickVideo(ctx, device, candidate.ref, candidate.title)
+  if (first.status !== 'failed' || !STALE_CODES.has(first.outcome.error?.code ?? '')) {
+    return { status: first.status, text: first.text }
+  }
+
+  const opened = await execute(ctx, device, 'browser.navigate', { url: youtubeSearchUrl(selection.query) })
+  if (!ok(opened) || hostOf(opened.result?.url) !== YOUTUBE_HOST) {
+    return { status: 'failed', text: ok(opened) ? 'YouTube no se abrió en el equipo; no pulsé nada.' : failureText(opened) }
+  }
+  const snap = await execute(ctx, device, 'browser.snapshot', { interactive: true })
+  if (!ok(snap)) return { status: 'failed', text: failureText(snap) }
+  if (hostOf(snap.result?.url) !== YOUTUBE_HOST) {
+    return { status: 'failed', text: `La página de «${device.name}» ya no es de YouTube; no pulsé nada.` }
+  }
+  const again = pageElements(snap.result).find(
+    (el) => el.role === 'link' && el.name.replace(/\s+/g, ' ').trim() === candidate.label,
+  )
+  if (!again) {
+    return {
+      status: 'failed',
+      text: `«${clean(candidate.title, 90) ?? 'Ese vídeo'}» ya no aparece en la búsqueda de YouTube; no pulsé otro. Vuelve a pedir la canción.`,
+    }
+  }
+  const second = await clickVideo(ctx, device, again.ref, candidate.title)
+  return { status: second.status, text: second.text }
+}
+
+/**
+ * Respuesta a «sí» / «sí, no vuelvas a preguntar» sobre una acción pendiente. Devuelve el resultado
+ * completo de la acción: además del texto puede traer datos para el chat (candidatos de música).
+ */
 export async function confirmDesktopAction(
   ctx: LumiToolContext,
   payload: Record<string, string>,
   remember: boolean,
-): Promise<string> {
-  if (!ctx.deps.desktop) return NO_PORT_TEXT
+): Promise<LumiToolResult> {
+  if (!ctx.deps.desktop) return result(NO_PORT_TEXT, 0)
   let plan: ActionPlan
   try {
     plan = JSON.parse(payload.plan ?? '') as ActionPlan
   } catch {
-    return 'No encontré la acción pendiente; vuelve a pedirla.'
+    return result('No encontré la acción pendiente; vuelve a pedirla.', 0)
   }
   const done = await perform(ctx, plan)
-  if (!remember) return done.text
+  if (!remember) return done
   for (const approval of approvalsOf(plan)) await ctx.deps.desktop.approve(ctx.userId, approval)
   const where = plan.kind.endsWith('_app') ? plan.app : plan.target
-  return `${done.text}\nNo volveré a pedirte confirmación para ${KIND_PHRASE[plan.kind]} ${where} en «${plan.deviceName}». Puedes retirarlo en Lumia Admin → Dispositivos.`
+  return {
+    ...done,
+    text: `${done.text}\nNo volveré a pedirte confirmación para ${KIND_PHRASE[plan.kind]} ${where} en «${plan.deviceName}». Puedes retirarlo en Lumia Admin → Dispositivos.`,
+  }
 }
 
 /** «sí, no vuelvas a preguntar», «sí, no volver a mostrar», «sí, no preguntes más»… */
@@ -722,6 +838,15 @@ export async function handleDesktopReply(
   message: string,
   confirmationId?: string,
 ): Promise<string | null> {
+  return (await resolveDesktopReply(ctx, message, confirmationId))?.text ?? null
+}
+
+/** Igual que `handleDesktopReply`, con el resultado completo (los candidatos de música incluidos). */
+export async function resolveDesktopReply(
+  ctx: LumiToolContext,
+  message: string,
+  confirmationId?: string,
+): Promise<LumiToolResult | null> {
   const port = ctx.deps.desktop
   if (!port) return null
   const normalized = normalizeText(message)
@@ -734,9 +859,9 @@ export async function handleDesktopReply(
   if (!confirmed && !rejected) return null
   const payload = await port.takePending(ctx.userId, confirmationId)
   // Botón de una tarjeta que ya no está vigente (caducó, ya se respondió o hay otra más reciente).
-  if (!payload && confirmationId) return 'Esa confirmación ya no está vigente; no hice nada.'
+  if (!payload && confirmationId) return result('Esa confirmación ya no está vigente; no hice nada.', 0)
   if (!payload) return null
-  return confirmed ? confirmDesktopAction(ctx, payload, remember) : rejectDesktopAction(payload)
+  return confirmed ? confirmDesktopAction(ctx, payload, remember) : result(rejectDesktopAction(payload), 0)
 }
 
 export function rejectDesktopAction(payload: Record<string, string>): string {

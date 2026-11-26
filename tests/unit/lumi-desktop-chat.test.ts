@@ -19,12 +19,17 @@ import {
   type ToolMatch,
 } from '../../src/modules/lumi/tools/catalog.js'
 import {
+  extractMusicCandidates,
   handleDesktopReply,
   normalizeUrl,
+  parseVideoLabel,
   pickVideoLink,
+  playMusicSelection,
+  resolveDesktopReply,
   resolveElement,
   youtubeSearchUrl,
 } from '../../src/modules/lumi/tools/desktop.tools.js'
+import { MusicCandidatesStore } from '../../src/modules/lumi/music/candidates-store.js'
 import type {
   LumiDesktopDevice,
   LumiDesktopOutcome,
@@ -183,6 +188,8 @@ interface FakeState {
   executed: Array<{ operation: string; args: Record<string, unknown> }>
   /** URL en la que queda el navegador tras un click (si se informa). */
   clickUrl?: string
+  /** El próximo click falla con ELEMENT_STALE (otra lectura de la página invalidó los ref). */
+  staleOnce?: boolean
 }
 
 function fakePort(state: FakeState) {
@@ -206,6 +213,10 @@ function fakePort(state: FakeState) {
             error: null,
           }
         case 'browser.click':
+          if (state.staleOnce) {
+            state.staleOnce = false
+            return { status: 'failed', result: null, error: { code: 'ELEMENT_STALE', message: 'stale' } }
+          }
           return {
             status: 'completed',
             result: { url_changed: true, ...(state.clickUrl ? { url: state.clickUrl } : {}) },
@@ -740,6 +751,19 @@ describe('equipo en Lumi Chat: elección del vídeo con nombres reales de YouTub
     expect(picked?.name).not.toBe('Linkin Park')
   })
 
+  it('separa título y canal solo cuando el nombre los trae; nunca inventa el canal', () => {
+    expect(
+      parseVideoLabel('Numb (Official Music Video) [4K UPGRADE] – Linkin Park 3 minutos y 8 segundos'),
+    ).toEqual({ title: 'Numb (Official Music Video) [4K UPGRADE] – Linkin Park', artist: '' })
+    expect(parseVideoLabel('Numb (Official Music Video) - Linkin Park 3 minutes, 8 seconds')).toEqual({
+      title: 'Numb (Official Music Video) - Linkin Park',
+      artist: '',
+    })
+    expect(
+      parseVideoLabel('De música ligera de Soda Stereo 1,2 M de visualizaciones hace 9 años 3 minutos'),
+    ).toEqual({ title: 'De música ligera', artist: 'Soda Stereo' })
+  })
+
   it('acepta los nombres en inglés', () => {
     const english = [
       { ref: 'e1', role: 'link', name: 'Go to channel Linkin Park' },
@@ -751,5 +775,189 @@ describe('equipo en Lumi Chat: elección del vídeo con nombres reales de YouTub
       },
     ]
     expect(pickVideoLink(english, 'Linkin Park')?.ref).toBe('e3')
+  })
+})
+
+/* ──────────────── Coincidencia dudosa: el usuario elige el vídeo en el chat ──────────────── */
+
+const PARAMORE_PAGE = {
+  url: 'https://www.youtube.com/results?search_query=conspiracy%20de%20paramore',
+  refs: Object.fromEntries(
+    [
+      'Página principal de YouTube',
+      'Ir al canal Paramore',
+      'Paramore',
+      'Paramore - Conspiracy (Official Audio) 3 minutos y 43 segundos',
+      'Paramore - Conspiracy (Live at Reading) 4 minutos y 2 segundos',
+      'Conspiracy - Paramore (Lyrics) 3 minutos y 44 segundos',
+      'Mix: Paramore - Conspiracy (Official Audio)',
+    ].map((name, i) => [`e${i + 1}`, { role: 'link', name }]),
+  ),
+}
+
+describe('equipo en Lumi Chat: elegir el vídeo en el chat', () => {
+  async function confirmedSearch(overrides: Partial<FakeState> = {}) {
+    const env = setup({
+      page: PARAMORE_PAGE,
+      clickUrl: 'https://www.youtube.com/watch?v=abc123',
+      ...overrides,
+    })
+    const card = await env.run('device.play_music', { query: 'Conspiracy de Paramore' })
+    const done = await resolveDesktopReply(env.ctx, 'Sí', card.confirmation!.id)
+    return { ...env, done: done! }
+  }
+
+  it('el «sí» devuelve los candidatos reales (no solo el texto) y no pulsa nada', async () => {
+    const { done, state } = await confirmedSearch()
+    expect(state.executed.map((e) => e.operation)).toEqual(['browser.navigate', 'browser.snapshot'])
+    const selection = done.musicSelection!
+    expect(selection.deviceId).toBe('dev_1')
+    expect(selection.candidates.map((c) => c.title)).toEqual([
+      'Conspiracy - Paramore (Lyrics)',
+      'Paramore - Conspiracy (Official Audio)',
+      'Paramore - Conspiracy (Live at Reading)',
+    ])
+    expect(selection.candidates.map((c) => c.ref)).toEqual(['e6', 'e4', 'e5'])
+    expect(selection.candidates.every((c) => /^[0-9a-f]{16}$/.test(c.id))).toBe(true)
+    expect(selection.candidates[1]).toMatchObject({ duration: 223, type: 'official', artist: '' })
+    expect(done.text).toBe(
+      'Encontré 3 vídeos que podrían ser «Conspiracy de Paramore» en «PC de Diego». Elige uno en la tarjeta para ponerlo.',
+    )
+  })
+
+  it('tolera errores de escritura razonables y sigue sin elegir otra canción', () => {
+    const elements = Object.entries(PARAMORE_PAGE.refs).map(([ref, v]) => ({ ref, ...v }))
+    for (const query of [
+      'conspirancy de paramore',
+      'conspirasy de paramore',
+      'conspiraci de paramore',
+      'Conspiracy de Paramore',
+    ]) {
+      const found = extractMusicCandidates(elements, query)
+      expect(found.length, query).toBeGreaterThan(0)
+      expect(found.every((c) => /conspiracy/i.test(c.title)), query).toBe(true)
+    }
+    expect(extractMusicCandidates(elements, 'misery business de paramore')).toEqual([])
+    expect(extractMusicCandidates(elements, 'yellow de coldplay')).toEqual([])
+  })
+
+  it('las palabras cortas no se aproximan («numb» no es «dumb»)', () => {
+    const elements = [{ ref: 'e1', role: 'link', name: 'Dumb - Nirvana 2 minutos y 32 segundos' }]
+    expect(extractMusicCandidates(elements, 'numb de linkin park')).toEqual([])
+  })
+
+  it('el mismo resultado tiene siempre el mismo id', async () => {
+    const a = (await confirmedSearch()).done.musicSelection!
+    const b = (await confirmedSearch()).done.musicSelection!
+    expect(a.queryId).not.toBe(b.queryId)
+    expect(a.candidates.map((c) => c.id)).toEqual(b.candidates.map((c) => c.id))
+  })
+
+  it('el texto compatible (handleDesktopReply) sigue siendo solo texto', async () => {
+    const env = setup({ page: PARAMORE_PAGE })
+    const card = await env.run('device.play_music', { query: 'Conspiracy de Paramore' })
+    expect(await handleDesktopReply(env.ctx, 'Sí', card.confirmation!.id)).toMatch(/^Encontré 3 vídeos/)
+  })
+
+  it('al elegir, pulsa ese vídeo y solo afirma lo que comprobó el agente', async () => {
+    const { done, ctx, state } = await confirmedSearch()
+    const chosen = done.musicSelection!.candidates[1]!
+    state.executed.length = 0
+    const played = await playMusicSelection(ctx, done.musicSelection!, chosen.id)
+    expect(state.executed).toEqual([{ operation: 'browser.click', args: { ref: 'e4' } }])
+    expect(played.status).toBe('playing')
+    expect(played.text).toMatch(/^Puse «Paramore - Conspiracy \(Official Audio\)» en YouTube en «PC de Diego»/)
+  })
+
+  it('sin URL de vídeo tras el clic no dice que se puso', async () => {
+    const { done, ctx, state } = await confirmedSearch({ clickUrl: undefined })
+    delete state.clickUrl
+    const played = await playMusicSelection(ctx, done.musicSelection!, done.musicSelection!.candidates[0]!.id)
+    expect(played.status).toBe('unverified')
+    expect(played.text).toMatch(/no pude comprobar que se abriera el vídeo/)
+  })
+
+  it('si la página cambió (ref caducado), repite la búsqueda y pulsa el mismo vídeo por su nombre', async () => {
+    const { done, ctx, state } = await confirmedSearch()
+    const chosen = done.musicSelection!.candidates[2]!
+    state.executed.length = 0
+    state.staleOnce = true
+    const played = await playMusicSelection(ctx, done.musicSelection!, chosen.id)
+    expect(state.executed.map((e) => e.operation)).toEqual([
+      'browser.click',
+      'browser.navigate',
+      'browser.snapshot',
+      'browser.click',
+    ])
+    expect(state.executed[1]?.args).toEqual({ url: youtubeSearchUrl('Conspiracy de Paramore') })
+    expect(state.executed[3]?.args).toEqual({ ref: 'e5' })
+    expect(played.status).toBe('playing')
+  })
+
+  it('si el vídeo ya no aparece tras repetir la búsqueda, no pulsa otro', async () => {
+    const { done, ctx, state } = await confirmedSearch()
+    state.staleOnce = true
+    state.page = { url: PARAMORE_PAGE.url, refs: { e1: { role: 'link', name: 'Otra cosa 3 minutos' } } }
+    state.executed.length = 0
+    const played = await playMusicSelection(ctx, done.musicSelection!, done.musicSelection!.candidates[0]!.id)
+    expect(played.status).toBe('failed')
+    expect(played.text).toMatch(/ya no aparece en la búsqueda de YouTube; no pulsé otro/)
+    expect(state.executed.filter((e) => e.operation === 'browser.click')).toHaveLength(1)
+  })
+
+  it('con el equipo desconectado no ejecuta nada', async () => {
+    const { done, ctx, state } = await confirmedSearch()
+    state.devices = [{ ...state.devices[0]!, online: false }]
+    state.executed.length = 0
+    const played = await playMusicSelection(ctx, done.musicSelection!, done.musicSelection!.candidates[0]!.id)
+    expect(played).toEqual({ status: 'offline', text: '«PC de Diego» no está conectado; no hice nada.' })
+    expect(state.executed).toHaveLength(0)
+  })
+
+  it('un candidato que no es de la búsqueda no se pulsa', async () => {
+    const { done, ctx, state } = await confirmedSearch()
+    state.executed.length = 0
+    const played = await playMusicSelection(ctx, done.musicSelection!, '0123456789abcdef')
+    expect(played.status).toBe('failed')
+    expect(state.executed).toHaveLength(0)
+  })
+
+  it('sin coincidencias no hay tarjeta ni «encontré varios»', async () => {
+    const env = setup({ page: PARAMORE_PAGE })
+    const card = await env.run('device.play_music', { query: 'Yellow Coldplay' })
+    const done = await resolveDesktopReply(env.ctx, 'Sí', card.confirmation!.id)
+    expect(done!.musicSelection).toBeUndefined()
+    expect(done!.text).toMatch(/no encontré un vídeo que coincida/)
+  })
+})
+
+describe('búsquedas de música pendientes (sin Redis)', () => {
+  const selection = (expiresAt: string) => ({
+    queryId: '7f1c4b0e-8a0e-4c62-9a59-3d7f0f2b1a10',
+    query: 'Conspiracy de Paramore',
+    deviceId: 'dev_1',
+    deviceName: 'PC de Diego',
+    expiresAt,
+    candidates: [],
+  })
+
+  it('solo el dueño la recupera y deja de valer al caducar', async () => {
+    const store = new MusicCandidatesStore(null)
+    const live = selection(new Date(Date.now() + 60_000).toISOString())
+    await store.store('u1', live)
+    expect(await store.retrieve('u1', live.queryId)).toEqual(live)
+    expect(await store.retrieve('u2', live.queryId)).toBeNull()
+
+    const old = { ...selection(new Date(Date.now() - 1).toISOString()), queryId: '0b0f0c8e-1d2a-4f3b-8c4d-5e6f7a8b9c0d' }
+    await store.store('u1', old)
+    expect(await store.retrieve('u1', old.queryId)).toBeNull()
+  })
+
+  it('no permite dos reproducciones a la vez de la misma búsqueda; tras liberar, sí', async () => {
+    const store = new MusicCandidatesStore(null)
+    expect(await store.lock('q')).toBe(true)
+    expect(await store.lock('q')).toBe(false)
+    await store.unlock('q')
+    expect(await store.lock('q')).toBe(true)
   })
 })

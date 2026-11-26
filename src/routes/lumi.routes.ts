@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { AppContext } from '../app.context.js'
-import { handleDesktopReply } from '../modules/lumi/tools/desktop.tools.js'
+import { playMusicSelection, resolveDesktopReply } from '../modules/lumi/tools/desktop.tools.js'
 import { AppError } from '../common/errors/app.error.js'
 import { PERMISSION_REGISTRY, hasPermission } from '../common/permissions/registry.js'
 import { adminGuard } from '../modules/admin/middleware/admin-guard.js'
@@ -15,7 +15,7 @@ import { MusicCandidatesStore } from '../modules/lumi/music/candidates-store.js'
 import { type LumiMode, resolveLumiModes } from '../modules/lumi/services/lumi-intent-router.js'
 import { DEFAULT_AUTOMATION_TIMEZONE } from '../modules/lumi/automation/domain/schedule.js'
 import { capabilitiesFor, runTool, type ToolMatch } from '../modules/lumi/tools/catalog.js'
-import type { LumiEntityRef } from '../modules/lumi/tools/tool.types.js'
+import type { LumiEntityRef, LumiMusicSelection } from '../modules/lumi/tools/tool.types.js'
 import type { LumiReference } from '../modules/lumi/references/lumi-references.js'
 import { missingCapabilityReply } from '../modules/lumi/selector/lumi-selector.js'
 import { planLumiTurn, type TurnPlan } from '../modules/lumi/turn/turn-plan.js'
@@ -46,6 +46,8 @@ import {
   lumiChatBodySchema,
   lumiConversationParamsSchema,
   lumiListQuerySchema,
+  lumiMusicSelectionBodySchema,
+  lumiMusicSelectionParamsSchema,
   lumiProductParamsSchema,
   lumiUsageQuerySchema,
 } from '../modules/lumi/schemas/lumi.schema.js'
@@ -76,11 +78,21 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       ? (userId: string, payload: LumiSelectRequest) => client.select(userId, payload, env.LUMI_SELECTOR_TIMEOUT_MS)
       : null
 
-  /**
-   * Almacenamiento de candidatos de música con Redis y fallback en memoria.
-   * TTL: 10 minutos.
-   */
-  const musicCandidatesStore = new MusicCandidatesStore(ctx.redis.getClient() ?? null, 600)
+  /** Búsquedas de música esperando la elección del usuario (Redis, o memoria sin Redis). */
+  const musicCandidatesStore = new MusicCandidatesStore(ctx.redis.getClient() ?? null)
+
+  /** Evento del chat con los candidatos: sin `ref` ni `label`, que solo usa el Server. */
+  const musicCandidatesEvent = (
+    selection: LumiMusicSelection,
+    conversationId: string,
+  ): Extract<LumiStreamEvent, { type: 'music_candidates' }> => ({
+    type: 'music_candidates',
+    conversationId,
+    queryId: selection.queryId,
+    query: selection.query,
+    candidates: selection.candidates.map(({ ref: _ref, label: _label, ...candidate }) => candidate),
+    expiresAt: selection.expiresAt,
+  })
 
   const requireClient = (): LumiAssistantClient => {
     if (!client)
@@ -137,9 +149,12 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     request: FastifyRequest,
     message: string,
     confirmationId?: string,
-  ): Promise<string | null> =>
-    (await handleDesktopReply(toolContext(request), message, confirmationId)) ??
-    (await ctx.services.lumiCommands.handle(userIdOf(request), message))
+  ): Promise<{ text: string; musicSelection?: LumiMusicSelection } | null> => {
+    const desktop = await resolveDesktopReply(toolContext(request), message, confirmationId)
+    if (desktop) return desktop
+    const text = await ctx.services.lumiCommands.handle(userIdOf(request), message)
+    return text === null ? null : { text }
+  }
 
   const executeTool = (request: FastifyRequest, match: ToolMatch) =>
     runTool(match, {
@@ -171,30 +186,13 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     const texts: string[] = []
     const references: LumiReference[] = []
     let entity: LumiEntityRef | undefined
-    let musicCandidatesEmitted = false
+    let musicSelection: LumiMusicSelection | undefined
     for (const match of matches) {
       const result = await executeTool(request, match)
       yield toolEvent(match, result.rows)
-      // Música: candidatos para que el usuario elija (CONFIRM level).
-      if (result.musicCandidates) {
-        const tempConvId = conversationId ?? randomUUID()
-        // Guardar en caché para recuperar cuando el usuario seleccione
-        await musicCandidatesStore.store(
-          result.musicCandidates.queryId,
-          result.musicCandidates.query,
-          result.musicCandidates.candidates,
-        )
-        // Crear evento SSE con conversationId
-        const musicCandidatesEvent: Extract<LumiStreamEvent, { type: 'music_candidates' }> = {
-          type: 'music_candidates',
-          conversationId: tempConvId,
-          queryId: result.musicCandidates.queryId,
-          query: result.musicCandidates.query,
-          candidates: result.musicCandidates.candidates,
-          expiresAt: result.musicCandidates.expiresAt.toISOString(),
-        }
-        yield musicCandidatesEvent
-        musicCandidatesEmitted = true
+      if (result.musicSelection) {
+        await musicCandidatesStore.store(userIdOf(request), result.musicSelection)
+        musicSelection = result.musicSelection
       }
       // Música: el estado real del reproductor, para que el chat muestre el reproductor.
       if (result.music) yield { type: 'music', state: result.music }
@@ -213,12 +211,10 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
         .set(userIdOf(request), saved.conversationId, entity, new Date())
         .catch((err) => request.log.warn({ err }, 'Lumi active entity not saved'))
     }
-    // Si se emitió event de candidatos, NO emitir token/referencias (el turno muestra candidatos)
-    if (!musicCandidatesEmitted) {
-      yield { type: 'token', text }
-      if (references.length) yield { type: 'references', references }
-    }
-    // Siempre emitir done para cerrar el stream correctamente
+    // Los candidatos van con el id real de la conversación, ya guardada.
+    if (musicSelection) yield musicCandidatesEvent(musicSelection, saved.conversationId)
+    yield { type: 'token', text }
+    if (references.length) yield { type: 'references', references }
     yield { type: 'done', conversationId: saved.conversationId }
   }
 
@@ -459,6 +455,40 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     }
   }
 
+  /**
+   * Vídeo elegido en la tarjeta de candidatos. Responde cuando el agente informa el resultado: solo
+   * «playing» afirma que el navegador quedó en el vídeo. Una búsqueda caducada, de otro usuario o
+   * inexistente es «expired»; con otra reproducción de la misma búsqueda en curso, «busy».
+   */
+  api.post(
+    '/admin/lumi/music/selection/:queryId',
+    { preHandler: g(PERMISSION_REGISTRY.LUMI_USE) },
+    async (request) => {
+      const params = lumiMusicSelectionParamsSchema.safeParse(request.params)
+      if (!params.success) throw AppError.badRequest('Invalid input', params.error.flatten())
+      const body = lumiMusicSelectionBodySchema.safeParse(request.body)
+      if (!body.success) throw AppError.badRequest('Invalid input', body.error.flatten())
+
+      const { queryId } = params.data
+      const selection = await musicCandidatesStore.retrieve(userIdOf(request), queryId)
+      if (!selection) {
+        return { status: 'expired', message: 'Esta búsqueda ya caducó. Vuelve a pedir la canción.' }
+      }
+      if (!selection.candidates.some((c) => c.id === body.data.candidateId)) {
+        return { status: 'failed', message: 'Ese vídeo no es de esta búsqueda; no hice nada.' }
+      }
+      if (!(await musicCandidatesStore.lock(queryId))) {
+        return { status: 'busy', message: 'Ya estoy poniendo un vídeo de esta búsqueda; espera a que termine.' }
+      }
+      try {
+        const played = await playMusicSelection(toolContext(request), selection, body.data.candidateId)
+        return { status: played.status, message: played.text }
+      } finally {
+        await musicCandidatesStore.unlock(queryId)
+      }
+    },
+  )
+
   api.post('/admin/lumi/chat', { preHandler: g(PERMISSION_REGISTRY.LUMI_USE) }, async (request) => {
     const parsed = lumiChatBodySchema.safeParse(request.body)
     if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
@@ -466,10 +496,11 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     const automated = await commandReply(request, parsed.data.message, parsed.data.confirmationId)
     if (automated !== null) {
       recordTurn(request, { stage: 'automation', interpretation: null })
+      if (automated.musicSelection) await musicCandidatesStore.store(userIdOf(request), automated.musicSelection)
       return {
-        conversationId: await saveAutomatedTurn(request, parsed.data.message, automated, parsed.data.conversationId),
+        conversationId: await saveAutomatedTurn(request, parsed.data.message, automated.text, parsed.data.conversationId),
         model: 'lumi-automation',
-        response: automated,
+        response: automated.text,
       }
     }
     const learnedReply = await learningTurn(request, parsed.data.message)
@@ -548,7 +579,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
           ? await planTurn(request, parsed.data.message, parsed.data.conversationId, parsed.data.context)
           : null
       // Respuesta sin modelo: recordatorio, corrección aprendida o respuesta fija del selector.
-      const fixed = automated ?? learnedReply ?? (plan?.kind === 'reply' ? plan.text : null)
+      const fixed = automated?.text ?? learnedReply ?? (plan?.kind === 'reply' ? plan.text : null)
       if (automated !== null) recordTurn(request, { stage: 'automation', interpretation: null })
       else if (learnedReply !== null) recordTurn(request, { stage: 'correction', interpretation: null })
       if (fixed !== null) {
@@ -565,6 +596,13 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
           Connection: 'keep-alive',
           'X-Accel-Buffering': 'no',
         })
+        // «Sí» a una búsqueda de música: los candidatos van antes del texto, en el mismo mensaje.
+        const selection = automated?.musicSelection
+        if (selection) {
+          await musicCandidatesStore.store(userIdOf(request), selection)
+          const { type, ...payload } = musicCandidatesEvent(selection, conversationId)
+          reply.raw.write(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`)
+        }
         reply.raw.write(`event: token\ndata: ${JSON.stringify({ text: fixed })}\n\n`)
         reply.raw.write(
           `event: done\ndata: ${JSON.stringify({ conversationId })}\n\n`,

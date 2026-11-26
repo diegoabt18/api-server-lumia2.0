@@ -1,120 +1,86 @@
 import type { Redis } from 'ioredis'
+import type { LumiMusicSelection } from '../tools/tool.types.js'
 
-export interface MusicCandidate {
-  id: string // YouTube video ID
-  title: string
-  artist: string
-  duration: number // seconds
-  thumbnailUrl: string | null
-  type: 'song' | 'live' | 'cover' | 'remix' | 'official' | 'unknown'
+interface StoredSelection {
+  userId: string
+  selection: LumiMusicSelection
 }
 
-export interface CandidatesEntry {
-  queryId: string
-  query: string
-  candidates: MusicCandidate[]
-  expiresAt: Date
-}
+const KEY = (queryId: string) => `lumi:music:candidates:${queryId}`
+const LOCK_KEY = (queryId: string) => `lumi:music:selection-lock:${queryId}`
+/** Tope de una reproducción en curso; el agente responde (o caduca) antes. */
+const LOCK_SECONDS = 90
 
 /**
- * Almacena candidatos de música con caché Redis y fallback en memoria.
- * TTL configurable (default 10 minutos).
+ * Búsquedas de música que esperan la elección del usuario. Redis con caducidad propia; sin Redis
+ * (o si falla), memoria del proceso. Cada búsqueda pertenece a un usuario y solo él la usa.
  */
 export class MusicCandidatesStore {
-  private readonly redis: Redis | null
-  private readonly memoryCache = new Map<string, CandidatesEntry>()
-  private readonly ttlSeconds: number
+  private readonly memory = new Map<string, StoredSelection>()
+  private readonly memoryLocks = new Map<string, number>()
 
-  constructor(redis: Redis | null, ttlSeconds = 600) {
-    this.redis = redis
-    this.ttlSeconds = ttlSeconds
-  }
+  constructor(private readonly redis: Redis | null) {}
 
-  /**
-   * Almacena candidatos con un queryId (UUID).
-   * Retorna el queryId y fecha de expiración.
-   */
-  async store(
-    queryId: string,
-    query: string,
-    candidates: MusicCandidate[],
-  ): Promise<{ queryId: string; expiresAt: Date }> {
-    const expiresAt = new Date(Date.now() + this.ttlSeconds * 1000)
-    const entry: CandidatesEntry = { queryId, query, candidates, expiresAt }
-
+  async store(userId: string, selection: LumiMusicSelection): Promise<void> {
+    const seconds = Math.max(1, Math.ceil((Date.parse(selection.expiresAt) - Date.now()) / 1000))
+    const entry: StoredSelection = { userId, selection }
     if (this.redis) {
       try {
-        await this.redis.setex(
-          `lumi:music:candidates:${queryId}`,
-          this.ttlSeconds,
-          JSON.stringify(entry),
-        )
-      } catch (err) {
-        // Fallback a memoria si Redis falla
-        console.warn('Redis storage failed, using memory fallback', { err })
-        this.memoryCache.set(queryId, entry)
+        await this.redis.set(KEY(selection.queryId), JSON.stringify(entry), 'EX', seconds)
+        return
+      } catch {
+        // Sin Redis la búsqueda sigue en memoria de este proceso.
       }
-    } else {
-      this.memoryCache.set(queryId, entry)
     }
-
-    return { queryId, expiresAt }
+    this.prune()
+    this.memory.set(selection.queryId, entry)
   }
 
-  /**
-   * Recupera candidatos por queryId.
-   * Retorna null si no existen o si han expirado.
-   */
-  async retrieve(queryId: string): Promise<CandidatesEntry | null> {
+  /** La búsqueda vigente de ese usuario, o null (no existe, caducó o es de otro usuario). */
+  async retrieve(userId: string, queryId: string): Promise<LumiMusicSelection | null> {
+    let entry: StoredSelection | null = this.memory.get(queryId) ?? null
+    if (!entry && this.redis) {
+      try {
+        const raw = await this.redis.get(KEY(queryId))
+        entry = raw ? (JSON.parse(raw) as StoredSelection) : null
+      } catch {
+        entry = null
+      }
+    }
+    if (!entry || entry.userId !== userId) return null
+    if (Date.parse(entry.selection.expiresAt) <= Date.now()) return null
+    return entry.selection
+  }
+
+  /** Reserva la búsqueda para una sola reproducción a la vez. false si ya hay una en curso. */
+  async lock(queryId: string): Promise<boolean> {
     if (this.redis) {
       try {
-        const cached = await this.redis.getex(
-          `lumi:music:candidates:${queryId}`,
-          'EX',
-          this.ttlSeconds,
-        )
-        if (cached) {
-          return JSON.parse(cached) as CandidatesEntry
-        }
-      } catch (err) {
-        console.warn('Redis retrieval failed', { err })
+        return (await this.redis.set(LOCK_KEY(queryId), '1', 'EX', LOCK_SECONDS, 'NX')) === 'OK'
+      } catch {
+        // Cae al bloqueo en memoria.
       }
     }
-
-    // Fallback a memoria
-    const entry = this.memoryCache.get(queryId)
-    if (entry && entry.expiresAt > new Date()) {
-      return entry
-    }
-
-    // Limpiar entrada expirada
-    this.memoryCache.delete(queryId)
-    return null
+    const until = this.memoryLocks.get(queryId)
+    if (until && until > Date.now()) return false
+    this.memoryLocks.set(queryId, Date.now() + LOCK_SECONDS * 1000)
+    return true
   }
 
-  /**
-   * Elimina candidatos (ej. después de seleccionar uno).
-   */
-  async delete(queryId: string): Promise<void> {
-    if (this.redis) {
-      try {
-        await this.redis.del(`lumi:music:candidates:${queryId}`)
-      } catch (err) {
-        console.warn('Redis delete failed', { err })
-      }
+  async unlock(queryId: string): Promise<void> {
+    this.memoryLocks.delete(queryId)
+    if (!this.redis) return
+    try {
+      await this.redis.del(LOCK_KEY(queryId))
+    } catch {
+      // El bloqueo caduca solo.
     }
-    this.memoryCache.delete(queryId)
   }
 
-  /**
-   * Limpia entradas expiradas de memoria (opera localmente).
-   */
-  cleanupExpired(): void {
-    const now = new Date()
-    for (const [queryId, entry] of this.memoryCache.entries()) {
-      if (entry.expiresAt <= now) {
-        this.memoryCache.delete(queryId)
-      }
+  private prune(): void {
+    const now = Date.now()
+    for (const [queryId, entry] of this.memory) {
+      if (Date.parse(entry.selection.expiresAt) <= now) this.memory.delete(queryId)
     }
   }
 }
