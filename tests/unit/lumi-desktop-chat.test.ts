@@ -649,23 +649,17 @@ describe('equipo en Lumi Chat: poner música en YouTube (/music)', () => {
     expect(state.executed).toHaveLength(0)
   })
 
-  it('al confirmar: busca, pulsa el vídeo que coincide (no el anuncio) y comprueba que quedó abierto', async () => {
-    const { state, ctx, run } = setup({
-      page: RESULTS_PAGE,
-      clickUrl: 'https://www.youtube.com/watch?v=kXYiU_JCYtU',
-    })
+  // Requisito (2026-11-26): con /music la persona elige siempre en la tarjeta; nada suena solo.
+  it('al confirmar: busca y ofrece en la tarjeta los vídeos que coinciden (no el anuncio), sin pulsar nada', async () => {
+    const { state, ctx, run } = setup({ page: RESULTS_PAGE })
     const card = await run('device.play_music', { query: 'Numb Linkin Park' })
-    const done = await handleDesktopReply(ctx, 'Sí', card.confirmation!.id)
-    expect(state.executed.map((e) => e.operation)).toEqual([
-      'browser.navigate',
-      'browser.snapshot',
-      'browser.click',
-    ])
+    const done = await resolveDesktopReply(ctx, 'Sí', card.confirmation!.id)
+    expect(state.executed.map((e) => e.operation)).toEqual(['browser.navigate', 'browser.snapshot'])
     expect(state.executed[0]?.args).toEqual({ url: youtubeSearchUrl('Numb Linkin Park') })
-    expect(state.executed[2]?.args).toEqual({ ref: 'e4' })
-    expect(done).toMatch(/^Puse «Numb \(Official Music Video\)/)
-    expect(done).toMatch(/en «PC de Diego»/)
-    expect(done).not.toMatch(/suena|sonando/)
+    const refs = done!.musicSelection!.candidates.map((c) => c.ref)
+    expect(refs[0]).toBe('e4')
+    expect(refs).not.toContain('e3')
+    expect(done!.text).toMatch(/en «PC de Diego»\. Elige uno en la tarjeta/)
   })
 
   it('«sí, no vuelvas a preguntar» guarda abrir y pulsar en YouTube y la próxima vez no pregunta', async () => {
@@ -683,8 +677,8 @@ describe('equipo en Lumi Chat: poner música en YouTube (/music)', () => {
     state.executed.length = 0
     const again = await run('device.play_music', { query: 'Numb Linkin Park' })
     expect(again.confirmation).toBeUndefined()
-    expect(again.text).toMatch(/^Puse «Numb/)
-    expect(state.executed).toHaveLength(3)
+    expect(again.musicSelection?.candidates[0]?.ref).toBe('e4')
+    expect(state.executed.map((e) => e.operation)).toEqual(['browser.navigate', 'browser.snapshot'])
   })
 
   it('si ningún resultado coincide, abre la búsqueda pero no pulsa nada', async () => {
@@ -695,11 +689,12 @@ describe('equipo en Lumi Chat: poner música en YouTube (/music)', () => {
     expect(state.executed.map((e) => e.operation)).toEqual(['browser.navigate', 'browser.snapshot'])
   })
 
-  it('no afirma que se abrió el vídeo si el agente no lo comprueba', async () => {
+  it('buscar no afirma que suene nada: solo ofrece la tarjeta', async () => {
     const { ctx, run } = setup({ page: RESULTS_PAGE })
     const card = await run('device.play_music', { query: 'Numb Linkin Park' })
     const done = await handleDesktopReply(ctx, 'Sí', card.confirmation!.id)
-    expect(done).toMatch(/no pude comprobar que se abriera el vídeo/)
+    expect(done).toMatch(/Elige uno en la tarjeta/)
+    expect(done).not.toMatch(/Puse|suena|sonando|reproduciendo/)
   })
 
   it('no pulsa nada si YouTube redirige a otra página (p. ej. aviso de cookies)', async () => {
@@ -827,14 +822,15 @@ describe('equipo en Lumi Chat: elegir el vídeo en el chat', () => {
     expect(state.executed.map((e) => e.operation)).toEqual(['browser.navigate', 'browser.snapshot'])
     const selection = done.musicSelection!
     expect(selection.deviceId).toBe('dev_1')
+    // Mismo vídeo sin palabras de más primero; a igualdad, el orden de YouTube (requisito 2026-11-26).
     expect(selection.candidates.map((c) => c.title)).toEqual([
-      'Conspiracy - Paramore (Lyrics)',
       'Paramore - Conspiracy (Official Audio)',
+      'Conspiracy - Paramore (Lyrics)',
       'Paramore - Conspiracy (Live at Reading)',
     ])
-    expect(selection.candidates.map((c) => c.ref)).toEqual(['e6', 'e4', 'e5'])
+    expect(selection.candidates.map((c) => c.ref)).toEqual(['e4', 'e6', 'e5'])
     expect(selection.candidates.every((c) => /^[0-9a-f]{16}$/.test(c.id))).toBe(true)
-    expect(selection.candidates[1]).toMatchObject({ duration: 223, type: 'official', artist: '' })
+    expect(selection.candidates[0]).toMatchObject({ duration: 223, type: 'official', artist: '' })
     expect(done.text).toBe(
       'Encontré 3 vídeos que podrían ser «Conspiracy de Paramore» en «PC de Diego». Elige uno en la tarjeta para ponerlo.',
     )
@@ -876,7 +872,7 @@ describe('equipo en Lumi Chat: elegir el vídeo en el chat', () => {
 
   it('al elegir, pulsa ese vídeo y solo afirma lo que comprobó el agente', async () => {
     const { done, ctx, state } = await confirmedSearch()
-    const chosen = done.musicSelection!.candidates[1]!
+    const chosen = done.musicSelection!.candidates.find((c) => c.ref === 'e4')!
     state.executed.length = 0
     const played = await playMusicSelection(ctx, done.musicSelection!, chosen.id)
     expect(state.executed).toEqual([{ operation: 'browser.click', args: { ref: 'e4' } }])

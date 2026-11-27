@@ -29,6 +29,7 @@ import {
   resolveDesktopReply,
 } from '../src/modules/lumi/tools/desktop.tools.js'
 import { MusicCandidatesStore } from '../src/modules/lumi/music/candidates-store.js'
+import { matchTool } from '../src/modules/lumi/tools/catalog.js'
 import {
   selectMusicCandidate,
   type MusicPlaybackEvent,
@@ -62,6 +63,8 @@ const scenario = arg('scenario') ?? null
 const scenarioDelayMs = Number(arg('scenario-delay-ms') ?? 0)
 /** Aplicación de prueba para `--scenario desktop` (debe estar abierta en el equipo). */
 const desktopApp = arg('desktop-app') ?? 'LumiaTestApp.exe'
+/** Orden de chat exacta para `--scenario music` (se interpreta como en Lumi Chat). */
+const musicCommand = arg('music-command') ?? '/music linkin park numb'
 const owner = 'dev-user'
 const base = `http://127.0.0.1:${port}`
 
@@ -560,15 +563,17 @@ async function runMusicScenario(deviceId: string) {
   }
 
   try {
-    // 1. Búsqueda en el chat: confirmación, «sí» y tarjeta (o reproducción directa si coincide).
-    const card = await tool('device.play_music').run(ctx, { query: 'Conspiracy de Paramore' })
+    // 1. La orden exacta del chat, interpretada como en Lumi Chat; confirmación, «sí» y tarjeta.
+    const match = matchTool(musicCommand, CHAT_KEYS, { now: new Date(), timezone: 'America/Bogota' })
+    console.log(`[chat] «${musicCommand}» → ${match?.tool.name} ${JSON.stringify(match?.input)}`)
+    check(match?.tool.name === 'device.play_music', 'the chat command selects device.play_music')
+    const card = await tool('device.play_music').run(ctx, (match?.input ?? {}) as Record<string, unknown>)
     check(Boolean(card.confirmation), 'play_music asks for confirmation first')
     const answer = await resolveDesktopReply(ctx, 'sí, no vuelvas a preguntar', card.confirmation?.id)
     console.log(`[chat] → ${answer?.text}`)
     const selection = answer?.musicSelection
-    if (!selection) {
-      check(/se está reproduciendo/.test(answer?.text ?? ''), 'direct match plays and confirms playback')
-    } else {
+    check(Boolean(selection?.candidates.length), 'the search returns candidates for the card')
+    if (selection) {
       await store.store(owner, selection)
       await store.attachConversation(owner, selection.queryId, 'conv-e2e')
       const urls = selection.candidates.map((c) => c.url)
@@ -578,7 +583,10 @@ async function runMusicScenario(deviceId: string) {
           urls.every((u) => u === null || /^https:\/\/www\.youtube\.com\/watch\?v=[\w-]{11}$/.test(u ?? '')),
         'candidates carry canonical YouTube URLs from the snapshot',
       )
-      const first = selection.candidates[0]!
+      // Lo que elegiría la persona: «Numb (Official Music Video)».
+      const first = selection.candidates.find((c) => /official/i.test(c.title)) ?? selection.candidates[0]!
+      console.log(`[music] chosen: ${first.title} ${first.url}`)
+      check(Boolean(first.videoId) && first.url === `https://www.youtube.com/watch?v=${first.videoId}`, 'chosen candidate keeps videoId == URL')
       const before = mediaRuns()
       const played = await select(selection.queryId, first.id, 'm-card-1')
       check(['playing', 'partial'].includes(played.out.status), 'selection plays the chosen video')
@@ -679,6 +687,18 @@ async function runMusicScenario(deviceId: string) {
         (e: { statusCode?: number }) => String(e.statusCode),
       )
     check(foreign === '400', 'foreign URL refused by the Server (400)')
+
+    // 5. Pestañas al terminar: ninguna vacía y sin cerrar ninguna.
+    const tabs = await execution.dispatch({
+      userId: owner,
+      permissionKeys: CONTROL,
+      deviceId,
+      operation: 'browser.tabs.list',
+      args: {},
+    })
+    const list = ((tabs.result as { tabs?: Array<{ url: string }> })?.tabs ?? []).map((t) => t.url)
+    console.log(`[music] tabs at the end: ${JSON.stringify(list)}`)
+    check(!list.some((u) => u === 'about:blank' || u === ''), 'no empty about:blank tab left')
 
     await execution.dispatch({
       userId: owner,

@@ -92,7 +92,9 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     queryId: selection.queryId,
     query: selection.query,
     deviceId: selection.deviceId,
-    candidates: selection.candidates.map(({ ref: _ref, label: _label, url: _url, ...candidate }) => candidate),
+    candidates: selection.candidates.map(
+      ({ ref: _ref, label: _label, url: _url, videoId: _videoId, ...candidate }) => candidate,
+    ),
     expiresAt: selection.expiresAt,
   })
 
@@ -147,6 +149,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     now: new Date(),
     timezone,
     deps: toolDeps,
+    log: request.log,
   })
 
   /**

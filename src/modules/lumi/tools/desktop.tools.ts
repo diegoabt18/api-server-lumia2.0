@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { PERMISSION_REGISTRY, type PermissionId } from '../../../common/permissions/registry.js'
 import { isConfirmation, isRejection, normalizeText } from '../automation/domain/reminder-parser.js'
 import { plainText } from '../selector/selector-text.js'
-import { extractMusicQuery, findBestCandidate, findTopCandidates } from '../selector/fuzzy-matcher.js'
+import { KIND_RANK, isFullMatch, matchVideo, videoKind, type VideoKind, type VideoMatch } from '../music/video-match.js'
 import { canonicalYoutubeVideoUrl } from '../desktop-agent/domain/operations.js'
 import {
   MusicPlaybackMachine,
@@ -340,55 +340,62 @@ const CHANNEL_LINK = /^(?:ir al canal|go to channel)\b/
  */
 const HAS_DURATION = /\b\d+ (?:segundos?|minutos?|horas?|seconds?|minutes?|hours?)\b/
 
+interface RankedVideo {
+  element: Element
+  label: string
+  kind: VideoKind
+  match: VideoMatch
+  /** Id del vídeo si el enlace trae su destino (snapshot con `urls`). */
+  videoId: string | null
+  index: number
+}
+
 /**
- * Vídeo de los resultados de búsqueda que mejor coincide con lo pedido.
- * Usa fuzzy matching con similitud Jaro-Winkler para tolerancia a errores ortográficos,
- * tipográficos y variaciones menores.
- *
- * Estrategia:
- * 1. Extrae título, artista y versión de la búsqueda
- * 2. Filtra candidatos válidos (vídeos reales, no canales ni anuncios)
- * 3. Calcula similitud con fuzzy matching para cada candidato
- * 4. Retorna el mejor candidato si supera el umbral mínimo (0.72)
- * 5. null si ninguno coincide suficientemente: no se adivina
- *
- * Niveles de confianza:
- * - 0.88-1.00: reproducción automática (sin confirmar)
- * - 0.72-0.87: requiere confirmación del usuario
- * - <0.72: no se reproduce (rechazado)
+ * Resultados de una búsqueda de YouTube que contienen todas las palabras pedidas, del más preciso al
+ * menos. Se descartan anuncios, enlaces de canal, Mix y listas, y el mismo vídeo cuenta una vez
+ * (miniatura y título son dos enlaces). Si algún enlace trae duración, solo se usan esos: los de
+ * canal o de navegación no la traen.
+ */
+function rankVideos(elements: Element[], query: string): RankedVideo[] {
+  if (!query || query.trim().length === 0) return []
+  const links = elements.filter((el) => {
+    if (el.role !== 'link' || !el.name) return false
+    const name = plainText(el.name)
+    return !NOT_A_VIDEO.test(name) && !CHANNEL_LINK.test(name)
+  })
+  const withDuration = links.filter((el) => HAS_DURATION.test(plainText(el.name)))
+  const pool = withDuration.length > 0 ? withDuration : links
+  const seen = new Set<string>()
+  const ranked: RankedVideo[] = []
+  pool.forEach((element, index) => {
+    const label = element.name.replace(/\s+/g, ' ').trim()
+    const videoId = canonicalYoutubeVideoUrl(element.url)?.split('v=')[1] ?? null
+    const key = videoId ?? label
+    if (seen.has(key)) return
+    seen.add(key)
+    const kind = videoKind(label)
+    if (kind === 'mix') return
+    const { title, artist } = parseVideoLabel(label)
+    const match = matchVideo(query, `${title} ${artist}`)
+    if (!isFullMatch(match)) return
+    ranked.push({ element, label, kind, match, videoId, index })
+  })
+  return ranked.sort((a, b) => b.match.score - a.match.score || a.index - b.index)
+}
+
+/**
+ * El vídeo que se pondría sin preguntar: entre los que contienen todas las palabras, el oficial
+ * antes que una versión (letra, en vivo, remix, cover) y, a igualdad, el más preciso. null si
+ * ninguno coincide: no se adivina.
  */
 export function pickVideoLink(elements: Element[], query: string): Element | null {
-  if (!query || query.trim().length === 0) return null
-
-  // Extraer componentes de la búsqueda (título, artista, versión)
-  const musicQuery = extractMusicQuery(plainText(query))
-
-  // Filtrar candidatos válidos (vídeos reales)
-  const candidates = elements
-    .filter((el) => {
-      if (el.role !== 'link' || !el.name) return false
-      const name = plainText(el.name)
-      // Excluir anuncios, canales, y enlaces no válidos
-      if (NOT_A_VIDEO.test(name) || CHANNEL_LINK.test(name)) return false
-      // Preferir vídeos con información de duración (más confiables)
-      return HAS_DURATION.test(name) || true
-    })
-    .map((el) => ({ name: plainText(el.name!), originalElement: el }))
-
-  if (candidates.length === 0) return null
-
-  // Usar fuzzy matching para encontrar el mejor candidato
-  const best = findBestCandidate(candidates, musicQuery)
-
-  if (!best) return null
-
-  // Solo retornar si supera el umbral mínimo de confianza
-  if (best.score < 0.72) {
-    // Puntuación muy baja: no se adivina
-    return null
-  }
-
-  return best.element.originalElement as Element
+  const [best] = [...rankVideos(elements, query)].sort(
+    (a, b) =>
+      KIND_RANK[a.kind] - KIND_RANK[b.kind] ||
+      b.match.precision - a.match.precision ||
+      a.index - b.index,
+  )
+  return best?.element ?? null
 }
 
 /**
@@ -430,9 +437,12 @@ function detectMusicType(name: string): 'song' | 'live' | 'cover' | 'remix' | 'o
 
 const DURATION_SUFFIX =
   /(?:\s*,?\s*(?:y|and)?\s*\d+\s+(?:horas?|hours?|minutos?|minutes?|segundos?|seconds?))+\s*$/i
-/** «… 6,1 M de visualizaciones hace 11 años», «… 6.1M views 11 years ago»: lo que sigue al canal. */
+/**
+ * «… 6,1 M de visualizaciones hace 11 años», «… 2.1 mil millones de visualizaciones», «… 6.1M
+ * views 11 years ago»: lo que sigue al canal.
+ */
 const VIEWS_SEGMENT =
-  /\s+[\d.,]+\s*(?:[kmb]|mil|mill\.?|millones?)?\s*(?:de\s+)?(?:visualizaciones|vistas|views)\b.*$/i
+  /\s+[\d.,]+\s*(?:[kmb]|mil(?:\s+millones)?|mill\.?|millones?)?\s*(?:de\s+)?(?:visualizaciones|vistas|views)\b.*$/i
 
 /**
  * Título y canal a partir del nombre accesible del resultado («Título de Canal 6,1 M de
@@ -460,55 +470,29 @@ export interface MusicCandidateMatch {
   artist: string
   duration: number
   type: ReturnType<typeof detectMusicType>
+  /** Id del vídeo de YouTube si el enlace trae su destino; null con un agente anterior. */
+  videoId: string | null
   element: Element
   score: number
 }
 
 /**
- * Hasta 5 vídeos de los resultados que superan el umbral de confirmación, del mejor al peor. Los
- * datos salen del nombre accesible real de cada enlace; el mismo vídeo (miniatura y título) cuenta
- * una vez. Si algún enlace trae duración, solo se usan esos: los de canal o navegación no la traen.
+ * Hasta 5 vídeos de los resultados que contienen todas las palabras pedidas, del más preciso al
+ * menos. Los datos salen del nombre accesible real de cada enlace.
  */
 export function extractMusicCandidates(elements: Element[], query: string): MusicCandidateMatch[] {
-  if (!query || query.trim().length === 0) return []
-
-  const musicQuery = extractMusicQuery(plainText(query))
-
-  const links = elements.filter((el) => {
-    if (el.role !== 'link' || !el.name) return false
-    const name = plainText(el.name)
-    return !NOT_A_VIDEO.test(name) && !CHANNEL_LINK.test(name)
-  })
-  const withDuration = links.filter((el) => HAS_DURATION.test(plainText(el.name)))
-  const pool = withDuration.length > 0 ? withDuration : links
-
-  const seen = new Set<string>()
-  const candidates = pool
-    .filter((el) => {
-      const label = el.name.replace(/\s+/g, ' ').trim()
-      if (seen.has(label)) return false
-      seen.add(label)
-      return true
-    })
-    .map((el) => ({ name: plainText(el.name), originalElement: el }))
-
-  if (candidates.length === 0) return []
-
-  return findTopCandidates(candidates, musicQuery)
-    .filter((c) => c.score >= 0.72)
-    .map((c) => {
-      const element = c.element.originalElement as Element
-      const label = element.name.replace(/\s+/g, ' ').trim()
-      return {
-        id: candidateId(label),
-        label,
-        ...parseVideoLabel(label),
-        duration: extractDurationSeconds(label),
-        type: detectMusicType(label),
-        element,
-        score: c.score,
-      }
-    })
+  return rankVideos(elements, query)
+    .slice(0, 5)
+    .map((v) => ({
+      id: candidateId(v.label),
+      label: v.label,
+      ...parseVideoLabel(v.label),
+      duration: extractDurationSeconds(v.label),
+      type: detectMusicType(v.label),
+      videoId: v.videoId,
+      element: v.element,
+      score: v.match.score,
+    }))
 }
 
 function summarize(plan: ActionPlan): string {
@@ -655,9 +639,9 @@ async function perform(ctx: LumiToolContext, plan: ActionPlan): Promise<LumiTool
 }
 
 /**
- * Pone música en YouTube en el navegador del equipo: abre la búsqueda, lee la página, pulsa el vídeo
- * que coincide y comprueba que el navegador quedó en ese vídeo. Cada paso lo verifica el agente; el
- * texto final solo afirma lo comprobado (que el vídeo quedó abierto, no que se oiga).
+ * Busca música en YouTube en el navegador del equipo: abre la búsqueda, lee la página y devuelve los
+ * vídeos que coinciden para que la persona elija uno en la tarjeta del chat. No pone nada por su
+ * cuenta: la reproducción empieza al elegir (`playMusicSelection`).
  */
 async function playMusic(
   ctx: LumiToolContext,
@@ -689,27 +673,30 @@ async function playMusic(
     return result(`La página de «${device.name}» ya no es de YouTube; no pulsé nada.`, 0)
   }
 
-  // extractMusicCandidates ya descarta lo que no llega a 0.72 (REJECT).
-  const candidates = extractMusicCandidates(pageElements(snap.result), query)
+  const elements = pageElements(snap.result)
+  const candidates = extractMusicCandidates(elements, query)
+  const queryId = randomUUID()
+  ctx.log?.info(
+    {
+      queryId,
+      deviceId: device.id,
+      query,
+      searchUrl: opened.result?.url ?? null,
+      links: elements.filter((el) => el.role === 'link').length,
+      candidates: candidates.map((c) => ({ id: c.id, videoId: c.videoId, type: c.type, score: Number(c.score.toFixed(3)) })),
+    },
+    'lumi.music.search',
+  )
   if (candidates.length === 0) {
     return result(
-      `Abrí la búsqueda de «${query}» en YouTube en «${device.name}», pero no encontré un vídeo que coincida para ponerlo. Elige uno en el equipo.`,
+      `Busqué «${query}» en YouTube en «${device.name}», pero no encontré un vídeo que coincida con todas las palabras. Prueba con el nombre de la canción y del artista, por ejemplo «/music Numb Linkin Park».`,
       0,
     )
   }
 
-  const best = candidates[0]!
-  if (best.score >= 0.88) {
-    const url = withUrls ? canonicalYoutubeVideoUrl(best.element.url) : null
-    const played = url
-      ? await playVideo(ctx, device, url, best.title || query)
-      : await clickVideo(ctx, device, best.element.ref, best.title || query)
-    return result(played.text, played.status === 'failed' || played.status === 'offline' ? 0 : 1)
-  }
-
-  // CONFIRM: el usuario elige en el chat; los ref siguen valiendo mientras nadie lea otra página.
+  // La persona elige siempre en la tarjeta del chat; nada suena hasta que elige.
   const selection: LumiMusicSelection = {
-    queryId: randomUUID(),
+    queryId,
     query,
     deviceId: device.id,
     deviceName: device.name,
@@ -724,6 +711,7 @@ async function playMusic(
       ref: c.element.ref,
       label: c.label,
       url: withUrls ? canonicalYoutubeVideoUrl(c.element.url) : null,
+      videoId: withUrls ? c.videoId : null,
     })),
   }
   const count = candidates.length
@@ -787,10 +775,16 @@ async function playVideo(
   url: string,
   name: string,
   onProgress?: (progress: MusicPlaybackProgress) => void,
+  trace: Record<string, unknown> = {},
 ): Promise<MusicPlaybackOutcome> {
   const machine = new MusicPlaybackMachine()
+  const videoId = url.split('v=')[1] ?? null
+  // Mismo registro de la tarjeta al agente: `executionId` es el `task_id` que ve el agente.
+  let executionId: string | null = null
   const report = (state: MusicPlaybackState, stage?: LumiDesktopStage) => {
-    if (machine.advance(state)) onProgress?.({ state, ...(stage ? { stage } : {}) })
+    const accepted = machine.advance(state)
+    ctx.log?.info({ ...trace, executionId, videoId, state, stage: stage ?? null, accepted }, 'lumi.music.state')
+    if (accepted) onProgress?.({ state, ...(stage ? { stage } : {}) })
   }
   report('VALIDATED')
   const shown = clean(name, 90) ?? 'el vídeo'
@@ -801,8 +795,25 @@ async function playVideo(
     operation: 'browser.media.play',
     args: { url },
     timeoutMs: MEDIA_PLAY_TIMEOUT_MS,
+    onStarted: (id) => {
+      executionId = id
+      ctx.log?.info({ ...trace, executionId, deviceId: device.id, videoId }, 'lumi.music.dispatched')
+    },
     onStage: (stage) => report(STAGE_STATE[stage], stage),
   })
+  ctx.log?.info(
+    {
+      ...trace,
+      executionId,
+      videoId,
+      status: outcome.status,
+      agentState: outcome.result?.state ?? null,
+      openedUrl: outcome.result?.url ?? null,
+      window: outcome.result?.window ?? null,
+      errorCode: outcome.error?.code ?? null,
+    },
+    'lumi.music.result',
+  )
 
   const final = String(outcome.result?.state ?? '')
   if (outcome.status === 'completed' && (final === 'COMPLETED' || final === 'MINIMIZE_FAILED' || final === 'PLAYING')) {
@@ -883,6 +894,7 @@ export async function playMusicSelection(
   selection: LumiMusicSelection,
   candidateId: string,
   onProgress?: (progress: MusicPlaybackProgress) => void,
+  trace: Record<string, unknown> = {},
 ): Promise<MusicPlaybackOutcome> {
   const candidate = selection.candidates.find((c) => c.id === candidateId)
   if (!candidate) {
@@ -910,8 +922,12 @@ export async function playMusicSelection(
   // El vídeo exacto que eligió el usuario: su URL se validó al guardar la búsqueda y se vuelve a
   // validar aquí. Nunca se busca de nuevo ni se elige otro resultado.
   const url = canonicalYoutubeVideoUrl(candidate.url)
+  // La URL y el id guardados deben ser del mismo vídeo; si no, la búsqueda se manipuló.
+  if (url && candidate.videoId && url !== `https://www.youtube.com/watch?v=${candidate.videoId}`) {
+    return { status: 'failed', state: null, text: 'Ese vídeo no coincide con la búsqueda guardada; no hice nada.' }
+  }
   if (url && supportsMediaPlay(device)) {
-    return playVideo(ctx, device, url, candidate.title, onProgress)
+    return playVideo(ctx, device, url, candidate.title, onProgress, trace)
   }
 
   const first = await clickVideo(ctx, device, candidate.ref, candidate.title)

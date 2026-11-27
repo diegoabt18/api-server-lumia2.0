@@ -26,7 +26,16 @@ import {
   selectMusicCandidate,
   type MusicPlaybackEvent,
 } from '../../src/modules/lumi/music/music-selection.js'
-import type { MusicPlaybackOutcome } from '../../src/modules/lumi/tools/desktop.tools.js'
+import {
+  parseVideoLabel,
+  type MusicPlaybackOutcome,
+} from '../../src/modules/lumi/tools/desktop.tools.js'
+import {
+  KIND_RANK,
+  isFullMatch,
+  matchVideo,
+  videoKind,
+} from '../../src/modules/lumi/music/video-match.js'
 import {
   MusicPlaybackMachine,
   STAGE_STATE,
@@ -454,5 +463,67 @@ describe('elegir un candidato: validación, doble clic y correlación', () => {
       (await selectMusicCandidate(deps, ctx, { ...base, candidateId: 'bbbbbbbbbbbbbbbb' })).status,
     ).toBe('failed')
     expect(calls()).toBe(0)
+  })
+})
+
+/* ───────────────────────── Coincidencia con resultados reales ───────────────────────── */
+
+describe('búsqueda de música: coincidencia con nombres reales de YouTube', () => {
+  // Nombres accesibles de una búsqueda real de «linkin park numb» (2026-11-26, interfaz en español).
+  const NUMB = [
+    'Numb (Official Music Video) [4K UPGRADE] – Linkin Park 3 minutos y 8 segundos',
+    'Linkin Park - Numb 3 minutos y 6 segundos',
+    'Linkin Park - Numb (Lyrics) 3 minutos y 6 segundos',
+    'Numb (Live) - Linkin Park 3 minutos y 13 segundos',
+    'Linkin Park - Numb (Live One Take Cover) 3 minutos y 20 segundos',
+    'Mix: Numb (Official Music Video) [4K UPGRADE] – Linkin Park',
+    'In the End (Official HD Music Video) - Linkin Park 3 minutos y 38 segundos',
+  ]
+  /** Como el Server: título y canal, sin duración ni visualizaciones. */
+  const text = (label: string) => {
+    const { title, artist } = parseVideoLabel(label)
+    return `${title} ${artist}`
+  }
+
+  it('acepta artista y canción en cualquier orden y sin «de»', () => {
+    for (const query of ['linkin park numb', 'Numb Linkin Park', 'numb de linkin park']) {
+      expect(isFullMatch(matchVideo(query, text(NUMB[0]!))), query).toBe(true)
+    }
+    // El vídeo oficial no se penaliza por «Official Music Video [4K UPGRADE]».
+    expect(matchVideo('linkin park numb', text(NUMB[0]!)).score).toBe(1)
+  })
+
+  it('exige todas las palabras: otra canción del mismo artista no es candidata', () => {
+    expect(isFullMatch(matchVideo('linkin park numb', text(NUMB[6]!)))).toBe(false)
+    expect(isFullMatch(matchVideo('yellow coldplay', NUMB[0]!))).toBe(false)
+    expect(isFullMatch(matchVideo('numb de linkin park', 'Dumb - Nirvana'))).toBe(false)
+    expect(isFullMatch(matchVideo('linkin park num', NUMB[0]!))).toBe(false)
+  })
+
+  it('tolera errores de escritura en palabras largas, no en cortas', () => {
+    expect(isFullMatch(matchVideo('linkin prak numb', text(NUMB[1]!)))).toBe(false)
+    expect(
+      isFullMatch(matchVideo('conspirancy paramore', 'Paramore - Conspiracy (Official Audio)')),
+    ).toBe(true)
+  })
+
+  it('distingue oficial, letra, en vivo, cover y Mix', () => {
+    expect(NUMB.map(videoKind)).toEqual([
+      'official',
+      'song',
+      'lyrics',
+      'live',
+      'cover',
+      'mix',
+      'official',
+    ])
+    expect(KIND_RANK.official).toBeLessThan(KIND_RANK.lyrics)
+    expect(KIND_RANK.lyrics).toBeLessThan(KIND_RANK.live)
+  })
+
+  it('la versión con letra o en vivo puntúa por debajo del mismo vídeo sin palabras de más', () => {
+    const plain = matchVideo('linkin park numb', text(NUMB[1]!)).score
+    expect(matchVideo('linkin park numb', text(NUMB[2]!)).score).toBeLessThan(plain)
+    expect(matchVideo('linkin park numb', text(NUMB[3]!)).score).toBeLessThan(plain)
   })
 })

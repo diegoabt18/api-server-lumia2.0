@@ -182,6 +182,8 @@ export interface LumiDesktopPort {
     operation: string
     args: Record<string, unknown>
     timeoutMs?: number
+    /** La orden se envió al equipo con este id (`task_id` del agente). */
+    onStarted?: (executionId: string) => void
     /** Pasos verificados de esta misma ejecución (`browser.media.play`). */
     onStage?: (stage: LumiDesktopStage) => void
   }): Promise<LumiDesktopOutcome>
@@ -280,6 +282,8 @@ export interface LumiToolContext {
   now: Date
   timezone: string
   deps: LumiToolDeps
+  /** Registro estructurado de la petición (sin datos privados). */
+  log?: { info: (obj: object, msg: string) => void; warn: (obj: object, msg: string) => void }
 }
 
 /** Entidad que una respuesta deja "abierta" para el turno siguiente ("¿y sus pagos?"). */
@@ -317,7 +321,15 @@ export interface LumiMusicSelection {
    * `url`: vídeo canónico (`https://www.youtube.com/watch?v=…`) leído del enlace y validado por el
    * Server. null si el agente no lo informa (agente anterior): entonces se pulsa el `ref`.
    */
-  candidates: Array<LumiMusicCandidate & { ref: string; label: string; url?: string | null }>
+  candidates: Array<
+    LumiMusicCandidate & {
+      ref: string
+      label: string
+      url?: string | null
+      /** Id del vídeo de `url` (debe coincidir con ella). */
+      videoId?: string | null
+    }
+  >
 }
 
 export interface LumiToolResult {

@@ -47,6 +47,7 @@ export interface MusicSelectionDeps {
     selection: LumiMusicSelection,
     candidateId: string,
     onProgress?: (progress: MusicPlaybackProgress) => void,
+    trace?: Record<string, unknown>,
   ) => Promise<MusicPlaybackOutcome>
 }
 
@@ -73,7 +74,15 @@ export async function selectMusicCandidate(
   }
   const done = (
     r: Pick<MusicSelectionResult, 'status' | 'state' | 'message'> & { replayed?: boolean },
-  ): MusicSelectionResult => ({ ...ids, replayed: false, ...r })
+  ): MusicSelectionResult => {
+    const result = { ...ids, replayed: false, ...r }
+    ctx.log?.info(
+      { ...ids, status: result.status, state: result.state, replayed: result.replayed },
+      'lumi.music.selection.result',
+    )
+    return result
+  }
+  ctx.log?.info({ ...ids, found: selection !== null }, 'lumi.music.selection.received')
 
   if (!selection) {
     return done({
@@ -111,8 +120,17 @@ export async function selectMusicCandidate(
   }
   try {
     onEvent?.({ ...ids, state: 'RECEIVED' })
-    const played = await deps.play(ctx, selection, input.candidateId, (progress) =>
-      onEvent?.({ ...ids, ...progress }),
+    const candidate = selection.candidates.find((c) => c.id === input.candidateId)
+    ctx.log?.info(
+      { ...ids, videoId: candidate?.videoId ?? null, title: candidate?.title ?? null },
+      'lumi.music.selection.validated',
+    )
+    const played = await deps.play(
+      ctx,
+      selection,
+      input.candidateId,
+      (progress) => onEvent?.({ ...ids, ...progress }),
+      { ...ids },
     )
     if (played.status === 'playing' || played.status === 'partial') {
       await deps.store.rememberPlayback(selection, input.candidateId, {

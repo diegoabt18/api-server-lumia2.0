@@ -34,7 +34,7 @@ export function createLumiDesktopPort(deps: {
         }))
     },
 
-    async execute({ userId, permissionKeys, deviceId, operation, args, timeoutMs, onStage }) {
+    async execute({ userId, permissionKeys, deviceId, operation, args, timeoutMs, onStarted, onStage }) {
       try {
         const out = await deps.execution.dispatch({
           userId,
@@ -43,6 +43,7 @@ export function createLumiDesktopPort(deps: {
           operation,
           args,
           timeoutMs,
+          onStarted,
           onStage,
         })
         return {
