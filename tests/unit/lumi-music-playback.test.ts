@@ -27,12 +27,14 @@ import {
   type MusicPlaybackEvent,
 } from '../../src/modules/lumi/music/music-selection.js'
 import {
+  extractMusicCandidates,
   parseVideoLabel,
   type MusicPlaybackOutcome,
 } from '../../src/modules/lumi/tools/desktop.tools.js'
 import {
   KIND_RANK,
-  isFullMatch,
+  interpretMusicQuery,
+  isCandidate,
   matchVideo,
   videoKind,
 } from '../../src/modules/lumi/music/video-match.js'
@@ -468,7 +470,7 @@ describe('elegir un candidato: validación, doble clic y correlación', () => {
 
 /* ───────────────────────── Coincidencia con resultados reales ───────────────────────── */
 
-describe('búsqueda de música: coincidencia con nombres reales de YouTube', () => {
+describe('búsqueda de música: interpretación y ranking con nombres reales de YouTube', () => {
   // Nombres accesibles de una búsqueda real de «linkin park numb» (2026-11-26, interfaz en español).
   const NUMB = [
     'Numb (Official Music Video) [4K UPGRADE] – Linkin Park 3 minutos y 8 segundos',
@@ -482,29 +484,84 @@ describe('búsqueda de música: coincidencia con nombres reales de YouTube', () 
   /** Como el Server: título y canal, sin duración ni visualizaciones. */
   const text = (label: string) => {
     const { title, artist } = parseVideoLabel(label)
-    return `${title} ${artist}`
+    return artist ? `${title} - ${artist}` : title
   }
+  const links = NUMB.map((name, i) => ({ ref: `e${i + 1}`, role: 'link', name }))
 
-  it('acepta artista y canción en cualquier orden y sin «de»', () => {
-    for (const query of ['linkin park numb', 'Numb Linkin Park', 'numb de linkin park']) {
-      expect(isFullMatch(matchVideo(query, text(NUMB[0]!))), query).toBe(true)
+  it('interpreta título y artista solo cuando la consulta lo dice', () => {
+    expect(interpretMusicQuery('numb de linkin park')).toEqual({
+      terms: ['numb', 'linkin', 'park'],
+      title: ['numb'],
+      artist: ['linkin', 'park'],
+    })
+    expect(interpretMusicQuery('Linkin Park - Numb')).toMatchObject({
+      title: ['numb'],
+      artist: ['linkin', 'park'],
+    })
+    expect(interpretMusicQuery('linkin park num')).toEqual({
+      terms: ['linkin', 'park', 'num'],
+      title: [],
+      artist: [],
+    })
+  })
+
+  it('acepta consultas completas, abreviadas, con errores y con artista y título en cualquier orden', () => {
+    for (const query of [
+      'linkin park numb',
+      'linkin park num',
+      'numb linkin park',
+      'num linkin park',
+      'numb de linkin park',
+      'linkin park - numb',
+      'linkn park numb',
+    ]) {
+      expect(isCandidate(matchVideo(query, text(NUMB[0]!))), query).toBe(true)
     }
     // El vídeo oficial no se penaliza por «Official Music Video [4K UPGRADE]».
     expect(matchVideo('linkin park numb', text(NUMB[0]!)).score).toBe(1)
   })
 
-  it('exige todas las palabras: otra canción del mismo artista no es candidata', () => {
-    expect(isFullMatch(matchVideo('linkin park numb', text(NUMB[6]!)))).toBe(false)
-    expect(isFullMatch(matchVideo('yellow coldplay', NUMB[0]!))).toBe(false)
-    expect(isFullMatch(matchVideo('numb de linkin park', 'Dumb - Nirvana'))).toBe(false)
-    expect(isFullMatch(matchVideo('linkin park num', NUMB[0]!))).toBe(false)
+  it('no inventa coincidencias: otra canción, otro artista o palabras cortas parecidas', () => {
+    expect(isCandidate(matchVideo('linkin park numb', text(NUMB[6]!)))).toBe(false)
+    expect(isCandidate(matchVideo('linkin park num', text(NUMB[6]!)))).toBe(false)
+    expect(isCandidate(matchVideo('yellow coldplay', text(NUMB[0]!)))).toBe(false)
+    expect(isCandidate(matchVideo('numb de linkin park', 'Dumb - Nirvana'))).toBe(false)
+    expect(isCandidate(matchVideo('nu linkin park', 'Linkin Park - Numb'))).toBe(false)
   })
 
-  it('tolera errores de escritura en palabras largas, no en cortas', () => {
-    expect(isFullMatch(matchVideo('linkin prak numb', text(NUMB[1]!)))).toBe(false)
-    expect(
-      isFullMatch(matchVideo('conspirancy paramore', 'Paramore - Conspiracy (Official Audio)')),
-    ).toBe(true)
+  it('con una palabra abreviada, el vídeo de esa canción queda por encima de los del artista', () => {
+    const found = extractMusicCandidates(links, 'linkin park num')
+    expect(found.length).toBeGreaterThan(0)
+    expect(found.every((c) => /numb/i.test(c.label))).toBe(true)
+    expect(found.map((c) => c.element.ref)).not.toContain('e7')
+    expect(found.map((c) => c.element.ref)).not.toContain('e6')
+    expect(found[0]!.element.ref).toBe('e1')
+  })
+
+  it('ordena por relevancia: oficial primero, versiones después, con el mismo orden en cualquier forma de pedirlo', () => {
+    for (const query of [
+      'linkin park numb',
+      'linkin park num',
+      'numb linkin park',
+      'numb de linkin park',
+    ]) {
+      const refs = extractMusicCandidates(links, query).map((c) => c.element.ref)
+      expect(refs[0], query).toBe('e1')
+      expect(refs.indexOf('e2'), query).toBeLessThan(refs.indexOf('e4'))
+      expect(refs.indexOf('e4'), query).toBeLessThan(refs.indexOf('e5'))
+    }
+  })
+
+  it('conserva la identidad: cada candidato es un enlace real, sin títulos ni ids inventados', () => {
+    const withUrls = links.map((l, i) => ({
+      ...l,
+      url: `https://www.youtube.com/watch?v=video${String(i).padStart(6, '0')}`,
+    }))
+    for (const c of extractMusicCandidates(withUrls, 'linkin park num')) {
+      const source = withUrls.find((l) => l.ref === c.element.ref)!
+      expect(c.label).toBe(source.name)
+      expect(`https://www.youtube.com/watch?v=${c.videoId}`).toBe(source.url)
+    }
   })
 
   it('distingue oficial, letra, en vivo, cover y Mix', () => {
@@ -519,11 +576,5 @@ describe('búsqueda de música: coincidencia con nombres reales de YouTube', () 
     ])
     expect(KIND_RANK.official).toBeLessThan(KIND_RANK.lyrics)
     expect(KIND_RANK.lyrics).toBeLessThan(KIND_RANK.live)
-  })
-
-  it('la versión con letra o en vivo puntúa por debajo del mismo vídeo sin palabras de más', () => {
-    const plain = matchVideo('linkin park numb', text(NUMB[1]!)).score
-    expect(matchVideo('linkin park numb', text(NUMB[2]!)).score).toBeLessThan(plain)
-    expect(matchVideo('linkin park numb', text(NUMB[3]!)).score).toBeLessThan(plain)
   })
 })

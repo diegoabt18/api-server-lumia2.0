@@ -2,7 +2,16 @@ import { createHash, randomUUID } from 'node:crypto'
 import { PERMISSION_REGISTRY, type PermissionId } from '../../../common/permissions/registry.js'
 import { isConfirmation, isRejection, normalizeText } from '../automation/domain/reminder-parser.js'
 import { plainText } from '../selector/selector-text.js'
-import { KIND_RANK, isFullMatch, matchVideo, videoKind, type VideoKind, type VideoMatch } from '../music/video-match.js'
+import {
+  KIND_ADJUST,
+  KIND_RANK,
+  interpretMusicQuery,
+  isCandidate,
+  matchVideo,
+  videoKind,
+  type VideoKind,
+  type VideoMatch,
+} from '../music/video-match.js'
 import { canonicalYoutubeVideoUrl } from '../desktop-agent/domain/operations.js'
 import {
   MusicPlaybackMachine,
@@ -351,13 +360,15 @@ interface RankedVideo {
 }
 
 /**
- * Resultados de una búsqueda de YouTube que contienen todas las palabras pedidas, del más preciso al
- * menos. Se descartan anuncios, enlaces de canal, Mix y listas, y el mismo vídeo cuenta una vez
+ * Resultados de una búsqueda de YouTube que encajan con lo pedido (ver `music/video-match.ts`), del
+ * más relevante al menos. Se descartan anuncios, enlaces de canal, Mix y listas, y el mismo vídeo cuenta una vez
  * (miniatura y título son dos enlaces). Si algún enlace trae duración, solo se usan esos: los de
  * canal o de navegación no la traen.
  */
 function rankVideos(elements: Element[], query: string): RankedVideo[] {
   if (!query || query.trim().length === 0) return []
+  const asked = interpretMusicQuery(query)
+  if (asked.terms.length === 0) return []
   const links = elements.filter((el) => {
     if (el.role !== 'link' || !el.name) return false
     const name = plainText(el.name)
@@ -376,15 +387,16 @@ function rankVideos(elements: Element[], query: string): RankedVideo[] {
     const kind = videoKind(label)
     if (kind === 'mix') return
     const { title, artist } = parseVideoLabel(label)
-    const match = matchVideo(query, `${title} ${artist}`)
-    if (!isFullMatch(match)) return
+    const match = matchVideo(asked, artist ? `${title} - ${artist}` : title)
+    if (!isCandidate(match)) return
     ranked.push({ element, label, kind, match, videoId, index })
   })
-  return ranked.sort((a, b) => b.match.score - a.match.score || a.index - b.index)
+  const rank = (v: RankedVideo) => v.match.score + KIND_ADJUST[v.kind]
+  return ranked.sort((a, b) => rank(b) - rank(a) || a.index - b.index)
 }
 
 /**
- * El vídeo que se pondría sin preguntar: entre los que contienen todas las palabras, el oficial
+ * El vídeo que se pondría sin preguntar: entre los candidatos, el oficial
  * antes que una versión (letra, en vivo, remix, cover) y, a igualdad, el más preciso. null si
  * ninguno coincide: no se adivina.
  */
@@ -477,8 +489,7 @@ export interface MusicCandidateMatch {
 }
 
 /**
- * Hasta 5 vídeos de los resultados que contienen todas las palabras pedidas, del más preciso al
- * menos. Los datos salen del nombre accesible real de cada enlace.
+ * Hasta 5 vídeos de los resultados que encajan con lo pedido, del más relevante al menos. Los datos salen del nombre accesible real de cada enlace.
  */
 export function extractMusicCandidates(elements: Element[], query: string): MusicCandidateMatch[] {
   return rankVideos(elements, query)
@@ -689,7 +700,7 @@ async function playMusic(
   )
   if (candidates.length === 0) {
     return result(
-      `Busqué «${query}» en YouTube en «${device.name}», pero no encontré un vídeo que coincida con todas las palabras. Prueba con el nombre de la canción y del artista, por ejemplo «/music Numb Linkin Park».`,
+      `Busqué «${query}» en YouTube en «${device.name}», pero no encontré un vídeo que coincida. Prueba con el nombre de la canción y del artista, por ejemplo «/music Numb Linkin Park».`,
       0,
     )
   }
