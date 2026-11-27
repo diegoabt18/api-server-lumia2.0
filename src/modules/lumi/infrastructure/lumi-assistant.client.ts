@@ -132,6 +132,8 @@ export type LumiStreamEvent =
       conversationId: string
       queryId: string
       query: string
+      /** Equipo en el que se buscó (y se pondrá) el vídeo. */
+      deviceId: string
       candidates: Array<{
         id: string
         title: string

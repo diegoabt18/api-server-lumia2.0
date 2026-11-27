@@ -45,4 +45,8 @@ export const lumiMusicSelectionParamsSchema = z.object({
 
 export const lumiMusicSelectionBodySchema = z.object({
   candidateId: z.string().regex(/^[0-9a-f]{16}$/),
+  /** Conversación de la tarjeta: debe ser la misma en la que se mostró la búsqueda. */
+  conversationId: z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/).optional(),
+  /** Mensaje del chat que muestra la tarjeta (id del cliente): se devuelve en cada evento. */
+  messageId: z.string().min(1).max(64).regex(/^[A-Za-z0-9_:-]+$/).optional(),
 })

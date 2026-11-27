@@ -1,4 +1,5 @@
 import type { PermissionId } from '../../../common/permissions/registry.js'
+import type { TaskStage as LumiDesktopStage } from '../desktop-agent/domain/protocol.js'
 import type { LumiInitiative } from '../initiatives/domain/initiative.types.js'
 import type { LumiReference } from '../references/lumi-references.js'
 
@@ -140,6 +141,8 @@ export interface LumiDesktopDevice {
   operations: readonly string[]
 }
 
+export type { LumiDesktopStage }
+
 /** Resultado de una operación ejecutada en un equipo (ya verificada por el agente). */
 export interface LumiDesktopOutcome {
   /** completed | unverified | failed | rejected | cancelled | timed_out */
@@ -178,6 +181,9 @@ export interface LumiDesktopPort {
     deviceId: string
     operation: string
     args: Record<string, unknown>
+    timeoutMs?: number
+    /** Pasos verificados de esta misma ejecución (`browser.media.play`). */
+    onStage?: (stage: LumiDesktopStage) => void
   }): Promise<LumiDesktopOutcome>
   isApproved(userId: string, approval: LumiDesktopApproval): Promise<boolean>
   approve(userId: string, approval: LumiDesktopApproval): Promise<void>
@@ -305,7 +311,13 @@ export interface LumiMusicSelection {
   deviceId: string
   deviceName: string
   expiresAt: string
-  candidates: Array<LumiMusicCandidate & { ref: string; label: string }>
+  /** Conversación en la que se mostró la tarjeta (se fija al guardar el turno). */
+  conversationId?: string
+  /**
+   * `url`: vídeo canónico (`https://www.youtube.com/watch?v=…`) leído del enlace y validado por el
+   * Server. null si el agente no lo informa (agente anterior): entonces se pulsa el `ref`.
+   */
+  candidates: Array<LumiMusicCandidate & { ref: string; label: string; url?: string | null }>
 }
 
 export interface LumiToolResult {

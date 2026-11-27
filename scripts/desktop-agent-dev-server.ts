@@ -14,12 +14,26 @@
  * confirmaciones, «no», «sí, no vuelvas a preguntar» y aprobaciones por tipo + destino.
  * --scenario desktop hace lo mismo con una aplicación nativa abierta en el equipo (por defecto la
  * app de prueba `LumiaTestApp.exe` de lumia-desktop-agent/tests/desktop; --desktop-app otra).
+ * --scenario music pone música de YouTube con `browser.media.play` (necesita internet): búsqueda,
+ * tarjeta, elección con sus estados, doble clic, pestaña reutilizada, corte de conexión durante la
+ * reproducción y vídeo no disponible.
  *
  * Imprime `ENROLLMENT_CODE=<código>` al arrancar (propietario ficticio `dev-user`). La clave de
  * grants es efímera. No usar en producción: no hay sesión de usuario ni persistencia.
  */
 import Fastify from 'fastify'
-import { DEVICE_TOOLS, handleDesktopReply } from '../src/modules/lumi/tools/desktop.tools.js'
+import {
+  DEVICE_TOOLS,
+  handleDesktopReply,
+  playMusicSelection,
+  resolveDesktopReply,
+} from '../src/modules/lumi/tools/desktop.tools.js'
+import { MusicCandidatesStore } from '../src/modules/lumi/music/candidates-store.js'
+import {
+  selectMusicCandidate,
+  type MusicPlaybackEvent,
+} from '../src/modules/lumi/music/music-selection.js'
+import type { TaskStage } from '../src/modules/lumi/desktop-agent/domain/protocol.js'
 import type { LumiToolContext } from '../src/modules/lumi/tools/tool.types.js'
 import { PERMISSION_REGISTRY as P, type PermissionId } from '../src/common/permissions/registry.js'
 import { assembleDesktopAgentServices } from '../src/modules/lumi/desktop-agent/index.js'
@@ -379,15 +393,9 @@ const CHAT_KEYS: PermissionId[] = [
   P.DESKTOP_APPS_CONTROL,
 ]
 
-/** Lo mismo que hace Lumi Chat: herramientas `device.*` y respuestas «sí»/«no», sin modelo. */
-async function runChatScenario() {
-  let failures = 0
-  const check = (ok: boolean, what: string) => {
-    console.log(`[scenario] ${ok ? 'PASS' : 'FAIL'} ${what}`)
-    if (!ok) failures += 1
-  }
+function chatContext(): LumiToolContext {
   const none = async () => []
-  const ctx: LumiToolContext = {
+  return {
     userId: owner,
     permissionKeys: CHAT_KEYS,
     now: new Date(),
@@ -418,6 +426,16 @@ async function runChatScenario() {
       desktop: services.lumiPort,
     },
   }
+}
+
+/** Lo mismo que hace Lumi Chat: herramientas `device.*` y respuestas «sí»/«no», sin modelo. */
+async function runChatScenario() {
+  let failures = 0
+  const check = (ok: boolean, what: string) => {
+    console.log(`[scenario] ${ok ? 'PASS' : 'FAIL'} ${what}`)
+    if (!ok) failures += 1
+  }
+  const ctx = chatContext()
   const tool = (name: string) => DEVICE_TOOLS.find((t) => t.name === name)!
   const say = async (name: string, input: Record<string, unknown>) => {
     const out = await tool(name).run(ctx, input)
@@ -496,6 +514,186 @@ async function runChatScenario() {
   console.log(failures === 0 ? 'SCENARIO PASSED' : `SCENARIO FAILED (${failures})`)
 }
 
+
+/** Estados de éxito en orden: los eventos de una reproducción solo pueden avanzar. */
+const MUSIC_ORDER = [
+  'RECEIVED',
+  'VALIDATED',
+  'BROWSER_READY',
+  'TAB_READY',
+  'NAVIGATING',
+  'NAVIGATION_COMPLETED',
+  'PLAYING',
+  'MINIMIZING',
+  'COMPLETED',
+]
+
+async function runMusicScenario(deviceId: string) {
+  let failures = 0
+  const check = (ok: boolean, what: string) => {
+    console.log(`[scenario] ${ok ? 'PASS' : 'FAIL'} ${what}`)
+    if (!ok) failures += 1
+  }
+  const ctx = chatContext()
+  const store = new MusicCandidatesStore(null)
+  const deps = { store, play: playMusicSelection }
+  const mediaRuns = () =>
+    [...executions.items.values()].filter((e) => e.operation === 'browser.media.play').length
+  const tool = (name: string) => DEVICE_TOOLS.find((t) => t.name === name)!
+  const ordered = (events: MusicPlaybackEvent[]) => {
+    const ranks = events.map((e) => MUSIC_ORDER.indexOf(e.state)).filter((r) => r >= 0)
+    return ranks.every((r, i) => i === 0 || r > ranks[i - 1]!)
+  }
+  const select = async (queryId: string, candidateId: string, messageId: string) => {
+    const events: MusicPlaybackEvent[] = []
+    const out = await selectMusicCandidate(
+      deps,
+      ctx,
+      { queryId, candidateId, conversationId: 'conv-e2e', messageId },
+      (e) => {
+        events.push(e)
+        console.log(`[music] ${messageId} ${e.state}${e.stage ? ` (${e.stage})` : ''}`)
+      },
+    )
+    console.log(`[music] ${messageId} → ${out.status} ${out.state} replayed=${out.replayed} «${out.message}»`)
+    return { out, events }
+  }
+
+  try {
+    // 1. Búsqueda en el chat: confirmación, «sí» y tarjeta (o reproducción directa si coincide).
+    const card = await tool('device.play_music').run(ctx, { query: 'Conspiracy de Paramore' })
+    check(Boolean(card.confirmation), 'play_music asks for confirmation first')
+    const answer = await resolveDesktopReply(ctx, 'sí, no vuelvas a preguntar', card.confirmation?.id)
+    console.log(`[chat] → ${answer?.text}`)
+    const selection = answer?.musicSelection
+    if (!selection) {
+      check(/se está reproduciendo/.test(answer?.text ?? ''), 'direct match plays and confirms playback')
+    } else {
+      await store.store(owner, selection)
+      await store.attachConversation(owner, selection.queryId, 'conv-e2e')
+      const urls = selection.candidates.map((c) => c.url)
+      console.log(`[music] candidates: ${JSON.stringify(selection.candidates.map((c) => [c.title, c.url]))}`)
+      check(
+        urls.some((u) => u) &&
+          urls.every((u) => u === null || /^https:\/\/www\.youtube\.com\/watch\?v=[\w-]{11}$/.test(u ?? '')),
+        'candidates carry canonical YouTube URLs from the snapshot',
+      )
+      const first = selection.candidates[0]!
+      const before = mediaRuns()
+      const played = await select(selection.queryId, first.id, 'm-card-1')
+      check(['playing', 'partial'].includes(played.out.status), 'selection plays the chosen video')
+      check(
+        played.out.state === 'COMPLETED' || played.out.state === 'MINIMIZE_FAILED',
+        `final state is COMPLETED or MINIMIZE_FAILED (${played.out.state})`,
+      )
+      check(ordered(played.events), 'states only move forward')
+      check(
+        played.events.every(
+          (e) =>
+            e.queryId === selection.queryId &&
+            e.candidateId === first.id &&
+            e.messageId === 'm-card-1' &&
+            e.conversationId === 'conv-e2e' &&
+            e.deviceId === deviceId,
+        ),
+        'every event carries the ids of the card that asked',
+      )
+      check(
+        played.events.some((e) => e.stage === 'tab.reused' || e.stage === 'tab.created'),
+        'tab stage reported',
+      )
+      check(mediaRuns() === before + 1, 'exactly one browser.media.play for the selection')
+
+      // Doble clic: el mismo candidato otra vez no se repite.
+      const again = await select(selection.queryId, first.id, 'm-card-1')
+      check(again.out.replayed && mediaRuns() === before + 1, 'second click returns the result without replaying')
+
+      // Dos clics simultáneos en otro candidato: uno se ejecuta, el otro es «busy».
+      const other = selection.candidates[1]
+      if (other) {
+        const [a, b] = await Promise.all([
+          select(selection.queryId, other.id, 'm-card-1'),
+          select(selection.queryId, other.id, 'm-card-1'),
+        ])
+        const statuses = [a.out.status, b.out.status].sort()
+        check(statuses.includes('busy') && mediaRuns() === before + 2, 'simultaneous double click runs once')
+        const executed = a.out.status === 'busy' ? b.out : a.out
+        check(['playing', 'partial'].includes(executed.status), `second candidate plays too (${executed.state})`)
+        const reused = [...a.events, ...b.events].some((e) => e.stage === 'tab.reused')
+        check(reused, 'second playback reuses the Lumia tab')
+      }
+    }
+
+    // 2. Corte de conexión durante la reproducción: el resultado llega tras la reconexión.
+    const stages: TaskStage[] = []
+    const dispatch = execution.dispatch({
+      userId: owner,
+      permissionKeys: CONTROL,
+      deviceId,
+      operation: 'browser.media.play',
+      args: { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' },
+      timeoutMs: 60_000,
+      onStage: (s) => {
+        stages.push(s)
+        console.log(`[music] reconnect stage ${s}`)
+      },
+    })
+    setTimeout(() => {
+      gateway.shutdown()
+      console.log('[server] DROPPED all connections during playback')
+    }, 2_500)
+    const afterDrop = await dispatch
+    console.log(
+      `[music] reconnect → ${afterDrop.execution.status} ${JSON.stringify(afterDrop.result)} error=${afterDrop.execution.error?.code ?? null}`,
+    )
+    check(
+      afterDrop.execution.status === 'completed' &&
+        ['COMPLETED', 'MINIMIZE_FAILED'].includes(String((afterDrop.result as { state?: unknown })?.state)),
+      'playback result arrives after the agent reconnects',
+    )
+    await new Promise((r) => setTimeout(r, 1_000))
+    check(gateway.isOnline(deviceId), 'agent is online again')
+
+    // 3. Vídeo no disponible.
+    const missing = await execution.dispatch({
+      userId: owner,
+      permissionKeys: CONTROL,
+      deviceId,
+      operation: 'browser.media.play',
+      args: { url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa' },
+      timeoutMs: 60_000,
+    })
+    check(missing.execution.error?.code === 'VIDEO_UNAVAILABLE', 'unavailable video → VIDEO_UNAVAILABLE')
+
+    // 4. URL ajena: el Server no la firma.
+    const foreign = await execution
+      .dispatch({
+        userId: owner,
+        permissionKeys: CONTROL,
+        deviceId,
+        operation: 'browser.media.play',
+        args: { url: 'https://evil.example/watch?v=dQw4w9WgXcQ' },
+      })
+      .then(
+        () => 'dispatched',
+        (e: { statusCode?: number }) => String(e.statusCode),
+      )
+    check(foreign === '400', 'foreign URL refused by the Server (400)')
+
+    await execution.dispatch({
+      userId: owner,
+      permissionKeys: CONTROL,
+      deviceId,
+      operation: 'browser.close_session',
+      args: {},
+    })
+  } catch (error) {
+    console.log(`[scenario] ERROR ${(error as Error).message}`)
+    failures += 1
+  }
+  console.log(failures === 0 ? 'SCENARIO PASSED' : `SCENARIO FAILED (${failures})`)
+}
+
 let revokeScheduled = false
 let dropScheduled = false
 let scenarioStarted = false
@@ -529,7 +727,8 @@ setInterval(() => {
     const ready =
       (scenario === 'browser' && device.capabilities?.operations.includes('browser.navigate')) ||
       (scenario === 'desktop' && device.capabilities?.operations.includes('desktop.snapshot')) ||
-      (scenario === 'chat' && device.capabilities?.operations.includes('browser.navigate'))
+      (scenario === 'chat' && device.capabilities?.operations.includes('browser.navigate')) ||
+      (scenario === 'music' && device.capabilities?.operations.includes('browser.media.play'))
     if (ready && !scenarioStarted && gateway.isOnline(device.id)) {
       scenarioStarted = true
       const id = device.id
@@ -537,6 +736,7 @@ setInterval(() => {
         if (!gateway.isOnline(id)) console.log('SCENARIO FAILED (device offline after delay)')
         else if (scenario === 'desktop') void runDesktopScenario(id)
         else if (scenario === 'chat') void runChatScenario()
+        else if (scenario === 'music') void runMusicScenario(id)
         else void runBrowserScenario(id)
       }, scenarioDelayMs)
     }

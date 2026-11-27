@@ -3,10 +3,18 @@ import { PERMISSION_REGISTRY, type PermissionId } from '../../../common/permissi
 import { isConfirmation, isRejection, normalizeText } from '../automation/domain/reminder-parser.js'
 import { plainText } from '../selector/selector-text.js'
 import { extractMusicQuery, findBestCandidate, findTopCandidates } from '../selector/fuzzy-matcher.js'
+import { canonicalYoutubeVideoUrl } from '../desktop-agent/domain/operations.js'
+import {
+  MusicPlaybackMachine,
+  STAGE_STATE,
+  errorState,
+  type MusicPlaybackState,
+} from '../music/playback-state.js'
 import type {
   LumiDesktopApproval,
   LumiDesktopDevice,
   LumiDesktopOutcome,
+  LumiDesktopStage,
   LumiMusicSelection,
   LumiSelectorArg,
   LumiSelectorBuild,
@@ -99,15 +107,18 @@ interface Element {
   ref: string
   role: string
   name: string
+  /** Destino del enlace (snapshot con `urls`). Contenido de la página: no confiable. */
+  url?: string
 }
 
-/** Elementos de un snapshot de navegador (`refs`: { e1: { role, name } }). */
+/** Elementos de un snapshot de navegador (`refs`: { e1: { role, name, url? } }). */
 function pageElements(result: Record<string, unknown> | null): Element[] {
-  const refs = (result?.refs ?? {}) as Record<string, { role?: string; name?: string }>
+  const refs = (result?.refs ?? {}) as Record<string, { role?: string; name?: string; url?: unknown }>
   return Object.entries(refs).map(([ref, v]) => ({
     ref,
     role: String(v.role ?? ''),
     name: String(v.name ?? ''),
+    ...(typeof v.url === 'string' ? { url: v.url } : {}),
   }))
 }
 
@@ -654,7 +665,13 @@ async function playMusic(
   plan: ActionPlan,
 ): Promise<LumiToolResult> {
   const query = plan.query ?? ''
-  const opened = await execute(ctx, device, 'browser.navigate', { url: youtubeSearchUrl(query) })
+  // Con un agente que reproduce por URL, la búsqueda se lee sin mostrar el navegador ni quitar el
+  // foco a la aplicación que está usando la persona.
+  const withUrls = supportsMediaPlay(device)
+  const opened = await execute(ctx, device, 'browser.navigate', {
+    url: youtubeSearchUrl(query),
+    ...(withUrls ? { background: true } : {}),
+  })
   if (!ok(opened)) return result(failureText(opened), 0)
   if (hostOf(opened.result?.url) !== YOUTUBE_HOST) {
     return result(
@@ -662,7 +679,11 @@ async function playMusic(
       0,
     )
   }
-  const snap = await execute(ctx, device, 'browser.snapshot', { interactive: true })
+  // Con un agente que reproduce por URL, el snapshot trae el destino de cada enlace.
+  const snap = await execute(ctx, device, 'browser.snapshot', {
+    interactive: true,
+    ...(withUrls ? { urls: true } : {}),
+  })
   if (!ok(snap)) return result(failureText(snap), 0)
   if (hostOf(snap.result?.url) !== YOUTUBE_HOST) {
     return result(`La página de «${device.name}» ya no es de YouTube; no pulsé nada.`, 0)
@@ -679,8 +700,11 @@ async function playMusic(
 
   const best = candidates[0]!
   if (best.score >= 0.88) {
-    const played = await clickVideo(ctx, device, best.element.ref, best.title || query)
-    return result(played.text, played.status === 'failed' ? 0 : 1)
+    const url = withUrls ? canonicalYoutubeVideoUrl(best.element.url) : null
+    const played = url
+      ? await playVideo(ctx, device, url, best.title || query)
+      : await clickVideo(ctx, device, best.element.ref, best.title || query)
+    return result(played.text, played.status === 'failed' || played.status === 'offline' ? 0 : 1)
   }
 
   // CONFIRM: el usuario elige en el chat; los ref siguen valiendo mientras nadie lea otra página.
@@ -699,6 +723,7 @@ async function playMusic(
       type: c.type,
       ref: c.element.ref,
       label: c.label,
+      url: withUrls ? canonicalYoutubeVideoUrl(c.element.url) : null,
     })),
   }
   const count = candidates.length
@@ -713,7 +738,107 @@ async function playMusic(
 
 export const MUSIC_SELECTION_TTL_MS = 10 * 60 * 1000
 
-export type MusicPlaybackStatus = 'playing' | 'unverified' | 'failed' | 'offline'
+/**
+ * `playing`: reproducción confirmada por el agente (con la ventana minimizada si se pidió).
+ * `partial`: suena, pero la ventana no se pudo minimizar. `unverified`: agente anterior, se pulsó
+ * el vídeo pero no se pudo comprobar que se abriera.
+ */
+export type MusicPlaybackStatus = 'playing' | 'partial' | 'unverified' | 'failed' | 'offline'
+
+/** Lo que se informa del progreso de una reproducción (pasos verificados del agente o del Server). */
+export interface MusicPlaybackProgress {
+  state: MusicPlaybackState
+  stage?: LumiDesktopStage
+}
+
+export interface MusicPlaybackOutcome {
+  status: MusicPlaybackStatus
+  /** Estado final de la máquina de estados; null en el flujo anterior (pulsar el `ref`). */
+  state: MusicPlaybackState | null
+  text: string
+}
+
+/** Tope de `browser.media.play`: abrir el navegador, cargar el vídeo y comprobar que avanza. */
+const MEDIA_PLAY_TIMEOUT_MS = 60_000
+
+function supportsMediaPlay(device: LumiDesktopDevice): boolean {
+  return device.operations.includes('browser.media.play')
+}
+
+const PLAYBACK_FAILURE: Partial<Record<MusicPlaybackState, string>> = {
+  BROWSER_UNAVAILABLE: 'no pude abrir el navegador de Lumia',
+  TAB_UNAVAILABLE: 'no pude preparar una pestaña del navegador',
+  NAVIGATION_FAILED: 'la página del vídeo no se abrió',
+  VIDEO_UNAVAILABLE: 'YouTube indica que el vídeo no está disponible',
+  PLAYBACK_BLOCKED: 'el navegador bloqueó la reproducción automática; pulsa reproducir en el equipo',
+  PLAYBACK_FAILED: 'el vídeo se abrió pero no empezó a reproducirse',
+  EXECUTION_TIMEOUT: 'el equipo no terminó a tiempo',
+}
+
+/**
+ * Pone el vídeo ya elegido (URL validada por el Server) con `browser.media.play`: el agente elige
+ * la pestaña de Lumia, navega, confirma que el vídeo avanza y minimiza la ventana. Cada paso llega
+ * por `onProgress` y la máquina de estados descarta transiciones inválidas. Solo «playing» y
+ * «partial» afirman que suena, porque el agente lo comprobó.
+ */
+async function playVideo(
+  ctx: LumiToolContext,
+  device: LumiDesktopDevice,
+  url: string,
+  name: string,
+  onProgress?: (progress: MusicPlaybackProgress) => void,
+): Promise<MusicPlaybackOutcome> {
+  const machine = new MusicPlaybackMachine()
+  const report = (state: MusicPlaybackState, stage?: LumiDesktopStage) => {
+    if (machine.advance(state)) onProgress?.({ state, ...(stage ? { stage } : {}) })
+  }
+  report('VALIDATED')
+  const shown = clean(name, 90) ?? 'el vídeo'
+  const outcome = await ctx.deps.desktop!.execute({
+    userId: ctx.userId,
+    permissionKeys: ctx.permissionKeys,
+    deviceId: device.id,
+    operation: 'browser.media.play',
+    args: { url },
+    timeoutMs: MEDIA_PLAY_TIMEOUT_MS,
+    onStage: (stage) => report(STAGE_STATE[stage], stage),
+  })
+
+  const final = String(outcome.result?.state ?? '')
+  if (outcome.status === 'completed' && (final === 'COMPLETED' || final === 'MINIMIZE_FAILED' || final === 'PLAYING')) {
+    // El resultado final confirma pasos que quizá no llegaron (p. ej. tras una reconexión).
+    report('PLAYING')
+    const muted = (outcome.result?.playback as { muted?: unknown } | undefined)?.muted === true
+    const mutedNote = muted ? ' El reproductor está silenciado en el equipo.' : ''
+    if (final === 'MINIMIZE_FAILED') {
+      report('MINIMIZE_FAILED')
+      return {
+        status: 'partial',
+        state: 'MINIMIZE_FAILED',
+        text: `«${shown}» se está reproduciendo en «${device.name}», pero no pude minimizar el navegador.${mutedNote}`,
+      }
+    }
+    if (final === 'COMPLETED') {
+      report('MINIMIZING')
+      report('COMPLETED')
+    }
+    return {
+      status: 'playing',
+      state: machine.state,
+      text:
+        final === 'COMPLETED'
+          ? `«${shown}» se está reproduciendo en «${device.name}» y minimicé el navegador.${mutedNote}`
+          : `«${shown}» se está reproduciendo en «${device.name}».${mutedNote}`,
+    }
+  }
+
+  const code = outcome.error?.code ?? null
+  const state = errorState(code)
+  report(state)
+  const offline = code === 'DEVICE_OFFLINE' || code === 'DEVICE_DISCONNECTED'
+  const reason = offline ? `«${device.name}» no está conectado` : (PLAYBACK_FAILURE[state] ?? failureText(outcome))
+  return { status: offline ? 'offline' : 'failed', state, text: `No pude poner «${shown}»: ${reason}.` }
+}
 
 /**
  * Pulsa un vídeo de los resultados y comprueba con la URL que devuelve el agente que el navegador
@@ -757,33 +882,55 @@ export async function playMusicSelection(
   ctx: LumiToolContext,
   selection: LumiMusicSelection,
   candidateId: string,
-): Promise<{ status: MusicPlaybackStatus; text: string }> {
+  onProgress?: (progress: MusicPlaybackProgress) => void,
+): Promise<MusicPlaybackOutcome> {
   const candidate = selection.candidates.find((c) => c.id === candidateId)
-  if (!candidate) return { status: 'failed', text: 'Ese vídeo no es de esta búsqueda; no hice nada.' }
-  if (!ctx.deps.desktop) return { status: 'failed', text: NO_PORT_TEXT }
+  if (!candidate) {
+    return { status: 'failed', state: null, text: 'Ese vídeo no es de esta búsqueda; no hice nada.' }
+  }
+  if (!ctx.deps.desktop) return { status: 'failed', state: null, text: NO_PORT_TEXT }
 
   const devices = await ctx.deps.desktop.devices(ctx.userId)
   const device = devices.find((d) => d.id === selection.deviceId)
   if (!device || !device.online) {
-    return { status: 'offline', text: `«${selection.deviceName}» no está conectado; no hice nada.` }
+    return {
+      status: 'offline',
+      state: 'BROWSER_UNAVAILABLE',
+      text: `«${selection.deviceName}» no está conectado; no hice nada.`,
+    }
   }
   if (device.paused) {
-    return { status: 'offline', text: `La ejecución está en pausa en «${selection.deviceName}»; no hice nada.` }
+    return {
+      status: 'offline',
+      state: 'BROWSER_UNAVAILABLE',
+      text: `La ejecución está en pausa en «${selection.deviceName}»; no hice nada.`,
+    }
+  }
+
+  // El vídeo exacto que eligió el usuario: su URL se validó al guardar la búsqueda y se vuelve a
+  // validar aquí. Nunca se busca de nuevo ni se elige otro resultado.
+  const url = canonicalYoutubeVideoUrl(candidate.url)
+  if (url && supportsMediaPlay(device)) {
+    return playVideo(ctx, device, url, candidate.title, onProgress)
   }
 
   const first = await clickVideo(ctx, device, candidate.ref, candidate.title)
   if (first.status !== 'failed' || !STALE_CODES.has(first.outcome.error?.code ?? '')) {
-    return { status: first.status, text: first.text }
+    return { status: first.status, state: null, text: first.text }
   }
 
   const opened = await execute(ctx, device, 'browser.navigate', { url: youtubeSearchUrl(selection.query) })
   if (!ok(opened) || hostOf(opened.result?.url) !== YOUTUBE_HOST) {
-    return { status: 'failed', text: ok(opened) ? 'YouTube no se abrió en el equipo; no pulsé nada.' : failureText(opened) }
+    return {
+      status: 'failed',
+      state: null,
+      text: ok(opened) ? 'YouTube no se abrió en el equipo; no pulsé nada.' : failureText(opened),
+    }
   }
   const snap = await execute(ctx, device, 'browser.snapshot', { interactive: true })
-  if (!ok(snap)) return { status: 'failed', text: failureText(snap) }
+  if (!ok(snap)) return { status: 'failed', state: null, text: failureText(snap) }
   if (hostOf(snap.result?.url) !== YOUTUBE_HOST) {
-    return { status: 'failed', text: `La página de «${device.name}» ya no es de YouTube; no pulsé nada.` }
+    return { status: 'failed', state: null, text: `La página de «${device.name}» ya no es de YouTube; no pulsé nada.` }
   }
   const again = pageElements(snap.result).find(
     (el) => el.role === 'link' && el.name.replace(/\s+/g, ' ').trim() === candidate.label,
@@ -791,11 +938,12 @@ export async function playMusicSelection(
   if (!again) {
     return {
       status: 'failed',
+      state: null,
       text: `«${clean(candidate.title, 90) ?? 'Ese vídeo'}» ya no aparece en la búsqueda de YouTube; no pulsé otro. Vuelve a pedir la canción.`,
     }
   }
   const second = await clickVideo(ctx, device, again.ref, candidate.title)
-  return { status: second.status, text: second.text }
+  return { status: second.status, state: null, text: second.text }
 }
 
 /**

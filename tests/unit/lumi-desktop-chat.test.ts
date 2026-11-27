@@ -34,6 +34,7 @@ import type {
   LumiDesktopDevice,
   LumiDesktopOutcome,
   LumiDesktopPort,
+  LumiDesktopStage,
   LumiToolContext,
   LumiToolDeps,
 } from '../../src/modules/lumi/tools/tool.types.js'
@@ -190,6 +191,11 @@ interface FakeState {
   clickUrl?: string
   /** El próximo click falla con ELEMENT_STALE (otra lectura de la página invalidó los ref). */
   staleOnce?: boolean
+  /** Respuesta de `browser.media.play`: pasos que informa el agente y su resultado. */
+  media?: {
+    stages: LumiDesktopStage[]
+    outcome: LumiDesktopOutcome
+  }
 }
 
 function fakePort(state: FakeState) {
@@ -197,9 +203,18 @@ function fakePort(state: FakeState) {
   const pending = new MemoryPendingActions()
   const port: LumiDesktopPort = {
     devices: async () => state.devices,
-    async execute({ operation, args }): Promise<LumiDesktopOutcome> {
+    async execute({ operation, args, onStage }): Promise<LumiDesktopOutcome> {
       state.executed.push({ operation, args })
       switch (operation) {
+        case 'browser.media.play':
+          for (const stage of state.media?.stages ?? []) onStage?.(stage)
+          return (
+            state.media?.outcome ?? {
+              status: 'failed',
+              result: null,
+              error: { code: 'ENGINE_ERROR', message: 'x' },
+            }
+          )
         case 'browser.navigate':
           return {
             status: 'completed',
@@ -910,7 +925,11 @@ describe('equipo en Lumi Chat: elegir el vídeo en el chat', () => {
     state.devices = [{ ...state.devices[0]!, online: false }]
     state.executed.length = 0
     const played = await playMusicSelection(ctx, done.musicSelection!, done.musicSelection!.candidates[0]!.id)
-    expect(played).toEqual({ status: 'offline', text: '«PC de Diego» no está conectado; no hice nada.' })
+    expect(played).toEqual({
+      status: 'offline',
+      state: 'BROWSER_UNAVAILABLE',
+      text: '«PC de Diego» no está conectado; no hice nada.',
+    })
     expect(state.executed).toHaveLength(0)
   })
 
@@ -959,5 +978,189 @@ describe('búsquedas de música pendientes (sin Redis)', () => {
     expect(await store.lock('q')).toBe(false)
     await store.unlock('q')
     expect(await store.lock('q')).toBe(true)
+  })
+})
+
+/* ──────────────── Reproducción por URL con el agente nuevo (browser.media.play) ──────────────── */
+
+const MEDIA_OPS = [...OPS, 'browser.media.play']
+const OFFICIAL = 'https://www.youtube.com/watch?v=aaaaaaaaaaa'
+
+/** Resultados de Paramore con el destino de cada enlace (snapshot con `urls`). */
+const PARAMORE_WITH_URLS = {
+  url: PARAMORE_PAGE.url,
+  refs: {
+    ...PARAMORE_PAGE.refs,
+    e4: { ...PARAMORE_PAGE.refs.e4!, url: `${OFFICIAL}&list=RDx&pp=ygU` },
+    e5: { ...PARAMORE_PAGE.refs.e5!, url: 'https://www.youtube.com/watch?v=bbbbbbbbbbb' },
+    // Un enlace que no apunta a YouTube nunca se reproduce por URL.
+    e6: { ...PARAMORE_PAGE.refs.e6!, url: 'https://evil.example/watch?v=ccccccccccc' },
+  },
+}
+
+const ALL_STAGES: LumiDesktopStage[] = [
+  'browser.ready',
+  'tab.reused',
+  'navigation.started',
+  'navigation.completed',
+  'playback.started',
+  'browser.minimizing',
+  'browser.minimized',
+]
+
+function played(state: string, extra: Record<string, unknown> = {}): LumiDesktopOutcome {
+  return { status: 'completed', result: { state, playback: { muted: false }, ...extra }, error: null }
+}
+
+describe('equipo en Lumi Chat: reproducción por URL y minimizado (browser.media.play)', () => {
+  async function search(overrides: Partial<FakeState> = {}) {
+    const env = setup({
+      page: PARAMORE_WITH_URLS as FakeState['page'],
+      devices: [{ id: 'dev_1', name: 'PC de Diego', online: true, paused: false, operations: MEDIA_OPS }],
+      ...overrides,
+    })
+    const card = await env.run('device.play_music', { query: 'Conspiracy de Paramore' })
+    const done = (await resolveDesktopReply(env.ctx, 'Sí', card.confirmation!.id))!
+    const official = done.musicSelection!.candidates.find((c) => c.ref === 'e4')!
+    env.state.executed.length = 0
+    return { ...env, done, official }
+  }
+
+  it('pide los enlaces y guarda la URL canónica de cada candidato (solo de YouTube)', async () => {
+    const { done } = await search()
+    const byRef = Object.fromEntries(done.musicSelection!.candidates.map((c) => [c.ref, c.url]))
+    expect(byRef).toEqual({ e4: OFFICIAL, e5: 'https://www.youtube.com/watch?v=bbbbbbbbbbb', e6: null })
+  })
+
+  it('el snapshot pide `urls` solo a un agente que reproduce por URL', async () => {
+    const env = setup({ page: PARAMORE_WITH_URLS as FakeState['page'] })
+    const card = await env.run('device.play_music', { query: 'Conspiracy de Paramore' })
+    await resolveDesktopReply(env.ctx, 'Sí', card.confirmation!.id)
+    expect(env.state.executed.find((e) => e.operation === 'browser.snapshot')?.args).toEqual({ interactive: true })
+  })
+
+  it('la búsqueda se abre en segundo plano solo en un agente que reproduce por URL', async () => {
+    const { done } = await search()
+    expect(done.musicSelection).toBeDefined()
+    const modern = setup({
+      page: PARAMORE_WITH_URLS as FakeState['page'],
+      devices: [{ id: 'dev_1', name: 'PC de Diego', online: true, paused: false, operations: MEDIA_OPS }],
+    })
+    const card = await modern.run('device.play_music', { query: 'Conspiracy de Paramore' })
+    await resolveDesktopReply(modern.ctx, 'Sí', card.confirmation!.id)
+    expect(modern.state.executed[0]).toEqual({
+      operation: 'browser.navigate',
+      args: { url: youtubeSearchUrl('Conspiracy de Paramore'), background: true },
+    })
+    const legacy = setup({ page: PARAMORE_WITH_URLS as FakeState['page'] })
+    const legacyCard = await legacy.run('device.play_music', { query: 'Conspiracy de Paramore' })
+    await resolveDesktopReply(legacy.ctx, 'Sí', legacyCard.confirmation!.id)
+    expect(legacy.state.executed[0]?.args).toEqual({ url: youtubeSearchUrl('Conspiracy de Paramore') })
+  })
+
+  it('pone exactamente el vídeo elegido, sin pulsar ni buscar otra vez, y sigue cada estado', async () => {
+    const { state, ctx, done, official } = await search()
+    state.media = { stages: ALL_STAGES, outcome: played('COMPLETED') }
+    const progress: string[] = []
+    const out = await playMusicSelection(ctx, done.musicSelection!, official.id, (p) => progress.push(p.state))
+    expect(state.executed).toEqual([{ operation: 'browser.media.play', args: { url: OFFICIAL } }])
+    expect(progress).toEqual([
+      'VALIDATED',
+      'BROWSER_READY',
+      'TAB_READY',
+      'NAVIGATING',
+      'NAVIGATION_COMPLETED',
+      'PLAYING',
+      'MINIMIZING',
+      'COMPLETED',
+    ])
+    expect(out).toMatchObject({ status: 'playing', state: 'COMPLETED' })
+    expect(out.text).toMatch(/se está reproduciendo en «PC de Diego» y minimicé el navegador/)
+  })
+
+  it('si no se pudo minimizar, el resultado es parcial y no dice que se minimizó', async () => {
+    const { state, ctx, done, official } = await search()
+    state.media = {
+      stages: [...ALL_STAGES.slice(0, 6), 'browser.minimize_failed'],
+      outcome: played('MINIMIZE_FAILED'),
+    }
+    const progress: string[] = []
+    const out = await playMusicSelection(ctx, done.musicSelection!, official.id, (p) => progress.push(p.state))
+    expect(progress.at(-1)).toBe('MINIMIZE_FAILED')
+    expect(progress).not.toContain('COMPLETED')
+    expect(out).toMatchObject({ status: 'partial', state: 'MINIMIZE_FAILED' })
+    expect(out.text).toMatch(/se está reproduciendo.*pero no pude minimizar/)
+  })
+
+  it('pasos repetidos o fuera de orden no cambian la tarjeta', async () => {
+    const { state, ctx, done, official } = await search()
+    state.media = {
+      stages: ['browser.ready', 'browser.ready', 'playback.started', 'navigation.started', 'browser.minimized'],
+      outcome: played('COMPLETED'),
+    }
+    const progress: string[] = []
+    await playMusicSelection(ctx, done.musicSelection!, official.id, (p) => progress.push(p.state))
+    expect(progress).toEqual(['VALIDATED', 'BROWSER_READY', 'PLAYING', 'MINIMIZING', 'COMPLETED'])
+  })
+
+  it('sin pasos intermedios (reconexión), el resultado final confirma la reproducción', async () => {
+    const { state, ctx, done, official } = await search()
+    state.media = { stages: [], outcome: played('COMPLETED') }
+    const progress: string[] = []
+    const out = await playMusicSelection(ctx, done.musicSelection!, official.id, (p) => progress.push(p.state))
+    expect(progress).toEqual(['VALIDATED', 'PLAYING', 'MINIMIZING', 'COMPLETED'])
+    expect(out.status).toBe('playing')
+  })
+
+  it.each([
+    ['PLAYBACK_BLOCKED', 'PLAYBACK_BLOCKED', /bloqueó la reproducción automática/],
+    ['VIDEO_UNAVAILABLE', 'VIDEO_UNAVAILABLE', /no está disponible/],
+    ['NAVIGATION_FAILED', 'NAVIGATION_FAILED', /no se abrió/],
+    ['PLAYBACK_FAILED', 'PLAYBACK_FAILED', /no empezó a reproducirse/],
+    ['OPERATION_TIMEOUT', 'EXECUTION_TIMEOUT', /no terminó a tiempo/],
+    ['BROWSER_LAUNCH_FAILED', 'BROWSER_UNAVAILABLE', /no pude abrir el navegador/],
+  ])('un error %s termina en %s sin afirmar que suena', async (code, expected, text) => {
+    const { state, ctx, done, official } = await search()
+    state.media = {
+      stages: ['browser.ready', 'tab.reused', 'navigation.started'],
+      outcome: { status: 'failed', result: null, error: { code, message: 'x' } },
+    }
+    const progress: string[] = []
+    const out = await playMusicSelection(ctx, done.musicSelection!, official.id, (p) => progress.push(p.state))
+    expect(progress.at(-1)).toBe(expected)
+    expect(out).toMatchObject({ status: 'failed', state: expected })
+    expect(out.text).toMatch(text)
+    expect(out.text).not.toMatch(/se está reproduciendo/)
+  })
+
+  it('con el equipo desconectado durante la orden informa «offline»', async () => {
+    const { state, ctx, done, official } = await search()
+    state.media = {
+      stages: [],
+      outcome: { status: 'refused', result: null, error: { code: 'DEVICE_OFFLINE', message: 'x' } },
+    }
+    const out = await playMusicSelection(ctx, done.musicSelection!, official.id)
+    expect(out.status).toBe('offline')
+    expect(out.text).toMatch(/no está conectado/)
+  })
+
+  it('un candidato sin URL válida se pone con el flujo anterior (pulsar su enlace)', async () => {
+    const { state, ctx, done } = await search({ clickUrl: 'https://www.youtube.com/watch?v=ccccccccccc' })
+    const foreign = done.musicSelection!.candidates.find((c) => c.ref === 'e6')!
+    const out = await playMusicSelection(ctx, done.musicSelection!, foreign.id)
+    expect(state.executed).toEqual([{ operation: 'browser.click', args: { ref: 'e6' } }])
+    expect(out.state).toBeNull()
+  })
+
+  it('una URL manipulada en la búsqueda guardada no llega al agente', async () => {
+    const { state, ctx, done, official } = await search({ clickUrl: 'https://www.youtube.com/watch?v=aaaaaaaaaaa' })
+    const tampered = {
+      ...done.musicSelection!,
+      candidates: done.musicSelection!.candidates.map((c) =>
+        c.id === official.id ? { ...c, url: 'https://evil.example/watch?v=aaaaaaaaaaa' } : c,
+      ),
+    }
+    await playMusicSelection(ctx, tampered, official.id)
+    expect(state.executed.map((e) => e.operation)).toEqual(['browser.click'])
   })
 })

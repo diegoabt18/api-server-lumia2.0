@@ -109,7 +109,27 @@ export type TaskState = (typeof TASK_STATES)[number]
 export const TASK_OUTCOMES = ['completed', 'unverified', 'failed', 'rejected', 'cancelled'] as const
 export type TaskOutcome = (typeof TASK_OUTCOMES)[number]
 
-export const taskStatePayloadSchema = z.object({ state: z.enum(TASK_STATES) })
+/**
+ * Pasos verificados de una operación de varios pasos (`browser.media.play`), enviados como
+ * `task.state` `running` con `stage`. Un agente anterior no los envía.
+ */
+export const TASK_STAGES = [
+  'browser.ready',
+  'tab.reused',
+  'tab.created',
+  'navigation.started',
+  'navigation.completed',
+  'playback.started',
+  'browser.minimizing',
+  'browser.minimized',
+  'browser.minimize_failed',
+] as const
+export type TaskStage = (typeof TASK_STAGES)[number]
+
+export const taskStatePayloadSchema = z.object({
+  state: z.enum(TASK_STATES),
+  stage: z.enum(TASK_STAGES).optional(),
+})
 
 const taskErrorSchema = z.object({
   code: z.string().min(1).max(64),

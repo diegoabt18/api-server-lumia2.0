@@ -625,6 +625,9 @@ describe('desktop agent: contrato compartido con lumia-desktop-agent', () => {
         true,
       )
       expect(taskStatePayloadSchema.safeParse(read('task.state.json')).success).toBe(true)
+      expect(taskStatePayloadSchema.safeParse(read('task.state.stage.json')).data?.stage).toBe(
+        'playback.started',
+      )
       expect(taskResultPayloadSchema.safeParse(read('task.result.json')).success).toBe(true)
       expect(transferOpenPayloadSchema.safeParse(read('transfer.open.json')).success).toBe(true)
       expect(transferDataPayloadSchema.safeParse(read('transfer.data.json')).success).toBe(true)

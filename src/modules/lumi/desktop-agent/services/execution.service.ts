@@ -16,6 +16,7 @@ import {
   taskStatePayloadSchema,
   type Envelope,
   type TaskError,
+  type TaskStage,
 } from '../domain/protocol.js'
 import type { DesktopDeviceStore } from '../infrastructure/desktop-device.repository.js'
 import {
@@ -62,6 +63,8 @@ export interface DispatchInput {
   onStarted?: (executionId: string) => void
   /** Mensajes `transfer.*` del agente para esta tarea (solo operaciones con transferencia). */
   onTransfer?: (type: string, payload: Record<string, unknown>) => void
+  /** Pasos verificados que el agente informa de esta tarea (solo los de este despacho). */
+  onStage?: (stage: TaskStage) => void
 }
 
 export interface DispatchOutcome {
@@ -118,6 +121,8 @@ export class DesktopExecutionService {
     string,
     { deviceId: string; listener: (type: string, payload: Record<string, unknown>) => void }
   >()
+  /** Receptor de los pasos de cada tarea en curso: solo el despacho que la originó los recibe. */
+  private readonly stageListeners = new Map<string, (stage: TaskStage) => void>()
 
   constructor(private readonly deps: ExecutionServiceDeps) {
     this.now = deps.now ?? (() => new Date())
@@ -216,6 +221,7 @@ export class DesktopExecutionService {
         })
       }, timeoutMs + WATCHDOG_GRACE_MS),
     )
+    if (input.onStage) this.stageListeners.set(execution.id, input.onStage)
     if (transfer && input.onTransfer) {
       this.transfers.set(execution.id, { deviceId: device.id, listener: input.onTransfer })
     }
@@ -259,10 +265,19 @@ export class DesktopExecutionService {
       const parsed = taskStatePayloadSchema.safeParse(envelope.payload)
       if (!parsed.success) return
       this.undelivered.delete(taskId)
-      await this.deps.executions.updateIfOpen(taskId, {
+      const open = await this.deps.executions.updateIfOpen(taskId, {
         status: parsed.data.state,
         updatedAt: this.now(),
       })
+      // Un paso de una tarea ya cerrada (o de otro despacho) no llega a nadie.
+      const stage = parsed.data.stage
+      if (stage && open) {
+        try {
+          this.stageListeners.get(taskId)?.(stage)
+        } catch (error) {
+          this.deps.log?.warn({ taskId, stage, error: String(error) }, 'Stage listener failed')
+        }
+      }
       return
     }
 
@@ -375,6 +390,7 @@ export class DesktopExecutionService {
     this.watchdogs.clear()
     for (const resolve of this.waiters.values()) resolve(null)
     this.waiters.clear()
+    this.stageListeners.clear()
   }
 
   private ack(deviceId: string, taskId: string) {
@@ -392,6 +408,7 @@ export class DesktopExecutionService {
     result: unknown = null,
   ): Promise<void> {
     this.transfers.delete(taskId)
+    this.stageListeners.delete(taskId)
     const now = this.now()
     const current = await this.deps.executions.findById(taskId)
     const updated = await this.deps.executions.updateIfOpen(taskId, {

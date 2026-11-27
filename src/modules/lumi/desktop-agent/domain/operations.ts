@@ -30,6 +30,32 @@ const httpUrl = z
 
 const empty = z.object({}).strict()
 
+const YOUTUBE_HOSTS = new Set(['www.youtube.com', 'youtube.com', 'm.youtube.com'])
+const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/
+
+/**
+ * `https://www.youtube.com/watch?v=<id>` en forma canónica (sin lista, `pp` ni seguimiento), o null.
+ * Misma regla que `validate_media_url` del agente (crates/engine-browser/src/operations.rs).
+ */
+export function canonicalYoutubeVideoUrl(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw.length > 2048) return null
+  let url: URL
+  try {
+    url = new URL(raw.trim())
+  } catch {
+    return null
+  }
+  if (url.protocol !== 'https:' || !YOUTUBE_HOSTS.has(url.hostname) || url.port) return null
+  if (url.username || url.password || url.pathname !== '/watch') return null
+  const id = url.searchParams.get('v')
+  return id && VIDEO_ID.test(id) ? `https://www.youtube.com/watch?v=${id}` : null
+}
+
+const youtubeVideoUrl = z
+  .string()
+  .max(2048)
+  .refine((v) => canonicalYoutubeVideoUrl(v) === v, 'expected https://www.youtube.com/watch?v=<id>')
+
 /** Ref de un snapshot de escritorio: `@<snapshot>:e<n>`. */
 const desktopRef = z
   .string()
@@ -140,15 +166,19 @@ export const DESKTOP_OPERATIONS: Record<string, DesktopOperation> = {
   'browser.discover': { permission: READ, args: empty, summarize: () => ({}) },
   'browser.snapshot': {
     permission: READ,
-    args: z.object({ interactive: z.boolean().optional() }).strict(),
-    summarize: (a) => ({ interactive: a.interactive ?? true }),
+    args: z.object({ interactive: z.boolean().optional(), urls: z.boolean().optional() }).strict(),
+    summarize: (a) => ({ interactive: a.interactive ?? true, urls: a.urls ?? false }),
   },
   'browser.tabs.list': { permission: READ, args: empty, summarize: () => ({}) },
   'browser.navigate': {
     permission: CONTROL,
-    args: z.object({ url: httpUrl }).strict(),
+    /**
+     * `background`: no restaura una ventana minimizada (ni le da el foco); para páginas que solo
+     * lee Lumi, como la búsqueda de música. Solo lo aceptan agentes con `browser.media.play`.
+     */
+    args: z.object({ url: httpUrl, background: z.boolean().optional() }).strict(),
     // Solo el origen: la ruta o la query pueden llevar datos personales o tokens.
-    summarize: (a) => ({ origin: originOf(a.url) }),
+    summarize: (a) => ({ origin: originOf(a.url), background: a.background ?? false }),
   },
   'browser.click': {
     permission: CONTROL,
@@ -171,6 +201,18 @@ export const DESKTOP_OPERATIONS: Record<string, DesktopOperation> = {
     summarize: (a) => ({ direction: a.direction, pixels: a.pixels ?? 600 }),
   },
   'browser.close_session': { permission: CONTROL, args: empty, summarize: () => ({}) },
+  /**
+   * Pone un vídeo de YouTube ya elegido por el usuario en la pestaña de Lumia del perfil aislado,
+   * confirma que avanza y minimiza la ventana. No busca ni elige otro vídeo.
+   */
+  'browser.media.play': {
+    permission: CONTROL,
+    args: z.object({ url: youtubeVideoUrl, minimize: z.boolean().optional() }).strict(),
+    summarize: (a) => ({
+      video: new URL(String(a.url)).searchParams.get('v'),
+      minimize: a.minimize ?? true,
+    }),
+  },
 
   'desktop.status': { permission: APPS_READ, args: empty, summarize: () => ({}) },
   'desktop.list_applications': { permission: APPS_READ, args: empty, summarize: () => ({}) },

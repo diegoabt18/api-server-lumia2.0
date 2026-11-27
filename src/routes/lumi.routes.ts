@@ -12,6 +12,7 @@ import {
   type LumiStreamEvent,
 } from '../modules/lumi/infrastructure/lumi-assistant.client.js'
 import { MusicCandidatesStore } from '../modules/lumi/music/candidates-store.js'
+import { selectMusicCandidate } from '../modules/lumi/music/music-selection.js'
 import { type LumiMode, resolveLumiModes } from '../modules/lumi/services/lumi-intent-router.js'
 import { DEFAULT_AUTOMATION_TIMEZONE } from '../modules/lumi/automation/domain/schedule.js'
 import { capabilitiesFor, runTool, type ToolMatch } from '../modules/lumi/tools/catalog.js'
@@ -81,7 +82,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
   /** Búsquedas de música esperando la elección del usuario (Redis, o memoria sin Redis). */
   const musicCandidatesStore = new MusicCandidatesStore(ctx.redis.getClient() ?? null)
 
-  /** Evento del chat con los candidatos: sin `ref` ni `label`, que solo usa el Server. */
+  /** Evento del chat con los candidatos: sin `ref`, `label` ni `url`, que solo usa el Server. */
   const musicCandidatesEvent = (
     selection: LumiMusicSelection,
     conversationId: string,
@@ -90,9 +91,16 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     conversationId,
     queryId: selection.queryId,
     query: selection.query,
-    candidates: selection.candidates.map(({ ref: _ref, label: _label, ...candidate }) => candidate),
+    deviceId: selection.deviceId,
+    candidates: selection.candidates.map(({ ref: _ref, label: _label, url: _url, ...candidate }) => candidate),
     expiresAt: selection.expiresAt,
   })
+
+  /** La tarjeta queda ligada a la conversación ya guardada; otra conversación no puede usarla. */
+  const bindMusicSelection = (request: FastifyRequest, selection: LumiMusicSelection, conversationId: string) =>
+    musicCandidatesStore
+      .attachConversation(userIdOf(request), selection.queryId, conversationId)
+      .catch((err) => request.log.warn({ err }, 'Lumi music selection not bound to its conversation'))
 
   const requireClient = (): LumiAssistantClient => {
     if (!client)
@@ -212,7 +220,10 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
         .catch((err) => request.log.warn({ err }, 'Lumi active entity not saved'))
     }
     // Los candidatos van con el id real de la conversación, ya guardada.
-    if (musicSelection) yield musicCandidatesEvent(musicSelection, saved.conversationId)
+    if (musicSelection) {
+      await bindMusicSelection(request, musicSelection, saved.conversationId)
+      yield musicCandidatesEvent(musicSelection, saved.conversationId)
+    }
     yield { type: 'token', text }
     if (references.length) yield { type: 'references', references }
     yield { type: 'done', conversationId: saved.conversationId }
@@ -455,36 +466,74 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     }
   }
 
-  /**
-   * Vídeo elegido en la tarjeta de candidatos. Responde cuando el agente informa el resultado: solo
-   * «playing» afirma que el navegador quedó en el vídeo. Una búsqueda caducada, de otro usuario o
-   * inexistente es «expired»; con otra reproducción de la misma búsqueda en curso, «busy».
-   */
+  const musicSelectionDeps = { store: musicCandidatesStore, play: playMusicSelection }
+
+  const parseMusicSelection = (request: FastifyRequest) => {
+    const params = lumiMusicSelectionParamsSchema.safeParse(request.params)
+    if (!params.success) throw AppError.badRequest('Invalid input', params.error.flatten())
+    const body = lumiMusicSelectionBodySchema.safeParse(request.body)
+    if (!body.success) throw AppError.badRequest('Invalid input', body.error.flatten())
+    return { queryId: params.data.queryId, body: body.data }
+  }
+
+  /** Respuesta única cuando el agente informa el resultado (clientes sin streaming). */
   api.post(
     '/admin/lumi/music/selection/:queryId',
     { preHandler: g(PERMISSION_REGISTRY.LUMI_USE) },
     async (request) => {
-      const params = lumiMusicSelectionParamsSchema.safeParse(request.params)
-      if (!params.success) throw AppError.badRequest('Invalid input', params.error.flatten())
-      const body = lumiMusicSelectionBodySchema.safeParse(request.body)
-      if (!body.success) throw AppError.badRequest('Invalid input', body.error.flatten())
+      const { queryId, body } = parseMusicSelection(request)
+      return selectMusicCandidate(musicSelectionDeps, toolContext(request), { queryId, ...body })
+    },
+  )
 
-      const { queryId } = params.data
-      const selection = await musicCandidatesStore.retrieve(userIdOf(request), queryId)
-      if (!selection) {
-        return { status: 'expired', message: 'Esta búsqueda ya caducó. Vuelve a pedir la canción.' }
+  /**
+   * La misma selección en SSE: `music_playback` por cada estado verificado y `music_playback_result`
+   * al final. Los eventos viajan en la respuesta de la petición que originó la reproducción, así que
+   * no pueden llegar a otra tarjeta. Si el navegador se desconecta, la reproducción sigue en el equipo.
+   */
+  api.post(
+    '/admin/lumi/music/selection/:queryId/stream',
+    { preHandler: g(PERMISSION_REGISTRY.LUMI_USE) },
+    async (request, reply) => {
+      const { queryId, body } = parseMusicSelection(request)
+      reply.hijack()
+      reply.raw.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      })
+      const send = (type: string, payload: object) => {
+        if (reply.raw.destroyed || reply.raw.writableEnded) return
+        reply.raw.write(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`)
       }
-      if (!selection.candidates.some((c) => c.id === body.data.candidateId)) {
-        return { status: 'failed', message: 'Ese vídeo no es de esta búsqueda; no hice nada.' }
-      }
-      if (!(await musicCandidatesStore.lock(queryId))) {
-        return { status: 'busy', message: 'Ya estoy poniendo un vídeo de esta búsqueda; espera a que termine.' }
-      }
+      const keepAlive = setInterval(() => {
+        if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.write(': ping\n\n')
+      }, 15_000)
       try {
-        const played = await playMusicSelection(toolContext(request), selection, body.data.candidateId)
-        return { status: played.status, message: played.text }
+        const result = await selectMusicCandidate(
+          musicSelectionDeps,
+          toolContext(request),
+          { queryId, ...body },
+          (event) => send('music_playback', event),
+        )
+        send('music_playback_result', result)
+      } catch (err) {
+        request.log.error({ err, queryId }, 'Lumi music selection failed')
+        send('music_playback_result', {
+          queryId,
+          candidateId: body.candidateId,
+          conversationId: body.conversationId ?? null,
+          messageId: body.messageId ?? null,
+          deviceId: null,
+          replayed: false,
+          status: 'failed',
+          state: null,
+          message: 'No pude poner el vídeo por un error del servidor.',
+        })
       } finally {
-        await musicCandidatesStore.unlock(queryId)
+        clearInterval(keepAlive)
+        reply.raw.end()
       }
     },
   )
@@ -600,6 +649,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
         const selection = automated?.musicSelection
         if (selection) {
           await musicCandidatesStore.store(userIdOf(request), selection)
+          await bindMusicSelection(request, selection, conversationId)
           const { type, ...payload } = musicCandidatesEvent(selection, conversationId)
           reply.raw.write(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`)
         }
