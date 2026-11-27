@@ -82,8 +82,9 @@ const selectResult = (
 })
 
 describe('selección en dos niveles', () => {
-  it('con todo, el catálogo plano ya no cabe en un menú, pero lo enviado siempre sí', () => {
-    expect(selectorCatalog(undefined, ALL).tools.length).toBeGreaterThan(SELECTOR_MAX_TOOLS)
+  // Sin las 20 herramientas `music.*` (retiradas en 1cb2c97) el catálogo completo cabe en un menú.
+  it('con todo, el catálogo cabe en un menú y lo enviado nunca supera el máximo', () => {
+    expect(selectorCatalog(undefined, ALL).tools.length).toBeLessThanOrEqual(SELECTOR_MAX_TOOLS)
     for (const message of [
       'hola',
       'pon una canción de Soda Stereo',
@@ -97,33 +98,23 @@ describe('selección en dos niveles', () => {
   })
 
   it('las palabras clave de un solo grupo envían solo sus herramientas (y las delegaciones)', () => {
-    const music = routeSelectorMenu('pon una canción de Soda Stereo', undefined, ALL)
-    expect(music.mode).toBe('grouped')
-    expect(
-      music.menu.tools.every(
-        (t) =>
-          t.name.startsWith('music.') ||
-          ['reminders.create', 'time.now', 'weather.get', 'web.research'].includes(t.name),
-      ),
-    ).toBe(true)
-    expect(music.menu.modules).toEqual(['musica'])
-
     const device = routeSelectorMenu('pulsa el botón Enviar en la página', undefined, ALL)
     expect(device.mode).toBe('grouped')
-    expect(device.menu.tools.filter((t) => t.name.startsWith('device.'))).toHaveLength(10)
+    expect(device.menu.tools.filter((t) => t.name.startsWith('device.'))).toHaveLength(
+      LUMI_TOOLS.filter((t) => t.name.startsWith('device.')).length,
+    )
     expect(
       device.menu.tools.some((t) => t.name.startsWith('music.') || t.name.startsWith('orders.')),
     ).toBe(false)
   })
 
-  it('sin palabras clave y con todo: menú mixto con la tienda y una entrada por grupo externo', () => {
+  // El menú mixto (tienda + una entrada por grupo) solo se usa si el catálogo supera el máximo, lo
+  // que ya no ocurre: mientras quepa, la pregunta de la tienda ve el catálogo completo.
+  it('sin palabras clave y con todo: mientras el catálogo cabe, el menú es el completo', () => {
     const routed = routeSelectorMenu('¿cuánto vendimos hoy?', undefined, ALL)
-    expect(routed.mode).toBe('mixed')
-    const names = routed.menu.tools.map((t) => t.name)
-    expect(names).toContain('sales.summary')
-    expect(names).toContain('grupo.musica')
-    expect(names).toContain('grupo.equipo')
-    expect(names.some((n) => n.startsWith('music.') || n.startsWith('device.'))).toBe(false)
+    expect(routed.mode).toBe('flat')
+    expect(routed.menu).toEqual(selectorCatalog(undefined, ALL))
+    expect(routed.menu.tools.map((t) => t.name)).toContain('sales.summary')
   })
 
   it('un usuario sin permisos de equipo ni de música conserva el menú de siempre', () => {
@@ -133,13 +124,11 @@ describe('selección en dos niveles', () => {
     expect(routed.menu).toEqual(selectorCatalog(undefined, keys))
   })
 
-  it('si el modelo elige un grupo en el menú mixto, hay una segunda llamada solo con ese grupo', async () => {
+  it('sin grupo detectado hay una sola llamada al selector con el catálogo completo', async () => {
     const menus: string[][] = []
     const select = async (_u: string, payload: { tools: Array<{ name: string }> }) => {
       menus.push(payload.tools.map((t) => t.name))
-      return menus.length === 1
-        ? selectResult([{ tool: 'grupo.musica', args: {} }])
-        : selectResult([{ tool: 'music.current', args: {} }], 'tool', 'musica')
+      return selectResult([{ tool: 'notifications.unread', args: {} }], 'tool', 'notificaciones')
     }
     const { plan, trace } = await planLumiTurn(
       {
@@ -152,11 +141,10 @@ describe('selección en dos niveles', () => {
       },
       { select },
     )
-    expect(menus).toHaveLength(2)
-    expect(menus[1]!.every((n) => !n.startsWith('device.') && !n.startsWith('orders.'))).toBe(true)
+    expect(menus).toHaveLength(1)
+    expect(menus[0]).toEqual(selectorCatalog(undefined, ALL).tools.map((t) => t.name))
     expect(plan.kind).toBe('tools')
-    expect(trace.selector?.routing).toMatchObject({ mode: 'mixed', group: 'musica', calls: 2 })
-    expect(trace.selector?.latencyMs).toBe(20)
+    expect(trace.selector?.routing).toMatchObject({ mode: 'flat', calls: 1 })
   })
 
   it('en el caso habitual (tienda) sigue habiendo una sola llamada', async () => {
@@ -592,15 +580,12 @@ describe('equipo en Lumi Chat: reglas para órdenes claras (sin modelo)', () => 
     }
   })
 
-  it('«salta a la siguiente» y «ponme…» van directos al grupo de música', () => {
-    expect(routeSelectorMenu('Salta a la siguiente', undefined, ALL)).toMatchObject({
-      mode: 'grouped',
-      group: 'musica',
-    })
-    expect(routeSelectorMenu('Ponme algo de Soda Stereo', undefined, ALL)).toMatchObject({
-      mode: 'grouped',
-      group: 'musica',
-    })
+  // El grupo de música se quedó sin herramientas (las `music.*` se retiraron en 1cb2c97): sus palabras
+  // clave no deben desviar la pregunta a un grupo vacío; el selector ve el catálogo completo.
+  it('las palabras de música no desvían a un grupo sin herramientas', () => {
+    for (const message of ['Salta a la siguiente', 'Ponme algo de Soda Stereo', 'pon una canción de Soda Stereo']) {
+      expect(routeSelectorMenu(message, undefined, ALL).mode, message).toBe('flat')
+    }
   })
 })
 

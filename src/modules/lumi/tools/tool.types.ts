@@ -52,6 +52,7 @@ export type LumiToolName =
   | 'device.status'
   | 'device.open_page'
   | 'device.play_music'
+  | 'device.music_control'
   | 'device.read_page'
   | 'device.click_page'
   | 'device.type_page'

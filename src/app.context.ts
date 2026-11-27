@@ -132,6 +132,7 @@ import {
 import { LumiTaskManager } from './modules/lumi/automation/services/task-manager.service.js'
 import { AutomationCommands } from './modules/lumi/automation/services/automation-commands.js'
 import { NotificationStreamHub } from './modules/notifications/services/notification-stream.hub.js'
+import { RedisNotificationBus } from './modules/notifications/infrastructure/redis-notification-bus.js'
 import { createFollowUpHandler } from './modules/lumi/automation/services/reminder-handlers.js'
 import { MongoPendingActions } from './modules/lumi/actions/pending-action.js'
 import { type ActiveEntityStore, MongoActiveEntities } from './modules/lumi/selector/active-entity.js'
@@ -148,6 +149,10 @@ import { LumiKnowledgeRepository } from './modules/lumi/learning/infrastructure/
 import { LumiLearningService } from './modules/lumi/learning/services/learning.service.js'
 import { MongoTurnMetrics, type TurnMetricsStore } from './modules/lumi/metrics/turn-metrics.js'
 import { LumiAssistantClient } from './modules/lumi/infrastructure/lumi-assistant.client.js'
+import {
+  MongoConversationStore,
+  type ConversationStore,
+} from './modules/lumi/conversation/conversation.store.js'
 import { createLumiToolDeps } from './modules/lumi/tools/tool-adapters.js'
 import { DEFAULT_AUTOMATION_TIMEZONE } from './modules/lumi/automation/domain/schedule.js'
 import { RepositoryInitiativeSources } from './modules/lumi/initiatives/infrastructure/initiative-sources.js'
@@ -220,6 +225,8 @@ export interface AppContext {
     lumiTasks: LumiTaskManager
     lumiInitiatives: LumiInitiativeService
     lumiCommands: AutomationCommands
+    /** Historial de conversaciones de Lumi (MongoDB, compartido entre clientes). */
+    lumiConversations: ConversationStore
     /** Context Manager de Lumi: entidad activa por conversación (caduca sola). */
     lumiActiveEntities: ActiveEntityStore
     /** Capability Manager: peticiones que ninguna herramienta resuelve, agrupadas para el panel. */
@@ -611,7 +618,12 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
     .ensureIndexes()
     .catch((err) => logger.warn({ err }, 'lumi automation indexes skipped'))
   const lumiTasks = new LumiTaskManager(lumiAutomationRepo)
-  const notificationHub = new NotificationStreamHub()
+  // Con Redis (obligatorio en producción) las notificaciones en tiempo real llegan a todas las
+  // instancias; sin Redis, solo a las conexiones de este proceso.
+  const notificationHub = new NotificationStreamHub(
+    redisClient ? await RedisNotificationBus.create(redisClient, logger) : undefined,
+    (err) => logger.warn({ err }, 'notification stream bus publish failed'),
+  )
   const automationSink = new RepositoryNotificationSink(notifications, notificationHub)
   const automationWorker = new AutomationWorker(
     lumiAutomationRepo,
@@ -675,6 +687,11 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       if (changed.length) logger.info({ lumiToolSync: changed }, 'lumi tool registry synced')
     })
     .catch((err) => logger.warn({ err }, 'lumi tool registry sync skipped'))
+  // Conversaciones de Lumi en el Server (Lumi 2.0, Fase 1): la IA Assistant ya no guarda historial.
+  const lumiConversations = new MongoConversationStore(identityDb)
+  await lumiConversations
+    .ensureIndexes()
+    .catch((err) => logger.warn({ err }, 'lumi conversation indexes skipped'))
   const lumiCommands = new AutomationCommands(
     lumiTasks,
     lumiAutomationRepo,
@@ -810,6 +827,7 @@ export async function createAppContext(env: Env, logger: AppLogger): Promise<App
       lumiTasks,
       lumiInitiatives,
       lumiCommands,
+      lumiConversations,
       lumiActiveEntities,
       lumiCapabilities,
       lumiCapabilityTests,
@@ -883,6 +901,7 @@ export async function shutdownAppContext(ctx: AppContext): Promise<void> {
   ctx.initiatives.stop()
   ctx.securityMaintenance.stop()
   ctx.services.desktopAgent?.shutdown()
+  await ctx.services.notificationHub.close()
   await ctx.redis.close()
   await ctx.mongo.closeAll()
 }

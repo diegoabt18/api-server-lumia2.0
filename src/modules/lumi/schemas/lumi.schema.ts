@@ -4,6 +4,11 @@ import { lumiContextInputSchema } from '../services/lumi-context.js'
 export const lumiChatBodySchema = z.object({
   message: z.string().trim().min(1).max(4000),
   conversationId: z.string().uuid().optional(),
+  /** Id del mensaje en el cliente: un reintento con el mismo id no repite el turno ni lo duplica. */
+  clientMessageId: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{8,64}$/)
+    .optional(),
   context: lumiContextInputSchema.optional(),
   /** Búsqueda web (requiere lumi.web). Campo previo; `webMode` lo sustituye. */
   webSearch: z.boolean().optional(),

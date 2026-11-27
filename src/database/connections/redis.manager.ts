@@ -15,6 +15,8 @@ export class RedisManager {
 
   async connect(): Promise<RedisClient> {
     const env = getEnv()
+    // En producción Redis es obligatorio (ver assertProductionRequirements): sin él no se arranca.
+    const required = env.NODE_ENV === 'production'
     if (!env.REDIS_ENABLED || !env.REDIS_URL) {
       this.logger.warn('Redis disabled or REDIS_URL not set — running without cache/rate-limit store')
       return null
@@ -44,10 +46,13 @@ export class RedisManager {
       this.logger.info('Redis connected')
       return this.client
     } catch (err) {
-      this.logger.warn({ err }, 'Redis unavailable — degrading gracefully')
       client?.disconnect()
       this.client = null
       this.available = false
+      if (required) {
+        throw new Error('Redis is required in production and could not be reached', { cause: err })
+      }
+      this.logger.warn({ err }, 'Redis unavailable — degrading gracefully')
       return null
     }
   }

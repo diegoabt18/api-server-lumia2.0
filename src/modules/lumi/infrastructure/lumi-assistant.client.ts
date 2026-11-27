@@ -1,15 +1,7 @@
 import { z } from 'zod'
 import { AppError } from '../../../common/errors/app.error.js'
 import { parseLumiReferences, type LumiReference } from '../references/lumi-references.js'
-import type {
-  LumiMusicArgs,
-  LumiMusicCommandResult,
-  LumiMusicDiscovery,
-  LumiMusicReadResult,
-  LumiMusicState,
-  LumiMusicStateResult,
-  LumiMusicTrack,
-} from '../tools/tool.types.js'
+import type { LumiMusicState } from '../tools/tool.types.js'
 
 /**
  * Cliente backend-to-backend hacia ia-asistente (Local AI Assistant).
@@ -173,102 +165,6 @@ const selectUpstreamSchema = z.object({
   completion_tokens: z.number().int(),
 })
 
-/** Pista del asistente. La miniatura solo se acepta de YouTube (i.ytimg.com) y la URL, de youtube.com. */
-const musicTrackUpstreamSchema = z.object({
-  video_id: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
-  title: z.string().min(1).max(300),
-  artist: z.string().max(200).nullable().optional(),
-  album: z.string().max(300).nullable().optional(),
-  duration_seconds: z.number().int().nonnegative().nullable().optional(),
-  thumbnail_url: z.string().nullable().optional(),
-  url: z.string().nullable().optional(),
-})
-
-const musicStateUpstreamSchema = z.object({
-  status: z.enum(['idle', 'loading', 'playing', 'paused', 'stopped', 'error']),
-  generation: z.number().int(),
-  current: musicTrackUpstreamSchema.nullable(),
-  upcoming: z.array(musicTrackUpstreamSchema).max(100),
-  position_seconds: z.number().int().nonnegative(),
-  duration_seconds: z.number().int().nonnegative().nullable().optional(),
-  volume: z.number().int().min(0).max(100).optional(),
-  output: z.object({ mode: z.enum(['aux', 'bluetooth']), sink: z.string().nullable() }),
-  error: z.string().max(500).nullable(),
-  // Opcionales: un asistente anterior no los envía (se toman los valores por defecto).
-  shuffle: z.boolean().optional(),
-  repeat_mode: z.enum(['off', 'one', 'all']).optional(),
-  autoplay: z.boolean().optional(),
-  version: z.number().int().nonnegative().optional(),
-  updated_at: z.number().int().nonnegative().optional(),
-})
-
-const musicTracksUpstreamSchema = z.object({ tracks: z.array(musicTrackUpstreamSchema).max(100) })
-
-const musicDiscoveryUpstreamSchema = z.object({
-  seed: musicTrackUpstreamSchema.nullable(),
-  tracks: z.array(musicTrackUpstreamSchema).max(50),
-  artist_tracks: z.array(musicTrackUpstreamSchema).max(50),
-  artists: z.array(z.object({ name: z.string().min(1).max(200), tracks: z.number().int().nonnegative() })).max(20),
-})
-
-/** Referencia fija con la que el Server abre el canal de eventos del reproductor (compartido). */
-export const LUMI_MUSIC_HUB_USER_REF = 'lumia-music-hub'
-
-/** Respuesta de POST /music/commands: texto determinista y estado del reproductor. */
-const musicCommandUpstreamSchema = z.object({
-  ok: z.boolean(),
-  text: z.string().min(1).max(4000),
-  error: z.string().nullable().optional(),
-  // Se valida aparte (toMusicState): un estado con forma inesperada no impide mostrar el texto.
-  state: z.unknown().optional(),
-})
-
-const THUMBNAIL_RE = /^https:\/\/i\.ytimg\.com\/vi\/[A-Za-z0-9_-]{11}\/[a-z0-9_]+\.(?:jpg|webp)$/
-const WATCH_RE = /^https:\/\/www\.youtube\.com\/watch\?v=[A-Za-z0-9_-]{11}$/
-
-function toMusicTrack(raw: z.infer<typeof musicTrackUpstreamSchema>): LumiMusicTrack {
-  return {
-    videoId: raw.video_id,
-    title: raw.title,
-    artist: raw.artist ?? null,
-    album: raw.album ?? null,
-    durationSeconds: raw.duration_seconds ?? null,
-    // Lo que no tiene la forma esperada no llega al navegador.
-    thumbnailUrl: raw.thumbnail_url && THUMBNAIL_RE.test(raw.thumbnail_url) ? raw.thumbnail_url : null,
-    url: raw.url && WATCH_RE.test(raw.url) ? raw.url : null,
-    source: 'youtube',
-  }
-}
-
-/** Convierte el estado del asistente al del Server (sin el nombre del dispositivo de audio del host). */
-export function toMusicState(raw: unknown): LumiMusicState {
-  const parsed = musicStateUpstreamSchema.parse(raw)
-  return {
-    status: parsed.status,
-    generation: parsed.generation,
-    current: parsed.current ? toMusicTrack(parsed.current) : null,
-    upcoming: parsed.upcoming.map(toMusicTrack),
-    positionSeconds: parsed.position_seconds,
-    durationSeconds: parsed.duration_seconds ?? parsed.current?.duration_seconds ?? null,
-    volume: parsed.volume ?? 0,
-    output: { mode: parsed.output.mode, active: Boolean(parsed.output.sink) },
-    error: parsed.error,
-    shuffle: parsed.shuffle ?? false,
-    repeatMode: parsed.repeat_mode ?? 'off',
-    autoplay: parsed.autoplay ?? false,
-    version: parsed.version ?? 0,
-    updatedAt: parsed.updated_at ?? null,
-  }
-}
-
-/** Tiempo límite de recomendaciones y búsquedas (consultan YouTube). */
-export const LUMI_MUSIC_DISCOVER_TIMEOUT_MS = 25_000
-
-/** Tiempo límite de un comando de música (buscar y esperar a que suene puede tardar unos segundos). */
-export const LUMI_MUSIC_COMMAND_TIMEOUT_MS = 30_000
-/** Tiempo límite de la consulta del estado (el reproductor lo consulta a menudo: debe ser rápida). */
-export const LUMI_MUSIC_STATE_TIMEOUT_MS = 5_000
-
 export interface LumiSelectRequest {
   message: string
   context?: string
@@ -377,6 +273,10 @@ export interface LumiTurnOptions {
   capabilities?: string
   /** Referencias de los datos que la herramienta leyó para este turno: se guardan con la respuesta. */
   references?: LumiReference[]
+  /** Historial que guarda el Server (Lumi 2.0): sustituye al de la IA Assistant. */
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>
+  /** false: la IA Assistant no guarda el turno (lo guarda el Server). */
+  persist?: boolean
 }
 
 /** Límite del texto de capacidades (el asistente acepta hasta 2000 caracteres). */
@@ -388,8 +288,12 @@ function turnOptionsBody(options: LumiTurnOptions): {
   max_tokens?: number
   capabilities?: string
   references?: LumiReference[]
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>
+  persist?: false
 } {
   return {
+    ...(options.history ? { history: options.history } : {}),
+    ...(options.persist === false ? { persist: false as const } : {}),
     ...(options.think ? { think: true as const } : {}),
     ...(options.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
     ...(options.capabilities ? { capabilities: options.capabilities.slice(0, LUMI_CAPABILITIES_MAX_CHARS) } : {}),
@@ -543,137 +447,6 @@ export class LumiAssistantClient {
       latencyMs: parsed.latency_ms,
       promptTokens: parsed.prompt_tokens,
       completionTokens: parsed.completion_tokens,
-    }
-  }
-
-  /**
-   * Comando del módulo de música (`{tool, args}`). Nunca lanza: devuelve el texto determinista del
-   * asistente, o por qué no se pudo (módulo apagado = 404, asistente caído, respuesta inesperada).
-   */
-  async musicCommand(
-    userRef: string,
-    tool: string,
-    args: LumiMusicArgs,
-    timeoutMs: number = Math.min(this.options.timeoutMs, LUMI_MUSIC_COMMAND_TIMEOUT_MS),
-  ): Promise<LumiMusicCommandResult> {
-    if (!USER_REF_PATTERN.test(userRef)) return { status: 'rejected' }
-    const res = await this.musicFetch(userRef, 'POST', '/music/commands', { tool, args }, timeoutMs)
-    if (res === null) return { status: 'unavailable' }
-    if (res.status === 404) return { status: 'disabled' }
-    if (res.status === 422) return { status: 'rejected' }
-    if (!res.ok) return { status: 'unavailable' }
-    try {
-      const parsed = musicCommandUpstreamSchema.parse(await res.json())
-      let state: LumiMusicState | null = null
-      try {
-        state = parsed.state ? toMusicState(parsed.state) : null
-      } catch {
-        state = null // un estado con forma inesperada no impide mostrar el texto
-      }
-      return { status: 'done', ok: parsed.ok, text: parsed.text, error: parsed.error ?? null, state }
-    } catch {
-      return { status: 'unavailable' }
-    }
-  }
-
-  /** Estado del reproductor (GET /music/state). Nunca lanza. */
-  async musicState(
-    userRef: string,
-    timeoutMs: number = Math.min(this.options.timeoutMs, LUMI_MUSIC_STATE_TIMEOUT_MS),
-  ): Promise<LumiMusicStateResult> {
-    if (!USER_REF_PATTERN.test(userRef)) return { status: 'unavailable' }
-    const res = await this.musicFetch(userRef, 'GET', '/music/state', undefined, timeoutMs)
-    if (res === null) return { status: 'unavailable' }
-    if (res.status === 404) return { status: 'disabled' }
-    if (!res.ok) return { status: 'unavailable' }
-    try {
-      return { status: 'done', state: toMusicState(await res.json()) }
-    } catch {
-      return { status: 'unavailable' }
-    }
-  }
-
-  /** Recomendaciones reales para una canción (la actual si no se indica). Nunca lanza. */
-  async musicRecommendations(userRef: string, videoId: string | null): Promise<LumiMusicReadResult<LumiMusicDiscovery>> {
-    const query = videoId ? `?video_id=${encodeURIComponent(videoId)}` : ''
-    return this.musicRead(userRef, `/music/recommendations${query}`, (raw) => {
-      const parsed = musicDiscoveryUpstreamSchema.parse(raw)
-      return {
-        seed: parsed.seed ? toMusicTrack(parsed.seed) : null,
-        tracks: parsed.tracks.map(toMusicTrack),
-        artistTracks: parsed.artist_tracks.map(toMusicTrack),
-        artists: parsed.artists,
-      }
-    })
-  }
-
-  /** Últimas canciones que sonaron (la más reciente primero). Nunca lanza. */
-  async musicHistory(userRef: string): Promise<LumiMusicReadResult<LumiMusicTrack[]>> {
-    return this.musicRead(userRef, '/music/history', (raw) => musicTracksUpstreamSchema.parse(raw).tracks.map(toMusicTrack))
-  }
-
-  /** Búsqueda en YouTube sin reproducir. Nunca lanza. */
-  async musicSearch(userRef: string, query: string, limit: number): Promise<LumiMusicReadResult<LumiMusicTrack[]>> {
-    const params = new URLSearchParams({ q: query, limit: String(limit) })
-    return this.musicRead(userRef, `/music/search?${params.toString()}`, (raw) =>
-      musicTracksUpstreamSchema.parse(raw).tracks.map(toMusicTrack),
-    )
-  }
-
-  /**
-   * Canal SSE de estado del reproductor (GET /music/events). Lo abre el hub del Server con una
-   * referencia fija: el estado es el mismo para todos los usuarios con music.read.
-   */
-  async musicEvents(signal: AbortSignal): Promise<Response | null> {
-    try {
-      return await this.fetchImpl(`${this.options.baseUrl}${API_PREFIX}/music/events`, {
-        method: 'GET',
-        headers: {
-          Accept: 'text/event-stream',
-          'X-API-Key': this.options.apiKey,
-          'X-User-Ref': LUMI_MUSIC_HUB_USER_REF,
-        },
-        signal,
-      })
-    } catch {
-      return null
-    }
-  }
-
-  private async musicRead<T>(userRef: string, path: string, parse: (raw: unknown) => T): Promise<LumiMusicReadResult<T>> {
-    if (!USER_REF_PATTERN.test(userRef)) return { status: 'unavailable' }
-    const res = await this.musicFetch(userRef, 'GET', path, undefined, LUMI_MUSIC_DISCOVER_TIMEOUT_MS)
-    if (res === null) return { status: 'unavailable' }
-    if (res.status === 404) return { status: 'disabled' }
-    if (!res.ok) return { status: 'unavailable' }
-    try {
-      return { status: 'done', data: parse(await res.json()) }
-    } catch {
-      return { status: 'unavailable' }
-    }
-  }
-
-  private async musicFetch(
-    userRef: string,
-    method: 'GET' | 'POST',
-    path: string,
-    body: unknown,
-    timeoutMs: number,
-  ): Promise<Response | null> {
-    try {
-      return await this.fetchImpl(`${this.options.baseUrl}${API_PREFIX}${path}`, {
-        method,
-        headers: {
-          Accept: 'application/json',
-          'X-API-Key': this.options.apiKey,
-          'X-User-Ref': userRef,
-          ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-        },
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(timeoutMs),
-      })
-    } catch {
-      return null
     }
   }
 

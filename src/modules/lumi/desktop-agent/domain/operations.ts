@@ -205,6 +205,39 @@ export const DESKTOP_OPERATIONS: Record<string, DesktopOperation> = {
    * Pone un vídeo de YouTube ya elegido por el usuario en la pestaña de Lumia del perfil aislado,
    * confirma que avanza y minimiza la ventana. No busca ni elige otro vídeo.
    */
+  /**
+   * Pausa, reanudar, siguiente, anterior, adelantar/retroceder, volumen o estado de la música de la
+   * pestaña de Lumia. El agente no lanza el navegador ni lo trae al frente y verifica cada efecto.
+   */
+  'browser.media.control': {
+    permission: CONTROL,
+    args: z
+      .object({
+        action: z.enum(['status', 'pause', 'resume', 'next', 'previous', 'seek', 'volume']),
+        seconds: z.number().int().min(-600).max(600).optional(),
+        volume: z.number().int().min(0).max(100).optional(),
+        change: z.number().int().min(-100).max(100).optional(),
+      })
+      .strict()
+      .superRefine((a, issue) => {
+        const fail = (message: string) => issue.addIssue({ code: z.ZodIssueCode.custom, message })
+        if (a.action === 'seek') {
+          if (!a.seconds || a.volume !== undefined || a.change !== undefined) fail('seek needs seconds (not 0)')
+        } else if (a.action === 'volume') {
+          const absolute = a.volume !== undefined
+          const relative = a.change !== undefined && a.change !== 0
+          if (absolute === relative || a.seconds !== undefined) fail('volume needs volume or change')
+        } else if (a.seconds !== undefined || a.volume !== undefined || a.change !== undefined) {
+          fail('this action takes no seconds, volume or change')
+        }
+      }),
+    summarize: (a) => ({
+      action: a.action,
+      ...(a.seconds !== undefined ? { seconds: a.seconds } : {}),
+      ...(a.volume !== undefined ? { volume: a.volume } : {}),
+      ...(a.change !== undefined ? { change: a.change } : {}),
+    }),
+  },
   'browser.media.play': {
     permission: CONTROL,
     args: z.object({ url: youtubeVideoUrl, minimize: z.boolean().optional() }).strict(),

@@ -6,6 +6,7 @@ import { AppError } from '../common/errors/app.error.js'
 import { PERMISSION_REGISTRY, hasPermission } from '../common/permissions/registry.js'
 import { adminGuard } from '../modules/admin/middleware/admin-guard.js'
 import type { AuthenticatedRequest } from '../modules/identity/middleware/auth.middleware.js'
+import { LumiConversationService } from '../modules/lumi/conversation/conversation.service.js'
 import {
   LumiAssistantClient,
   type LumiSelectRequest,
@@ -104,6 +105,9 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       .attachConversation(userIdOf(request), selection.queryId, conversationId)
       .catch((err) => request.log.warn({ err }, 'Lumi music selection not bound to its conversation'))
 
+  /** Historial en el Server (MongoDB); la IA Assistant solo interpreta y genera. */
+  const conversations = new LumiConversationService(ctx.services.lumiConversations, client)
+
   const requireClient = (): LumiAssistantClient => {
     if (!client)
       throw new AppError(503, 'El asistente Lumi no está configurado', 'LUMI_NOT_CONFIGURED')
@@ -114,7 +118,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
 
   /**
    * Guarda en el historial un turno resuelto por reglas (recordatorios), sin llamar al modelo, y
-   * devuelve el id de la conversación. Sin asistente configurado no hay historial que guardar.
+   * devuelve el id de la conversación.
    */
   const saveAutomatedTurn = async (
     request: FastifyRequest,
@@ -122,9 +126,8 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     answer: string,
     conversationId: string | undefined,
   ): Promise<string> => {
-    if (!client) return conversationId ?? randomUUID()
     try {
-      return (await client.recordExchange(userIdOf(request), message, answer, conversationId)).conversationId
+      return (await conversations.recordExchange(userIdOf(request), message, answer, conversationId)).conversationId
     } catch (err) {
       request.log.warn({ err }, 'Lumi automated turn not saved')
       return conversationId ?? randomUUID()
@@ -215,7 +218,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     }
     const text = texts.join('\n\n')
     // Las referencias salen de los datos leídos (ids reales) y se guardan con la respuesta.
-    const saved = await requireClient().recordExchange(userIdOf(request), message, text, conversationId, references)
+    const saved = await conversations.recordExchange(userIdOf(request), message, text, conversationId, references)
     // Context Manager: la entidad de la respuesta queda activa para el turno siguiente.
     if (entity) {
       await ctx.services.lumiActiveEntities
@@ -590,7 +593,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     const turn = await resolveTurn(request, parsed.data, plan.forceWeb)
     // Petición de explicación sobre datos: la herramienta los lee y sustituyen al contexto de pantalla.
     const toolResult = match ? await executeTool(request, match) : null
-    const result = await requireClient().chat(
+    const result = await conversations.chat(
       userIdOf(request),
       parsed.data.message,
       parsed.data.conversationId,
@@ -601,6 +604,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
         maxTokens: parsed.data.maxTokens,
         capabilities: turn.capabilities,
         references: toolResult?.references,
+        clientMessageId: parsed.data.clientMessageId,
       },
     )
     return {
@@ -676,7 +680,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
       const events = (
         toolMatches || !turn
           ? toolTurnStream(request, toolMatches ?? [], parsed.data.message, parsed.data.conversationId)
-          : requireClient().chatStream(
+          : conversations.chatStream(
               userIdOf(request),
               parsed.data.message,
               parsed.data.conversationId,
@@ -689,6 +693,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
                 capabilities: turn.capabilities,
                 // Explicación sobre datos: las referencias de la herramienta se guardan con la respuesta.
                 references: toolResult?.references,
+                clientMessageId: parsed.data.clientMessageId,
               },
             )
       )[Symbol.asyncIterator]()
@@ -771,11 +776,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     async (request) => {
       const parsed = lumiListQuerySchema.safeParse(request.query)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
-      return requireClient().listConversations(
-        userIdOf(request),
-        parsed.data.limit,
-        parsed.data.offset,
-      )
+      return conversations.listConversations(userIdOf(request), parsed.data.limit, parsed.data.offset)
     },
   )
 
@@ -785,7 +786,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     async (request) => {
       const parsed = lumiConversationParamsSchema.safeParse(request.params)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
-      return requireClient().getConversation(userIdOf(request), parsed.data.id)
+      return conversations.getConversation(userIdOf(request), parsed.data.id)
     },
   )
 
@@ -795,7 +796,7 @@ export async function registerLumiRoutes(api: FastifyInstance, ctx: AppContext) 
     async (request) => {
       const parsed = lumiConversationParamsSchema.safeParse(request.params)
       if (!parsed.success) throw AppError.badRequest('Invalid input', parsed.error.flatten())
-      await requireClient().deleteConversation(userIdOf(request), parsed.data.id)
+      await conversations.deleteConversation(userIdOf(request), parsed.data.id)
       return { ok: true }
     },
   )

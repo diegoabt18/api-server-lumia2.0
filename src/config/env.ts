@@ -197,8 +197,23 @@ export function loadEnv(overrides?: Record<string, string>): Env {
     throw new Error(`Invalid environment configuration: ${JSON.stringify(formatted)}`)
   }
 
+  assertProductionRequirements(parsed.data)
   cached = parsed.data
   return parsed.data
+}
+
+/**
+ * Requisitos que solo se exigen en producción. Redis es obligatorio: sin él, los locks del scheduler
+ * y de las iniciativas se conceden siempre y las notificaciones en tiempo real no llegan a otras
+ * instancias (decisión de Lumi 2.0, 2026-11-27).
+ */
+export function assertProductionRequirements(env: Env): void {
+  if (env.NODE_ENV !== 'production') return
+  if (!env.REDIS_ENABLED || !env.REDIS_URL) {
+    throw new Error(
+      'Invalid environment configuration: Redis is required in production (set REDIS_URL and REDIS_ENABLED=true)',
+    )
+  }
 }
 
 export function getEnv(): Env {

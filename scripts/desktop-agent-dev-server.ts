@@ -612,6 +612,28 @@ async function runMusicScenario(deviceId: string) {
       )
       check(mediaRuns() === before + 1, 'exactly one browser.media.play for the selection')
 
+      // Controles desde el chat: la orden se interpreta como en Lumi Chat y el agente la verifica.
+      const say = async (message: string) => {
+        const match = matchTool(message, CHAT_KEYS, { now: new Date(), timezone: 'America/Bogota' })
+        if (match?.tool.name !== 'device.music_control') return `(no es un control: ${match?.tool.name})`
+        const out = await match.tool.run(ctx, match.input as never)
+        console.log(`[control] «${message}» → ${out.text}`)
+        return out.text
+      }
+      // YouTube no deja adelantar ni cambiar de vídeo durante un anuncio: se espera a la canción.
+      for (let i = 0; i < 45 && /anuncio/.test(await say('¿qué suena?')); i++) {
+        await new Promise((r) => setTimeout(r, 2_000))
+      }
+      check(/^Está sonando «Numb/.test(await say('¿qué suena?')), 'control: «¿qué suena?» names the song')
+      check(/^Pausé «Numb/.test(await say('pausa la música')), 'control: pause')
+      check(/vuelve a sonar/.test(await say('reanuda')), 'control: resume')
+      check(/^Adelanté 30 s/.test(await say('adelanta 30 segundos')), 'control: seek forward')
+      check(/^Retrocedí 10 s/.test(await say('retrocede 10 segundos')), 'control: seek back')
+      check(/al 30 %/.test(await say('/volume 30')), 'control: absolute volume')
+      check(/al 40 % .*antes 30 %/.test(await say('sube el volumen')), 'control: relative volume')
+      check(/^Ahora suena «/.test(await say('siguiente canción')), 'control: next')
+      check(/^Volví a «Numb/.test(await say('pon la anterior')), 'control: previous back to the chosen song')
+
       // Doble clic: el mismo candidato otra vez no se repite.
       const again = await select(selection.queryId, first.id, 'm-card-1')
       check(again.out.replayed && mediaRuns() === before + 1, 'second click returns the result without replaying')

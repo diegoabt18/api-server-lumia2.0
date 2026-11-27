@@ -89,24 +89,9 @@ export class PushService {
       return
     }
 
-    const itemCount = order.items.reduce((sum, i) => sum + i.quantity, 0)
-    const orderNumber = order.orderNumber ?? order.id
-    const title = '🛍️ Nuevo pedido'
-    const body = `${orderNumber} · ${formatCop(order.total)} · ${itemCount} artículo${itemCount === 1 ? '' : 's'}`
-
     const message: MulticastMessage = {
       tokens,
-      data: {
-        type: 'order.created',
-        title,
-        body,
-        orderId: order.id,
-        orderNumber,
-        total: String(order.total),
-        itemCount: String(itemCount),
-        customerName: order.customerName ?? '',
-        whatsapp: order.whatsapp ?? order.phone ?? '',
-      },
+      data: preOrderPushData(order),
       android: {
         priority: 'high',
       },
@@ -146,5 +131,24 @@ export class PushService {
         'Failed to send pre-order push notification',
       )
     }
+  }
+}
+
+/**
+ * Datos del push de pedido nuevo. Sin datos personales del cliente (nombre, teléfono, correo,
+ * dirección): el payload pasa por FCM y queda en el dispositivo. El detalle se consulta en Lumia
+ * Admin (y en LumiChat, con sesión, desde la Fase 1 de Lumi 2.0).
+ */
+export function preOrderPushData(order: OrderDomain): Record<string, string> {
+  const itemCount = order.items.reduce((sum, i) => sum + i.quantity, 0)
+  const orderNumber = order.orderNumber ?? order.id
+  return {
+    type: 'order.created',
+    title: '🛍️ Nuevo pedido',
+    body: `${orderNumber} · ${formatCop(order.total)} · ${itemCount} artículo${itemCount === 1 ? '' : 's'}`,
+    orderId: order.id,
+    orderNumber,
+    total: String(order.total),
+    itemCount: String(itemCount),
   }
 }

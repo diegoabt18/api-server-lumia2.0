@@ -14,6 +14,14 @@ import {
 } from '../music/video-match.js'
 import { canonicalYoutubeVideoUrl } from '../desktop-agent/domain/operations.js'
 import {
+  CONTROL_ERROR_TEXT,
+  controlArgs,
+  controlReply,
+  parseMusicControl,
+  type MusicControl,
+  type MusicControlAction,
+} from '../music/music-control.js'
+import {
   MusicPlaybackMachine,
   STAGE_STATE,
   errorState,
@@ -52,6 +60,17 @@ type DeviceInput = {
   app?: string
   /** Canción o artista a poner en YouTube (`device.play_music`). */
   query?: string
+  /** Pausa, siguiente, volumen… sobre la música de Lumia (`device.music_control`). */
+  control?: MusicControl
+}
+
+/** Acciones sin números que el selector puede proponer para `device.music_control`. */
+const SELECTOR_CONTROL: Record<string, MusicControlAction> = {
+  estado: 'status',
+  pausa: 'pause',
+  reanudar: 'resume',
+  siguiente: 'next',
+  anterior: 'previous',
 }
 
 const NAME_MAX = 120
@@ -1078,7 +1097,8 @@ interface DeviceToolSpec {
   effect: 'read' | 'control'
   args: readonly LumiSelectorArg[]
   ask?: string
-  fromArgs(args: Readonly<Record<string, unknown>>): LumiSelectorBuild<DeviceInput>
+  /** `normalized`: el mensaje, de donde salen los valores cerrados (nunca del modelo). */
+  fromArgs(args: Readonly<Record<string, unknown>>, normalized: string): LumiSelectorBuild<DeviceInput>
   match?(normalized: string, original: string): DeviceInput | null
   run(ctx: LumiToolContext, input: DeviceInput): Promise<LumiToolResult>
 }
@@ -1252,6 +1272,66 @@ const SPECS: readonly DeviceToolSpec[] = [
         target: YOUTUBE_HOST,
         query: input.query,
       })
+    },
+  },
+  {
+    name: 'device.music_control',
+    label: 'Controlando la música de tu equipo',
+    capability: 'Pausar, reanudar, cambiar de canción, adelantar o cambiar el volumen de la música de mi equipo',
+    example: 'Pausa la música',
+    description:
+      'Controlar la música que Lumia puso en YouTube en el equipo: pausa, reanudar, siguiente, anterior, adelantar o retroceder segundos, volumen y qué está sonando',
+    permission: PERMISSION_REGISTRY.DESKTOP_BROWSER_CONTROL,
+    effect: 'control',
+    args: [
+      {
+        name: 'accion',
+        kind: ['estado', 'pausa', 'reanudar', 'siguiente', 'anterior'],
+        description: 'qué hacer con la música (adelantar y volumen solo con las palabras del usuario)',
+      },
+      DEVICE_ARG,
+    ],
+    // Los valores salen del mensaje; del modelo solo se acepta una acción sin números.
+    fromArgs: (a, normalized) => {
+      const parsed = parseMusicControl(normalized)
+      if (parsed) return { input: { control: parsed, device: deviceOf(a) } }
+      const action = SELECTOR_CONTROL[String(a.accion ?? '')]
+      return action ? { input: { control: { action }, device: deviceOf(a) } } : { missing: ['accion'] }
+    },
+    // «/pause», «/next», «pausa la música», «siguiente canción», «sube el volumen», «¿qué suena?»…
+    match(normalized) {
+      const control = parseMusicControl(normalized)
+      return control ? { control } : null
+    },
+    async run(ctx, input) {
+      const control = input.control
+      if (!control) return result('¿Qué hago con la música? Por ejemplo: «pausa», «siguiente» o «sube el volumen».', 0)
+      const found = await resolveDevice(ctx, input.device, 'browser.media.control')
+      if ('reply' in found) return result(found.reply, 0)
+      // Sin confirmación: solo actúa sobre la pestaña de música de Lumia, nunca sobre otras páginas.
+      const outcome = await ctx.deps.desktop!.execute({
+        userId: ctx.userId,
+        permissionKeys: ctx.permissionKeys,
+        deviceId: found.device.id,
+        operation: 'browser.media.control',
+        args: controlArgs(control),
+        timeoutMs: control.action === 'next' || control.action === 'previous' ? 45_000 : 20_000,
+      })
+      ctx.log?.info(
+        {
+          deviceId: found.device.id,
+          control,
+          status: outcome.status,
+          errorCode: outcome.error?.code ?? null,
+          videoId: outcome.result?.video_id ?? null,
+        },
+        'lumi.music.control',
+      )
+      if (ok(outcome) && outcome.result) {
+        return result(controlReply(control, outcome.result, found.device.name), 1)
+      }
+      const reason = CONTROL_ERROR_TEXT[outcome.error?.code ?? '']
+      return result(reason ? `No pude: ${reason}.` : failureText(outcome), 0)
     },
   },
   {

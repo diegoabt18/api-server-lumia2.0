@@ -113,16 +113,19 @@ function deps(
 }
 
 describe('registro de herramientas', () => {
-  it('cada herramienta declara una capabilityKey única; las 8 anteriores, las 20 de música y las 9 del equipo nacen habilitadas y la nueva no', () => {
+  // Las 20 herramientas `music.*` (reproductor de Lumia Admin) se retiraron en 1cb2c97; la música
+  // en el equipo son herramientas `device.*`.
+  it('cada herramienta declara una capabilityKey única; las 8 de la tienda y todas las del equipo nacen habilitadas y la nueva no', () => {
     const keys = LUMI_TOOLS.map((t) => t.capabilityKey)
     expect(new Set(keys).size).toBe(keys.length)
-    // Las de música nacen habilitadas: las limitan music.read / music.control (nadie los tiene por defecto).
     expect(
       [...BUILTIN].filter((name) => !name.startsWith('music.') && !name.startsWith('device.')),
     ).toHaveLength(8)
-    expect([...BUILTIN].filter((name) => name.startsWith('music.'))).toHaveLength(20)
-    // Las del equipo, igual que la música: las limitan desktop.* (nadie los tiene por defecto) y DESKTOP_AGENT_ENABLED.
-    expect([...BUILTIN].filter((name) => name.startsWith('device.'))).toHaveLength(10)
+    expect(LUMI_TOOLS.filter((t) => t.name.startsWith('music.'))).toHaveLength(0)
+    // Las del equipo nacen habilitadas: las limitan desktop.* (nadie los tiene por defecto) y DESKTOP_AGENT_ENABLED.
+    const device = LUMI_TOOLS.filter((t) => t.name.startsWith('device.'))
+    expect(device.length).toBeGreaterThan(0)
+    expect(device.every((t) => BUILTIN.has(t.name))).toBe(true)
     expect(productsUnpriced.enabledByDefault).toBeUndefined()
     expect(LUMI_TOOLS).toContain(productsUnpriced)
   })
@@ -537,7 +540,8 @@ describe('CapabilityActivationService', () => {
       status: 'in_development',
       toolName: 'products.unpriced',
     })
-    expect(mem.items.filter((c) => c.status === 'enabled')).toHaveLength(8 + 20 + 9)
+    // Exactamente las herramientas de serie quedan habilitadas.
+    expect(mem.items.filter((c) => c.status === 'enabled')).toHaveLength(BUILTIN.size)
     expect((await svc.syncRegistry()).every((r) => r.result === 'unchanged')).toBe(true)
   })
 
